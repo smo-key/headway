@@ -1,0 +1,717 @@
+/* Node test suite for Headway core + Excel round-trip.
+ * Run:  node tools/roadmapping/tests/core.test.js
+ * (Excel tests need `exceljs` resolvable via NODE_PATH; they self-skip otherwise.)
+ */
+'use strict';
+var RM = require('../js/core.js');
+
+var passed = 0, failed = 0, skipped = 0;
+function ok(cond, name) {
+  if (cond) { passed++; }
+  else { failed++; console.error('  ✗ ' + name); }
+}
+function eq(a, b, name) {
+  var good = JSON.stringify(a) === JSON.stringify(b);
+  if (good) passed++;
+  else { failed++; console.error('  ✗ ' + name + '\n      got:  ' + JSON.stringify(a) + '\n      want: ' + JSON.stringify(b)); }
+}
+function section(name) { console.log('— ' + name); }
+
+var META = {
+  title: 'T', timelineStart: '2026-07-27', numWeeks: 48,
+  weeksPerSprint: 2,
+  capacityEnabled: true, // capacity tests exercise the roster constraints
+  // two full holiday weeks (Nov 16–20 and Nov 23–27), as individual dates
+  holidays: [
+    '2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20',
+    '2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27'
+  ],
+  sizeDays: { XS: 2, S: 3, M: 5, L: 10, XL: 20 }
+};
+
+function mkState(items, extras) {
+  var base = {
+    meta: JSON.parse(JSON.stringify(META)),
+    phases: [
+      { id: 'p1', name: 'Alpha', bucket: false },
+      { id: 'p2', name: 'Next', bucket: true }
+    ],
+    items: items,
+    team: [],
+    teamTypes: ['Development', 'Data']
+  };
+  if (extras) Object.keys(extras).forEach(function (k) { base[k] = extras[k]; });
+  return RM.normalizeState(base);
+}
+
+// ------------------------------------------------------------- calendar
+section('calendar');
+ok(RM.fmtISO(RM.dayToDate(META, 0)) === '2026-07-27', 'day 0 is timeline start');
+ok(RM.fmtISO(RM.dayToDate(META, 4)) === '2026-07-31', 'day 4 is Friday of week 0');
+ok(RM.fmtISO(RM.dayToDate(META, 5)) === '2026-08-03', 'day 5 skips the weekend');
+eq(RM.dateToDay(META, RM.parseISO('2026-08-03')), 5, 'dateToDay Monday week 1');
+eq(RM.dateToDay(META, RM.parseISO('2026-08-01')), 4, 'Saturday snaps to Friday');
+eq(RM.dateToDay(META, RM.parseISO('2026-07-27')), 0, 'roundtrip day 0');
+for (var d = 0; d < 60; d += 7) {
+  var dd = RM.dateToDay(META, RM.dayToDate(META, d));
+  if (dd !== d) { ok(false, 'roundtrip day ' + d); break; }
+}
+ok(true, 'roundtrip 0..60');
+ok(RM.isBlackoutWeek(META, 16), 'week of 2026-11-16 is blackout');
+ok(RM.isBlackoutWeek(META, 17), 'week of 2026-11-23 is blackout');
+ok(!RM.isBlackoutWeek(META, 15), 'week 15 is not blackout');
+
+// stretchSpan: 10 working days starting week 15 must stretch over 2 blackout weeks
+eq(RM.stretchSpan(META, 15 * 5, 10), 20, 'span stretches across blackout weeks');
+eq(RM.stretchSpan(META, 0, 10), 10, 'span with no blackout is exact');
+eq(RM.workInSpan(META, 15 * 5, 20), 10, 'workInSpan inverse of stretchSpan');
+
+// ------------------------------------------------------------- sizes
+section('sizes');
+// week-based scale: XS 2d · S 1w · M 2w · L 4w · XL 8w
+var s0 = mkState([]);
+eq(RM.sizeDays(s0, 'S'), 5, 'S = 1 week');
+eq(RM.sizeDays(s0, 'M'), 10, 'M = 2 weeks');
+eq(RM.sizeDays(s0, 'L'), 20, 'L = 4 weeks');
+eq(RM.sizeDays(s0, 'XL'), 40, 'XL = 8 weeks');
+eq(RM.sizeForDays(s0, 18), 'L', '18 days ≈ L');
+eq(RM.sizeForDays(s0, 4), 'S', '4 days ≈ S');
+eq(RM.sizeForDays(s0, 45), 'XL', '45 days ≈ XL');
+// legacy size map migrates to the week scale
+var sLeg = RM.normalizeState({ meta: { sizeDays: { XS: 2, S: 3, M: 5, L: 10, XL: 20 } }, phases: [{ id: 'p' }], items: [] });
+eq(sLeg.meta.sizeDays.L, 20, 'legacy default size map migrated');
+
+// ------------------------------------------------------------- normalize
+section('normalizeState');
+var sN = mkState([
+  { feature: 'A' },
+  { num: 7, feature: 'B', headcount: 0, phaseId: 'nope' }
+]);
+eq(sN.items[0].headcount, 1, 'default headcount 1');
+ok(sN.items[0].num != null && sN.items[0].num !== 7, 'auto num assigned, no collision');
+eq(sN.items[1].headcount, 1, 'headcount floor 1');
+eq(sN.items[1].phaseId, 'p1', 'bad phase falls back to first');
+ok(Array.isArray(sN.items[0].stories), 'stories default []');
+
+// ------------------------------------------------------------- deps
+section('dependencies');
+var sD = mkState([
+  { num: 1, feature: 'one', phaseId: 'p1' },
+  { num: 2, feature: 'two', phaseId: 'p1', deps: [1] },
+  { num: 3, feature: 'three', phaseId: 'p1', depsAllAbove: true },
+  { num: 4, feature: 'four', phaseId: 'p1', deps: [99] }
+]);
+eq(RM.resolveDeps(sD, sD.items[1]).deps.map(function (x) { return x.num; }), [1], 'numbered dep resolves');
+eq(RM.resolveDeps(sD, sD.items[2]).deps.length, 0, '"All above" is dropped — only explicit deps count');
+ok(sD.items[2].depsAllAbove === undefined, 'depsAllAbove stripped by normalize');
+eq(RM.resolveDeps(sD, sD.items[3]).unknown, [99], 'unknown dep reported');
+
+var sC = mkState([
+  { num: 1, feature: 'a', deps: [2] },
+  { num: 2, feature: 'b', deps: [1] },
+  { num: 3, feature: 'c', deps: [2] }
+]);
+var cyc = RM.cycleMembers(sC);
+ok(cyc[sC.items[0].id] && cyc[sC.items[1].id], 'cycle detected for 1<->2');
+ok(!cyc[sC.items[2].id], 'downstream of a cycle is not itself cyclic');
+
+// ------------------------------------------------------------- validation
+section('validation');
+var sV = mkState([
+  { num: 1, feature: 'base', startDay: 0, durDays: 10, size: 'L' },
+  { num: 2, feature: 'early bird', deps: [1], startDay: 5, durDays: 5, size: 'M' },
+  { num: 3, feature: 'no size', startDay: 0, durDays: 5 },
+  { num: 4, feature: 'ghost dep', deps: [42], startDay: 20, durDays: 5, size: 'M' },
+  { num: 5, feature: 'big ask', startDay: 0, durDays: 5, size: 'M', headcount: 4, teamType: 'Data' }
+], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Data' }] });
+var v = RM.validate(sV);
+function codes(state, i) { return (v.byItem[state.items[i].id] || []).map(function (x) { return x.code; }); }
+ok(codes(sV, 1).indexOf('DEP_ORDER') !== -1, 'DEP_ORDER: starts before dep ends');
+ok(codes(sV, 2).indexOf('NO_SIZE') !== -1, 'NO_SIZE flagged');
+ok(codes(sV, 3).indexOf('UNKNOWN_DEP') !== -1, 'UNKNOWN_DEP flagged');
+ok(codes(sV, 4).indexOf('HC_TYPE') !== -1, 'HC_TYPE: 4 Data needed, 1 on roster');
+ok(v.global.some(function (g) { return g.code === 'OVER_CAP'; }), 'OVER_CAP: weekly demand over roster');
+ok(v.counts.warn > 0, 'counts aggregated');
+
+var vClean = RM.validate(mkState([{ num: 1, feature: 'solo', startDay: 0, durDays: 5, size: 'M' }]));
+eq(vClean.counts.error + vClean.counts.warn, 0, 'clean state has no errors/warnings');
+
+// done-dep suppression
+var sDone = mkState([
+  { num: 1, feature: 'shipped', startDay: 10, durDays: 10, size: 'L', done: true },
+  { num: 2, feature: 'after', deps: [1], startDay: 0, durDays: 5, size: 'M' }
+]);
+var vd = RM.validate(sDone);
+ok(!(vd.byItem[sDone.items[1].id] || []).some(function (x) { return x.code === 'DEP_ORDER'; }),
+  'done dependency does not trigger DEP_ORDER');
+
+// ------------------------------------------------------------- capacity
+section('capacity');
+var sCap = mkState([
+  { num: 1, feature: 'a', startDay: 0, durDays: 10, size: 'L', headcount: 2 },
+  { num: 2, feature: 'b', startDay: 5, durDays: 5, size: 'M' }
+], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Development' }] });
+var cap = RM.capacity(sCap);
+eq(cap.weeks[0].demand, 2, 'week 0 demand = 2');
+eq(cap.weeks[1].demand, 3, 'week 1 demand = 3 (overlap)');
+ok(cap.weeks[1].over, 'week 1 over a 2-person roster');
+ok(!cap.weeks[0].over, 'week 0 fits');
+
+// ------------------------------------------------------------- auto-schedule
+section('autoSchedule');
+// dep chain: 2 after 1, capacity 1 person forces serialization of parallel items
+var sA = mkState([
+  { num: 1, feature: 'first', phaseId: 'p1', size: 'M' },
+  { num: 2, feature: 'second', phaseId: 'p1', size: 'M', deps: [1] },
+  { num: 3, feature: 'third', phaseId: 'p1', size: 'M' },
+  { num: 9, feature: 'parked', phaseId: 'p2', size: 'M' }
+], { team: [{ name: 'Solo', type: 'Development' }] });
+var rA = RM.autoSchedule(sA);
+var A = {};
+rA.state.items.forEach(function (it) { A[it.num] = it; });
+eq(A[1].startDay, 0, 'item 1 starts at 0');
+ok(A[2].startDay >= A[1].startDay + A[1].durDays, 'item 2 starts after dep 1 ends');
+// capacity 1: items 1,2,3 cannot overlap at week granularity
+var spans = [A[1], A[2], A[3]].map(function (it) { return [it.startDay, it.startDay + it.durDays]; });
+var overlapWeeks = false;
+for (var i = 0; i < 3; i++) for (var j = i + 1; j < 3; j++) {
+  var wA = [Math.floor(spans[i][0] / 5), Math.floor((spans[i][1] - 1) / 5)];
+  var wB = [Math.floor(spans[j][0] / 5), Math.floor((spans[j][1] - 1) / 5)];
+  if (wA[0] <= wB[1] && wB[0] <= wA[1]) overlapWeeks = true;
+}
+ok(!overlapWeeks, '1-person roster serializes the three items');
+ok(A[9].startDay == null, 'bucket-phase item stays unscheduled');
+
+// locked stays put and is scheduled around
+var sL = mkState([
+  { num: 1, feature: 'locked rock', phaseId: 'p1', size: 'M', startDay: 5, durDays: 5, locked: true },
+  { num: 2, feature: 'flows around', phaseId: 'p1', size: 'M' }
+], { team: [{ name: 'Solo', type: 'Development' }] });
+var rL = RM.autoSchedule(sL);
+var L = {};
+rL.state.items.forEach(function (it) { L[it.num] = it; });
+eq(L[1].startDay, 5, 'locked item did not move');
+var lockWeeks = [1];
+var w2 = [Math.floor(L[2].startDay / 5), Math.floor((L[2].startDay + L[2].durDays - 1) / 5)];
+ok(!(w2[0] <= 1 && 1 <= w2[1]), 'unlocked item avoids the locked week');
+
+// blackout stretch: force start before blackout, size L must stretch
+var sB = mkState([
+  { num: 1, feature: 'pre', phaseId: 'p1', size: 'M', startDay: 70, durDays: 5, locked: true },
+  { num: 2, feature: 'holiday spanner', phaseId: 'p1', size: 'L', deps: [1] }
+]);
+var rB = RM.autoSchedule(sB);
+var B = {};
+rB.state.items.forEach(function (it) { B[it.num] = it; });
+eq(B[2].startDay, 75, 'starts right after dep at day 75 (week 15)');
+eq(B[2].durDays, 30, 'L(20d) stretches to 30 slots across two blackout weeks');
+eq(RM.workInSpan(rB.state.meta, B[2].startDay, B[2].durDays), 20, 'net work still 20 days');
+
+// cycles do not hang
+var sCy = mkState([
+  { num: 1, feature: 'a', deps: [2], size: 'M' },
+  { num: 2, feature: 'b', deps: [1], size: 'M' }
+]);
+var rCy = RM.autoSchedule(sCy);
+ok(rCy.state.items.every(function (it) { return it.startDay != null; }), 'cycle members still get scheduled');
+ok(rCy.notes.length > 0, 'cycle break noted');
+
+// snapEarliest
+var sS = mkState([
+  { num: 1, feature: 'base', startDay: 0, durDays: 10, size: 'L' },
+  { num: 2, feature: 'snapme', deps: [1], startDay: 0, durDays: 5, size: 'M' }
+]);
+var rS = RM.snapEarliest(sS, sS.items[1].id);
+eq(RM.itemByNum(rS.state, 2).startDay, 10, 'snapEarliest lands right after dep');
+
+// ------------------------------------------------------------- regressions (adversarial review)
+section('regressions');
+// total calendar helpers
+eq(RM.dateToDay(META, RM.parseISO('')), null, 'dateToDay(invalid) is null, not NaN');
+eq(RM.fmtISO(new Date(NaN)), '', 'fmtISO(invalid) is empty, not a throw');
+// NaN schedule fields sanitized
+var sNaN = mkState([{ num: 1, feature: 'x', startDay: NaN, durDays: 5 }]);
+eq(sNaN.items[0].startDay, null, 'NaN startDay normalized to null');
+// duplicate nums renumbered (first occurrence keeps the number)
+var sDup = mkState([
+  { num: 5, feature: 'first five' },
+  { num: 5, feature: 'second five' },
+  { num: 9, feature: 'nine' }
+]);
+eq(sDup.items[0].num, 5, 'first duplicate keeps its num');
+ok(sDup.items[1].num !== 5, 'second duplicate renumbered (' + sDup.items[1].num + ')');
+ok(sDup.items[1].num > 9, 'renumber does not collide with existing nums');
+// day-granular holidays: a single date blanks exactly one working day
+var METAH = JSON.parse(JSON.stringify(META));
+METAH.holidays = ['2026-08-05']; // Wednesday of week 1
+eq(RM.stretchSpan(METAH, 5, 5), 6, 'single holiday stretches a week-long span by 1 day');
+eq(RM.workInSpan(METAH, 5, 6), 5, 'workInSpan skips just that day');
+ok(!RM.isBlackoutWeek(METAH, 1), 'a partial-holiday week is NOT a blackout week');
+METAH.holidays = ['2026-08-01']; // Saturday
+eq(RM.stretchSpan(METAH, 0, 5), 5, 'weekend-dated holiday is ignored');
+// legacy whole-week blackouts migrate to five holiday dates
+var sMigW = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, blackoutWeeks: ['2026-08-03'], holidaysV2026: true }, phases: [{ id: 'p' }], items: [] });
+eq(sMigW.meta.holidays.length, 5, 'blackout week migrated to 5 holiday dates');
+eq(sMigW.meta.holidays[0], '2026-08-03', 'migration starts at the week\'s Monday');
+ok(sMigW.meta.blackoutWeeks === undefined, 'blackoutWeeks field removed');
+ok(RM.isBlackoutWeek(sMigW.meta, 1), 'migrated week is fully blacked out');
+// 2026 US calendar merges once, then user deletions stick
+var sHol = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p' }], items: [] });
+ok(sHol.meta.holidays.indexOf('2026-09-07') !== -1 && sHol.meta.holidays.indexOf('2026-12-25') !== -1,
+  '2026 US holidays loaded into a fresh document');
+sHol.meta.holidays = sHol.meta.holidays.filter(function (x) { return x !== '2026-09-07'; });
+ok(RM.normalizeState(sHol).meta.holidays.indexOf('2026-09-07') === -1,
+  'a deleted holiday stays deleted (merge is one-time)');
+// self-dependency flagged, not silent
+var sSelf = mkState([{ num: 1, feature: 'ouroboros', deps: [1] }]);
+ok((RM.validate(sSelf).byItem[sSelf.items[0].id] || []).some(function (x) { return x.code === 'SELF_DEP'; }),
+  'self-dependency produces SELF_DEP warning');
+// snapEarliest: infeasible item stays put with a note
+var sInf = mkState([
+  { num: 1, feature: 'crowd', startDay: 10, durDays: 5, size: 'M', headcount: 3 }
+], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Development' }] });
+var rInf = RM.snapEarliest(sInf, sInf.items[0].id);
+eq(rInf.changed, 0, 'infeasible snap changes nothing');
+eq(RM.itemByNum(rInf.state, 1).startDay, 10, 'infeasible snap keeps the old start');
+ok(!!rInf.note, 'infeasible snap explains itself');
+// snapEarliest: feasible item beyond horizon extends the timeline instead of vanishing
+var packed = [];
+for (var pk = 0; pk < 48; pk++) {
+  packed.push({ num: pk + 1, feature: 'wk' + pk, startDay: pk * 5, durDays: 5, size: 'M', locked: true });
+}
+packed.push({ num: 99, feature: 'late arrival', size: 'M' });
+var sPack = mkState(packed, { team: [{ name: 'Solo', type: 'Development' }] });
+sPack.meta.blackoutWeeks = [];
+var rPack = RM.snapEarliest(sPack, sPack.items[48].id);
+var late = RM.itemByNum(rPack.state, 99);
+eq(late.startDay, 240, 'feasible overflow schedules right after the packed horizon');
+ok(rPack.state.meta.numWeeks >= 49, 'timeline extended to fit (' + rPack.state.meta.numWeeks + 'w)');
+// autoSchedule: infeasible item gets a note and no endless walk
+var sInf2 = mkState([
+  { num: 1, feature: 'crowd', size: 'M', headcount: 9 }
+], { team: [{ name: 'X', type: 'Development' }] });
+var rInf2 = RM.autoSchedule(sInf2);
+ok(rInf2.notes.some(function (nn) { return nn.indexOf('left unscheduled') !== -1; }),
+  'autoSchedule notes the infeasible item');
+eq(RM.itemByNum(rInf2.state, 1).startDay, null, 'infeasible item is left unscheduled, never overallocated');
+
+// hours-aware: a part-time roster (20h = 0.5 people) can't absorb a full head
+var sInf3 = mkState([
+  { num: 1, feature: 'full-time ask', size: 'S', headcount: 1 }
+], { team: [{ name: 'Half', type: 'Development', weekHours: (function () {
+  var wh = {};
+  for (var w = 0; w < 60; w++) wh[RM.fmtISO(RM.weekStartDate(META, w))] = 20;
+  return wh;
+})() }] });
+var rInf3 = RM.autoSchedule(sInf3);
+eq(RM.itemByNum(rInf3.state, 1).startDay, null, 'part-time-only roster leaves a full-head item unscheduled');
+ok(rInf3.notes.length > 0, 'shortfall is noted');
+
+// a sufficient roster schedules without tripping the over-capacity check
+var sOk = mkState([
+  { num: 1, feature: 'a', size: 'M' },
+  { num: 2, feature: 'b', size: 'M' }
+], { team: [{ name: 'X', type: 'Development' }] });
+var rOk = RM.autoSchedule(sOk);
+ok(rOk.state.items.every(function (it) { return it.startDay != null; }), 'feasible items all scheduled');
+ok(!RM.validate(rOk.state).global.some(function (g) { return g.code === 'OVER_CAP'; }),
+  'auto-schedule result has no over-capacity week');
+
+// ------------------------------------------------------------- color
+section('colors');
+var sCol = mkState([{ num: 1, feature: 'x', workstream: 'Custom A' }, { num: 2, feature: 'y', workstream: 'Custom B' }, { num: 3, feature: 'z' }]);
+eq(RM.colorForItem(sCol, sCol.items[0]), RM.PALETTE.product, 'unknown workstream without a color is blue');
+eq(RM.colorForItem(sCol, sCol.items[2]), RM.PALETTE.product, 'no workstream is blue');
+sCol.wsColors['Custom B'] = 'process';
+eq(RM.colorForItem(sCol, sCol.items[1]), RM.PALETTE.process, 'palette-key workstream color applies');
+sCol.wsColors['Custom A'] = '#A14FBF';
+eq(RM.colorForItem(sCol, sCol.items[0]), 'A14FBF', 'custom hex workstream color applies');
+sCol.wsColors['Custom A'] = 'not-a-color';
+eq(RM.colorForItem(sCol, sCol.items[0]), RM.PALETTE.product, 'invalid custom color falls back to blue');
+var sCol2 = mkState([{ num: 1, feature: 'x', workstream: 'OS' }, { num: 2, feature: 'y', workstream: 'Data' }]);
+eq(RM.colorForWs(sCol2, 'OS'), '3273BD', 'seeded default: OS is blue');
+eq(RM.colorForWs(sCol2, 'Data'), RM.DEFAULT_WS_COLORS['Data'], 'seeded default: known workstreams get their own color');
+eq(RM.iconForEpic(mkState([{ num: 1, feature: 'x', epic: 'OS' }]), 'OS'), 'cpu', 'seeded default: OS epic gets its icon');
+sCol2.epicIcons['Search'] = 'rocket';
+eq(RM.iconForEpic(sCol2, 'Search'), 'rocket', 'epic icon lookup');
+eq(RM.iconForEpic(sCol2, 'Other'), null, 'no icon by default');
+
+// ------------------------------------------------------------- budgeting & reports
+section('budgeting & reports');
+var sBud = mkState([
+  { num: 1, feature: 'a', phaseId: 'p1', workstream: 'WS1', teamType: 'Development', startDay: 0, durDays: 10, headcount: 2 },
+  { num: 2, feature: 'b', phaseId: 'p1', workstream: 'WS2', teamType: 'Data', size: 'M' }
+], { team: [
+  { name: 'Dev', type: 'Development', workstream: 'WS1', rate: 200, cost: 100 },
+  { name: 'Analyst', type: 'Data', workstream: 'WS2', rate: 150, cost: 50 }
+] });
+eq(RM.roleMargin(sBud.team[0]), 50, 'margin 50% at rate 200 / cost 100');
+ok(RM.roleMargin({ rate: 0, cost: 10 }) === null, 'no rate → no margin');
+// actual hours clip each week to its workable (non-holiday) days
+var expT = 0;
+for (var wq = 0; wq < sBud.meta.numWeeks; wq++) expT += Math.min(40, (5 - RM.holidaysInWeek(sBud.meta, wq)) * 8);
+eq(RM.roleTotalHours(sBud, sBud.team[0]), expT, 'role hours = Σ min(planned, workable) per week');
+eq(RM.roleWeekHours(sBud, sBud.team[0], 16).planned, 40, 'full-holiday week still plans 40 h');
+eq(RM.roleWeekHours(sBud, sBud.team[0], 16).actual, 0, 'full-holiday week yields 0 actual hours');
+var w0Act = RM.roleWeekHours(sBud, sBud.team[0], 0).actual;
+sBud.team[0].weekHours['2026-07-27'] = 0;
+eq(RM.roleTotalHours(sBud, sBud.team[0]), expT - w0Act, 'week-hour override subtracts');
+eq(RM.avgCostRate(sBud, 'Data'), 50, 'avg cost rate by team type');
+var inf1 = RM.itemEffortInfo(sBud, sBud.items[0]);
+eq(inf1.hours, 10 * 8 * 2, 'scheduled effort hours = days × 8 × headcount');
+eq(inf1.cost, inf1.hours * 100, 'item cost priced at the type cost rate');
+var repWs = RM.costReport(sBud, 'workstream');
+eq(repWs.rows.length, 2, 'workstream report covers both groups');
+var inf2 = RM.itemEffortInfo(sBud, sBud.items[1]);
+ok(inf2.days > 0 && inf2.cost === inf2.hours * 50, 'unscheduled item priced from its size estimate');
+eq(repWs.total.cost, inf1.cost + inf2.cost, 'total item cost sums the groups');
+ok(repWs.total.roleCost > 0, 'workstream mode includes roster spend');
+eq(RM.costReport(sBud, 'phase').rows[0].items, 2, 'phase report groups items');
+eq(RM.costReport(sBud, 'phase-ws').rows.length, 2, 'phase×workstream splits per pair');
+
+// phase window overrides
+var sPhw = mkState([{ num: 1, feature: 'x', phaseId: 'p1', startDay: 10, durDays: 5 }]);
+eq(RM.phaseSpan(sPhw, sPhw.phases[0]).lo, 10, 'phase span auto-derives lo');
+eq(RM.phaseSpan(sPhw, sPhw.phases[0]).hi, 15, 'phase span auto-derives hi');
+sPhw.phases[0].startDay = 5;
+sPhw.phases[0].endDay = 30;
+eq(RM.phaseSpan(sPhw, sPhw.phases[0]).lo, 5, 'pinned phase start wins');
+eq(RM.phaseSpan(sPhw, sPhw.phases[0]).hi, 30, 'pinned phase end wins');
+
+// capacity feature off (the default) → roster never constrains anything
+var sOff = mkState([{ num: 1, feature: 'big', phaseId: 'p1', size: 'M', headcount: 9 }],
+  { team: [{ name: 'solo', type: 'Development' }] });
+sOff.meta.capacityEnabled = false;
+ok(RM.autoSchedule(sOff).state.items[0].startDay != null, 'capacity off: item schedules despite a tiny roster');
+var vOff = RM.validate(sOff);
+ok(!Object.keys(vOff.byItem).some(function (id) {
+  return vOff.byItem[id].some(function (w) { return /^HC_|^OVER_CAP/.test(w.code); });
+}), 'capacity off: no headcount/over-capacity warnings');
+
+// ------------------------------------------------------------- risk (metadata only)
+section('risk metadata');
+// risk never pads the schedule: riskDays is always zero, weeks are weeks
+var sMig = mkState([{ num: 1, feature: 'legacy', startDay: 0, durDays: 10, leadDays: 5, riskDays: 5, risk: 'S' }]);
+eq(sMig.items[0].durDays, 10, 'durDays stays exactly as set');
+eq(sMig.items[0].riskDays, 0, 'legacy riskDays zeroed on load');
+eq(sMig.items[0].risk, 'L', 'legacy risk t-shirt migrates to severity (S → L)');
+eq(RM.itemEnd(sMig.items[0]), 10, 'itemEnd = start + durDays, no padding');
+eq(RM.riskEffortDays(sMig, sMig.items[0]), 0, 'risk contributes no effort days');
+
+// auto-schedule: dependents start right after the work span
+var sRk = mkState([
+  { num: 1, feature: 'A', size: 'M', risk: 'S' },
+  { num: 2, feature: 'B', size: 'S', deps: [1] }
+]);
+var rRk = RM.autoSchedule(sRk);
+var K = {};
+rRk.state.items.forEach(function (it) { K[it.num] = it; });
+eq(K[1].durDays, 10, 'A work = M = 2w');
+eq(K[1].riskDays, 0, 'no buffer appended despite risk S');
+eq(K[2].startDay, 10, 'B starts right after A\'s work');
+
+// DEP_ORDER keys off the plain end
+var sRk2 = mkState([
+  { num: 1, feature: 'A', startDay: 0, durDays: 10 },
+  { num: 2, feature: 'B', startDay: 8, durDays: 5, size: 'S', deps: [1] }
+]);
+var vRk = RM.validate(sRk2);
+ok((vRk.byItem[sRk2.items[1].id] || []).some(function (v) { return v.code === 'DEP_ORDER'; }),
+  'starting before a dependency ends is flagged');
+
+// ------------------------------------------------------------- resources / time off
+section('time off');
+var sOff = mkState([
+  { num: 1, feature: 'pair work', startDay: 0, durDays: 5, headcount: 2, size: 'S' }
+], {
+  team: [
+    { id: 'm1', name: 'Ada', type: 'Development', offWeeks: ['2026-07-27'] },
+    { id: 'm2', name: 'Grace', type: 'Development' }
+  ]
+});
+var capOff = RM.capacity(sOff);
+eq(capOff.weeks[0].cap, 1, 'off member lowers week 0 capacity');
+ok(capOff.weeks[0].over, 'hc 2 vs 1 available is over');
+eq(capOff.weeks[1].cap, 2, 'week 1 back to full roster');
+var snapOff = RM.snapEarliest(sOff, sOff.items[0].id);
+eq(snapOff.state.items[0].startDay, 5, 'snap skips the short-handed week');
+
+// ------------------------------------------------------------- hours model
+section('hours');
+var sHr = mkState([
+  { num: 1, feature: 'w', startDay: 0, durDays: 5, headcount: 1, teamType: 'Development', size: 'S' }
+], {
+  team: [
+    { id: 'h1', name: 'Ada', type: 'Development', weekHours: { '2026-07-27': 20 } },
+    { id: 'h2', name: 'Grace', type: 'Data' }
+  ]
+});
+eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 0), 20, 'explicit week hours read back');
+eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 1), 40, 'unlisted weeks default to 40');
+eq(RM.availForWeek(sHr, 0).byType['Development'], 0.5, '20h = 0.5 parallel Development items');
+eq(RM.availForWeek(sHr, 0).total, 1.5, 'total people-equivalents');
+ok(RM.capacity(sHr).weeks[0].over, '1 Development item vs 0.5 capacity is over');
+// legacy offWeeks migrate to zero-hour weeks
+var sOffMig = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p' }], items: [],
+  team: [{ name: 'Ada', type: 'Development', offWeeks: ['2026-08-03'] }]
+});
+eq(sOffMig.team[0].weekHours['2026-08-03'], 0, 'offWeeks -> 0-hour week');
+ok(RM.memberOffWeek(sOffMig.meta, sOffMig.team[0], 1), 'memberOffWeek still answers via hours');
+// items default to 1 × Development
+eq(mkState([{ num: 1, feature: 'x' }]).items[0].teamType, 'Development', 'default work type');
+
+// capacity factor: PE at 40h scales availability
+var sCf = mkState([], { team: [{ name: 'Half', type: 'Development', capacity: 0.5 }] });
+eq(RM.availForWeek(sCf, 0).total, 0.5, 'capacity 0.5 at 40h = half a head');
+eq(sCf.team[0].capacity, 0.5, 'capacity survives normalize');
+eq(mkState([], { team: [{ name: 'X', type: 'Development' }] }).team[0].capacity, 1, 'capacity defaults to 1');
+eq(mkState([], { team: [{ name: 'Z', type: 'Development', capacity: 0 }] }).team[0].capacity, 0, 'capacity 0 is allowed');
+eq(RM.availForWeek(mkState([], { team: [{ name: 'Z', type: 'Development', capacity: 0 }] }), 0).total, 0,
+  'a zero-capacity role contributes nothing');
+
+// ------------------------------------------------------------- renumbering
+section('renumber');
+var sRn = mkState([
+  { num: 1, feature: 'a' },
+  { num: 2, feature: 'b', deps: [1] },
+  { num: 5, feature: 'c' }
+]);
+eq(RM.renumberItem(sRn, sRn.items[0].id, 9), 9, 'free number accepted');
+eq(sRn.items[1].deps, [9], 'deps follow the rename');
+eq(RM.renumberItem(sRn, sRn.items[2].id, 9), 10, 'taken number falls back to next available');
+eq(RM.renumberItem(sRn, sRn.items[2].id, 'zap'), 11, 'invalid number falls back to next available');
+
+// ------------------------------------------------------------- project end date
+section('end date');
+var sEd = mkState([]);
+eq(sEd.meta.endDate, RM.fmtISO(RM.dayToDate(sEd.meta, sEd.meta.numWeeks * 5 - 1)),
+  'endDate synced to the last working day');
+var sEd2 = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 48, endDate: '2026-10-16' }, // Fri of week 11
+  phases: [{ id: 'p' }], items: []
+});
+eq(sEd2.meta.numWeeks, 12, 'saved endDate wins over numWeeks');
+eq(sEd2.meta.endDate, '2026-10-16', 'endDate normalizes to that week\'s Friday');
+
+// ------------------------------------------------------------- scoping columns
+section('scope columns');
+var sSc = mkState([{ num: 1, feature: 'a' }]);
+eq(sSc.meta.scopeCols.map(function (c) { return c.key; }),
+  ['enables', 'outOfScope', 'extDeps', 'notes'], 'default columns exclude description');
+var ck = RM.addScopeCol(sSc, 'Owner');
+eq(sSc.meta.scopeCols.length, 5, 'custom column appended');
+eq(RM.scopeColLabel(sSc.meta.scopeCols[4]), 'Owner', 'custom label kept');
+RM.setScopeValue(sSc.items[0], ck, 'Rita');
+eq(RM.scopeValue(sSc.items[0], ck), 'Rita', 'custom value stored in item.custom');
+RM.setScopeValue(sSc.items[0], 'notes', 'n1');
+eq(sSc.items[0].notes, 'n1', 'built-in key routes to the item field');
+RM.moveScopeCol(sSc, ck, -2);
+eq(sSc.meta.scopeCols[2].key, ck, 'column moved by two');
+RM.addScopeCol(sSc, null, 'description');
+eq(sSc.meta.scopeCols[5].key, 'description', 'hidden built-in re-added');
+RM.addScopeCol(sSc, null, 'description');
+eq(sSc.meta.scopeCols.length, 6, 're-adding a visible built-in is a no-op');
+RM.removeScopeCol(sSc, ck);
+eq(sSc.meta.scopeCols.length, 5, 'column removed');
+eq(RM.scopeValue(sSc.items[0], ck), '', 'custom values cleaned up on remove');
+var sSc2 = RM.normalizeState(sSc);
+eq(sSc2.meta.scopeCols.map(function (c) { return c.key; }),
+  sSc.meta.scopeCols.map(function (c) { return c.key; }), 'scopeCols survive normalize');
+RM.setScopeValue(sSc.items[0], 'x9', 'keep');
+eq(RM.normalizeState(sSc).items[0].custom.x9, 'keep', 'custom values survive normalize');
+
+// ------------------------------------------------------------- dependency risk
+section('depRisk');
+var sDr = mkState([
+  { num: 1, feature: 'free' },
+  { num: 2, feature: 'waiting', deps: [1] },
+  { num: 3, feature: 'cyc a', deps: [4] },
+  { num: 4, feature: 'cyc b', deps: [3] }
+]);
+eq(RM.depRisk(sDr, sDr.items[0]).level, 'none', 'no deps → none');
+ok(RM.depRisk(sDr, sDr.items[1]).level !== 'none', 'unscheduled dep raises risk');
+eq(RM.depRisk(sDr, sDr.items[2]).level, 'high', 'cycle membership → high');
+
+// ------------------------------------------------------------- sprint anchor
+section('sprint numbering');
+var sSp = mkState([]);
+sSp.meta.sprintAnchor = '2026-09-07'; // 6 weeks after timeline start
+sSp.meta.sprintAnchorNum = 1;
+eq(RM.sprintNumForWeek(sSp.meta, 6), 1, 'anchor week is S1');
+eq(RM.sprintNumForWeek(sSp.meta, 8), 2, 'next sprint is S2');
+eq(RM.sprintNumForWeek(sSp.meta, 4), 0, 'sprint before the anchor is S0');
+eq(RM.sprintNumForWeek(sSp.meta, 0), -2, 'weeks count down before the anchor');
+eq(RM.sprintInfo(mkState([]).meta).anchorWeek, 0, 'default anchor is the timeline start');
+
+// ------------------------------------------------------------- ordering & ripple
+section('ordering & ripple');
+var sOrd = mkState([
+  { num: 1, feature: 'late', phaseId: 'p1', startDay: 10, durDays: 5 },
+  { num: 2, feature: 'early', phaseId: 'p1', startDay: 0, durDays: 5 },
+  { num: 3, feature: 'backlog', phaseId: 'p1' },
+  { num: 4, feature: 'early too', phaseId: 'p1', startDay: 0, durDays: 5 }
+]);
+RM.sortItemsByStart(sOrd);
+eq(sOrd.items.map(function (x) { return x.num; }), [2, 4, 1, 3], 'stable sort by start; unscheduled last');
+
+// holdPos: a freshly-inserted unscheduled row keeps its slot through sorts
+var sHold = mkState([
+  { num: 1, feature: 'late', phaseId: 'p1', startDay: 10, durDays: 5 },
+  { num: 2, feature: 'inserted', phaseId: 'p1' },
+  { num: 3, feature: 'early', phaseId: 'p1', startDay: 0, durDays: 5 }
+]);
+sHold.items[1].holdPos = true;
+RM.sortItemsByStart(sHold);
+eq(sHold.items.map(function (x) { return x.num; }), [3, 2, 1], 'holdPos row stays at its slot instead of sorting to the bottom');
+RM.sortItemsByStart(sHold);
+eq(sHold.items.map(function (x) { return x.num; }), [3, 2, 1], 'holdPos survives repeated sorts while undated');
+sHold.items[1].startDay = 20; sHold.items[1].durDays = 5;
+RM.sortItemsByStart(sHold);
+eq(sHold.items.map(function (x) { return x.num; }), [3, 1, 2], 'once dated the row sorts normally');
+ok(!sHold.items[2].holdPos, 'holdPos clears itself after a date is set');
+
+var sRip = mkState([
+  { num: 1, feature: 'root', startDay: 0, durDays: 5 },
+  { num: 2, feature: 'child', deps: [1], startDay: 5, durDays: 5 },
+  { num: 3, feature: 'grandchild', deps: [2], startDay: 10, durDays: 5 },
+  { num: 4, feature: 'pinned', deps: [1], startDay: 5, durDays: 5, locked: true },
+  { num: 5, feature: 'unrelated', startDay: 0, durDays: 5 }
+]);
+// the caller (drag end) moves the root first; ripple then chains the push down
+sRip.items[0].startDay = 5;
+var movedN = RM.shiftDependents(sRip, sRip.items[0].id, 5);
+eq(movedN, 2, 'ripple moves the two unlocked dependents');
+
+// story timelines ride along when their feature moves in time
+var sSt = mkState([
+  { num: 1, feature: 'root', startDay: 0, durDays: 5 },
+  { num: 2, feature: 'child', deps: [1], startDay: 5, durDays: 5,
+    stories: [{ id: 'sx', title: 'story', startDay: 6, durDays: 5 }] }
+]);
+sSt.items[0].startDay = 5;
+RM.shiftDependents(sSt, sSt.items[0].id, 5);
+eq(sSt.items[1].startDay, 10, 'ripple moved the child');
+eq(sSt.items[1].stories[0].startDay, 11, "the child's story rode along");
+RM.shiftStories(sSt.items[1], -20);
+eq(sSt.items[1].stories[0].startDay, 0, 'shiftStories clamps at day 0');
+eq(sRip.items[1].startDay, 10, 'child pushed forward');
+eq(sRip.items[2].startDay, 15, 'grandchild pushed to follow the child');
+eq(sRip.items[3].startDay, 5, 'locked dependent stays');
+eq(sRip.items[4].startDay, 0, 'unrelated item stays');
+
+// slack absorbs part of the push: dependents move only as far as needed
+var sRip2 = mkState([
+  { num: 1, feature: 'root', startDay: 5, durDays: 5 },      // already moved +5
+  { num: 2, feature: 'slack', deps: [1], startDay: 12, durDays: 5 },
+  { num: 3, feature: 'tail', deps: [2], startDay: 17, durDays: 5 }
+]);
+eq(RM.shiftDependents(sRip2, sRip2.items[0].id, 5), 0, 'push inside slack moves nothing');
+sRip2.items[0].startDay = 10; // +5 more — now 2 days past the slack
+eq(RM.shiftDependents(sRip2, sRip2.items[0].id, 5), 2, 'push past slack chains down');
+eq(sRip2.items[1].startDay, 15, 'dependent pushed just to the buffered end');
+eq(sRip2.items[2].startDay, 20, 'its dependent pushed by the same applied amount');
+
+// pulling back: dependents follow, clamped by their other dependencies
+var sRip3 = mkState([
+  { num: 1, feature: 'root', startDay: 0, durDays: 5 },      // already moved −5 (was 5)
+  { num: 2, feature: 'other', startDay: 0, durDays: 8 },
+  { num: 3, feature: 'child', deps: [1, 2], startDay: 10, durDays: 5 }
+]);
+eq(RM.shiftDependents(sRip3, sRip3.items[0].id, -5), 1, 'pull moves the dependent back');
+eq(sRip3.items[2].startDay, 8, 'clamped at the other dependency\'s end');
+
+// ------------------------------------------------------------- critical path
+section('critical path');
+var sCp = mkState([
+  { num: 1, feature: 'A', startDay: 0, durDays: 10 },
+  { num: 2, feature: 'B', startDay: 10, durDays: 10, deps: [1] },
+  { num: 3, feature: 'C', startDay: 0, durDays: 2 }
+]);
+var cp = RM.criticalPath(sCp);
+ok(cp.edges[sCp.items[0].id + '>' + sCp.items[1].id], 'A→B is on the critical path');
+ok(cp.items[sCp.items[0].id] && cp.items[sCp.items[1].id], 'A and B are critical');
+ok(!cp.items[sCp.items[2].id], 'short independent C is not critical');
+eq(cp.total, 20, 'critical chain length');
+
+// ------------------------------------------------------------- excel round-trip
+section('excel round-trip');
+var ExcelJS = null;
+try { ExcelJS = require('exceljs'); } catch (e) { /* not installed here */ }
+if (!ExcelJS) {
+  skipped++;
+  console.log('  (skipped — exceljs not resolvable in NODE_PATH)');
+  finish();
+} else {
+  global.ExcelJS = ExcelJS;
+  var RMExcel = require('../js/excel.js');
+  var seed = require('./seed.fixture.js');
+  var st = RM.normalizeState(seed);
+  st.team = [{ id: 't1', name: 'Ada', type: 'Development', rate: 210, cost: 95 }, { id: 't2', name: 'Grace', type: 'Data' }];
+  st = RM.normalizeState(st);
+  st.items[0].stories = [{ id: 's1', title: 'story one', done: false }, { id: 's2', title: 'story two', done: true }];
+  st.items[0].headcount = 3;
+  // a wall of emoji guarantees several chunk boundaries fall inside surrogate pairs
+  st.items[1].notes = new Array(20001).join('🚀');
+  st.items[1].feature = 'emoji stress 🎯';
+
+  var uiPrefs = { weekPx: 41, view: 'scoping', capType: 'Data Science 🧪', groupEpic: true, expanded: { i1: true } };
+  RMExcel.exportWorkbook(st, uiPrefs).then(function (buf) {
+    return RMExcel.importWorkbook(buf).then(function (r1) {
+      ok(r1.source === 'tool', 'reimport hits the lossless path');
+      ok(r1.ui && r1.ui.weekPx === 41 && r1.ui.view === 'scoping' &&
+        r1.ui.capType === uiPrefs.capType && r1.ui.groupEpic === true && r1.ui.expanded.i1 === true,
+        'UI prefs (zoom/view/grouping/expansion, incl. emoji) ride in the file');
+      eq(r1.state.items.length, st.items.length, 'item count survives');
+      eq(r1.state.team.length, 2, 'team survives');
+      eq(r1.state.items[0].stories.length, 2, 'stories survive');
+      eq(r1.state.items[0].headcount, 3, 'headcount survives');
+      ok(r1.state.items[1].notes === st.items[1].notes, 'emoji notes survive chunk boundaries losslessly');
+      var origSched = st.items.filter(function (i2) { return i2.startDay != null; }).length;
+      var newSched = r1.state.items.filter(function (i2) { return i2.startDay != null; }).length;
+      eq(newSched, origSched, 'schedules survive');
+      eq(r1.state.meta.holidays, st.meta.holidays, 'holidays survive');
+      eq(r1.state.meta.sprintAnchor, st.meta.sprintAnchor, 'sprint anchor survives');
+
+      // strip the tool sheet -> template parsing path
+      var wb2 = new ExcelJS.Workbook();
+      return wb2.xlsx.load(buf).then(function () {
+        wb2.removeWorksheet(wb2.getWorksheet('_RoadmapTool').id);
+        return wb2.xlsx.writeBuffer();
+      }).then(function (buf2) {
+        return RMExcel.importWorkbook(buf2);
+      }).then(function (r2) {
+        ok(r2.source === 'template', 'without tool sheet, template parse engages');
+        eq(r2.state.items.length, st.items.length, 'template parse finds every item row');
+        eq(r2.state.phases.length, st.phases.length, 'template parse finds every phase band');
+        var sc2 = r2.state.items.filter(function (i2) { return i2.startDay != null; }).length;
+        ok(Math.abs(sc2 - origSched) <= 2, 'template parse recovers bars (±sprint rounding), got ' + sc2 + ' vs ' + origSched);
+        eq(r2.state.meta.numWeeks, st.meta.numWeeks, 'weekly columns keep the exact week count');
+        eq(r2.state.meta.weeksPerSprint, 2, 'column granularity does not redefine the sprint length');
+        var wkOk = st.items.every(function (o) {
+          if (o.startDay == null) return true;
+          var m2 = r2.state.items.filter(function (i2) { return i2.num === o.num; })[0];
+          return m2 && m2.startDay === Math.floor(o.startDay / 5) * 5;
+        });
+        ok(wkOk, 'bar starts re-import at week precision (not rounded to sprints)');
+        var it2 = r2.state.items.filter(function (i2) { return i2.num === 11; })[0];
+        ok(it2 && it2.deps.indexOf(1) !== -1 && it2.deps.indexOf(2) !== -1, 'deps re-parsed from cell text');
+        var withStories = r2.state.items.filter(function (i2) { return i2.stories.length === 2; });
+        ok(withStories.length === 1, 'stories re-attached via Stories sheet');
+        eq(r2.state.team.length, 2, 'team re-parsed from Team sheet');
+        eq(r2.state.team[0].rate, 210, 'role rate survives the template path');
+        eq(r2.state.team[0].cost, 95, 'role cost survives the template path');
+        finish();
+      });
+    });
+  }).catch(function (err) {
+    failed++;
+    console.error('  ✗ excel round-trip threw: ' + (err && err.stack || err));
+    finish();
+  });
+}
+
+function finish() {
+  console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
+  process.exit(failed ? 1 : 0);
+}

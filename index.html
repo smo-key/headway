@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Headway — Roadmap Planner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230057B8'/%3E%3Crect x='6' y='8' width='14' height='4' rx='2' fill='%23fff'/%3E%3Crect x='10' y='14' width='16' height='4' rx='2' fill='%23fff' opacity='.75'/%3E%3Crect x='8' y='20' width='11' height='4' rx='2' fill='%23fff' opacity='.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="tb-brand">
+    <div class="tb-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div class="tb-titles">
+      <input id="docTitle" class="tb-title" spellcheck="false" aria-label="Roadmap title">
+      <div class="tb-sub"><span>Headway</span></div>
+    </div>
+  </div>
+
+  <nav class="menus" id="menus">
+    <button class="menu-btn" data-menu="file">File</button>
+    <button class="menu-btn" data-menu="edit">Edit</button>
+    <button class="menu-btn" data-menu="view">View</button>
+  </nav>
+
+  <div class="view-tabs" id="viewTabs">
+    <button data-view="setup" title="Project setup — timeline, workstreams, phases, sprints, types, holidays, sizing"><i data-lucide="settings-2"></i>Setup</button>
+    <button data-view="scoping" title="Spreadsheet of descriptions and scope"><i data-lucide="table-properties"></i>Scoping</button>
+    <button data-view="planning" title="Timeline / gantt"><i data-lucide="chart-gantt"></i>Planning</button>
+    <button data-view="budget" title="Resources — rates, costs and timelines"><i data-lucide="wallet"></i>Budgeting</button>
+  </div>
+
+  <div class="tb-right">
+    <button id="btnSave" class="primary" title="Save as .xlsx (styled, re-loadable)"><i data-lucide="download"></i>Save</button>
+    <button id="btnValidation" class="chip" title="Preflight — validation report"><span id="valDot"></span><span id="valCount">0</span></button>
+  </div>
+</header>
+
+<div id="main">
+<div id="centerCol">
+  <div id="setupView"></div>
+    <div id="board">
+    <div id="grid">
+      <div id="bgcols"></div>
+      <div id="hdr">
+        <div class="hdr-line hdr-phases"><div class="hdr-left"><button id="btnPresent" title="Expand — timeline-only preview"><i data-lucide="maximize-2"></i></button></div><div class="hdr-lane" id="hdrPhases"></div></div>
+        <div class="hdr-line hdr-sprints"><div class="hdr-left corner">
+          <span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Role</span><span class="hl-cols"><i class="pl-only" style="width:34px">size</i><i class="pl-only" style="width:34px">wks</i><i class="pl-only hc-lab" style="width:30px">hc</i><i class="pl-only" style="width:22px"></i><i class="bu-only" style="width:96px">Type</i><i class="bu-only" style="width:108px">Workstream</i><i class="bu-only" style="width:58px">Cost</i><i class="bu-only" style="width:58px">Rate</i><i class="bu-only" style="width:54px">Margin</i><i class="bu-only" style="width:80px">Total</i></span><span id="leftRz" title="Drag to resize the left pane"></span>
+        </div><div class="hdr-lane" id="hdrSprints"></div></div>
+        <div class="hdr-line hdr-cap"><div class="hdr-left" id="capTypeCell"></div><div class="hdr-lane" id="hdrCap"></div></div>
+      </div>
+      <div id="rows"></div>
+      <svg id="arrows" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowhead" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z"></path>
+          </marker>
+          <marker id="arrowhead-crit" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z"></path>
+          </marker>
+          <marker id="arrowhead-hot" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z"></path>
+          </marker>
+          <marker id="arrowhead-viol" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z"></path>
+          </marker>
+          <marker id="arrowhead-sel" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z"></path>
+          </marker>
+          <marker id="arrowhead-temp" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 z"></path>
+          </marker>
+        </defs>
+        <g id="arrowPaths"></g>
+        <path id="tempLink" hidden></path>
+      </svg>
+      <div id="todayLine" hidden><span>today</span></div>
+    </div>
+  </div>
+
+  <div id="repPanel" class="collapsed">
+    <div id="repHead">
+      <span class="band-chev" id="repChev" title="Collapse / expand">▶</span>
+      <span class="rp-title">Reports</span>
+      <span id="repModeCell"></span>
+    </div>
+    <div id="repBody"></div>
+  </div>
+  <div id="resPanel">
+    <div id="resResize" title="Drag to resize"></div>
+    <div id="resHead">
+      <span class="band-chev open" id="resChev" title="Collapse / expand">▶</span>
+      <span class="rp-title">Resources</span>
+      <span class="band-count" id="resCount">0</span>
+      <button id="resManage" class="band-add" style="opacity:1">manage</button>
+    </div>
+    <div id="resBody"><div id="resGrid"></div></div>
+  </div>
+  <div id="leftRzLine" title="Drag to resize the left pane"></div>
+</div>
+
+  <aside id="panel" hidden></aside>
+  <button id="btnPresentExit" hidden title="Exit preview (Esc)"><i data-lucide="minimize-2"></i></button>
+</div>
+
+<div id="dragTip" hidden></div>
+<div id="popover" hidden></div>
+<div id="modalHost" hidden></div>
+<div id="toasts"></div>
+<input type="file" id="filePick" accept=".xlsx" hidden>
+
+<script src="js/vendor/exceljs.min.js"></script>
+<script src="js/vendor/lucide.min.js"></script>
+<script src="js/core.js"></script>
+<script src="js/excel.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
