@@ -634,6 +634,115 @@ ok(cp.items[sCp.items[0].id] && cp.items[sCp.items[1].id], 'A and B are critical
 ok(!cp.items[sCp.items[2].id], 'short independent C is not critical');
 eq(cp.total, 20, 'critical chain length');
 
+// ------------------------------------------------------------- rich text
+section('rich text');
+eq(RM.htmlToText('<b>Hi</b><br>there &amp; <i>more</i>'), 'Hi\nthere & more', 'htmlToText strips tags and decodes entities');
+eq(RM.htmlToText('<ul><li>a</li><li>b</li></ul>'), 'a\nb', 'htmlToText keeps list items on their own lines');
+eq(RM.htmlToText(''), '', 'htmlToText of empty is empty');
+var sRich = mkState([{ num: 1, feature: 'F', stories: [
+  { title: 'S1', description: '<b>body</b>', ac: '<ul><li>crit</li></ul>' },
+  { title: 'S2' }
+] }]);
+eq(sRich.items[0].stories[0].description, '<b>body</b>', 'story description survives normalize');
+eq(sRich.items[0].stories[0].ac, '<ul><li>crit</li></ul>', 'story acceptance criteria survive normalize');
+eq(sRich.items[0].stories[1].description, '', 'missing story description defaults empty');
+eq(sRich.items[0].stories[1].ac, '', 'missing story acceptance criteria default empty');
+
+// ------------------------------------------------------------- png export layout
+section('png export layout');
+var RMExport = require('../js/export-png.js');
+(function () {
+  var sEx = mkState([
+    { num: 1, feature: 'Alpha item', workstream: 'Product', epic: 'OS', startDay: 0, durDays: 10 },
+    { num: 2, feature: 'Beta item', workstream: 'Data', epic: 'OS', startDay: 20, durDays: 5, riskDays: 5 },
+    { num: 3, feature: 'Backlog idea', workstream: 'Product', epic: 'OS' }, // unscheduled
+    { num: 4, feature: 'Next thing', phaseId: 'p2', workstream: 'Process', epic: 'Ops', startDay: 40, durDays: 10 }
+  ]);
+  // normalize zeroes riskDays; only the auto-scheduler sets them at runtime
+  sEx.items.forEach(function (it) { if (it.num === 2) it.riskDays = 5; });
+  var itemRows = function (lay) {
+    return lay.rows.filter(function (r) { return r.kind === 'item'; });
+  };
+
+  var full = RMExport.layout(sEx, {});
+  // content spans days 0..50 → weeks 0..10; the window clamps to that span
+  eq(full.d0, 0, 'window starts at the first visible bar');
+  eq(full.d1, 50, 'window ends at the last visible bar');
+  eq(full.width, full.laneX + 10 * full.weekPx, 'export width clamps to the content span');
+  eq(itemRows(full).map(function (r) { return r.feature; }),
+    ['Alpha item', 'Beta item', 'Next thing'], 'scheduled items export; unscheduled are omitted');
+  eq(full.rows.filter(function (r) { return r.kind === 'band'; }).map(function (r) { return r.name; }),
+    ['Alpha', 'Next'], 'each phase with visible items contributes a band row');
+  var bar1 = itemRows(full)[0].bar, bar2 = itemRows(full)[1].bar;
+  eq(bar1.x, full.laneX, 'day 0 bar starts at the lane origin');
+  eq(bar1.w, 10 * full.weekPx / 5, 'bar width is durDays at a fifth of weekPx per day');
+  eq(bar2.w, (5 + 5) * full.weekPx / 5, 'risk days extend the painted bar');
+  ok(full.height >= full.rows[full.rows.length - 1].y + full.rows[full.rows.length - 1].h,
+    'canvas height covers the last row');
+
+  var ws = RMExport.layout(sEx, { ws: 'Data' });
+  eq(itemRows(ws).map(function (r) { return r.feature; }), ['Beta item'], 'workstream filter keeps only matching items');
+  eq(ws.d0, 20, 'filters inform the exported window start');
+  eq(ws.d1, 30, 'filters inform the exported window end');
+  eq(ws.rows.filter(function (r) { return r.kind === 'band'; }).map(function (r) { return r.name; }),
+    ['Alpha'], 'phases emptied by a filter drop their band row');
+
+  var ep = RMExport.layout(sEx, { epic: 'Ops' });
+  eq(itemRows(ep).map(function (r) { return r.feature; }), ['Next thing'], 'epic filter keeps only matching items');
+
+  var ph = RMExport.layout(sEx, { phaseId: 'p1' });
+  eq(itemRows(ph).map(function (r) { return r.feature; }), ['Alpha item', 'Beta item'], 'phase filter keeps only that phase');
+
+  // sprints are 2 weeks here: sprint 3 covers weeks 4–5, days 20–29
+  var rng = RMExport.layout(sEx, { fromSprint: 3, toSprint: 3 });
+  eq(rng.d0, 20, 'sprint range sets the day window start');
+  eq(rng.d1, 30, 'sprint range sets the day window end');
+  eq(rng.width, rng.laneX + 2 * rng.weekPx, 'ranged export width covers only the selected weeks');
+  eq(itemRows(rng).map(function (r) { return r.feature; }), ['Beta item'], 'bars outside the window are dropped');
+  eq(itemRows(rng)[0].bar.x, rng.laneX + (20 - 20) * rng.weekPx / 5, 'ranged bar x is relative to the window');
+  var clip = RMExport.layout(sEx, { fromSprint: 1, toSprint: 1 }); // days 0–19
+  eq(itemRows(clip).map(function (r) { return r.feature; }), ['Alpha item'], 'window keeps overlapping bars only');
+  var rng2 = RMExport.layout(sEx, { fromSprint: 5, toSprint: 6 }); // days 40–59
+  var b4 = itemRows(rng2)[0].bar;
+  eq(b4.w, 10 * rng2.weekPx / 5, 'bar fully inside the window keeps its width');
+  var part = RMExport.layout(sEx, { fromSprint: 2, toSprint: 2 }); // days 10–19: Alpha item runs 0–9, Beta starts day 20
+  eq(itemRows(part).length, 0, 'bars touching neither side of the window are dropped');
+  eq(part.width, part.laneX, 'an empty window shows no date columns');
+  eq(part.sprints.length, 0, 'an empty window has no sprint header');
+  eq(part.range, '', 'an empty window shows no date range');
+  var edge = RMExport.layout(sEx, { fromSprint: 1, toSprint: 1 });
+  // Beta item (20..29) is out; Alpha (0..9) fully in
+  eq(itemRows(edge)[0].bar.w, 10 * edge.weekPx / 5, 'unclipped bar keeps full width at window edge');
+  var clip2 = RMExport.layout(mkState([
+    { num: 9, feature: 'Spans', workstream: 'Product', epic: 'OS', startDay: 5, durDays: 30 }
+  ]), { fromSprint: 2, toSprint: 2 }); // window days 10–19, bar runs 5..34
+  eq(itemRows(clip2)[0].bar.x, clip2.laneX, 'bar entering from the left clips to the window start');
+  eq(itemRows(clip2)[0].bar.w, 10 * clip2.weekPx / 5, 'clipped bar width covers only the visible days');
+
+  // sprints 3–4 select weeks 4–7, but content (Beta, days 20–29) ends at week 6
+  var spr = RMExport.layout(sEx, { fromSprint: 3, toSprint: 4 });
+  eq(spr.d1, 30, 'range and content together bound the window');
+  eq(spr.sprints.length, 1, 'sprint header cells cover only the clamped window');
+  eq(spr.sprints[0].x, spr.laneX, 'first sprint cell starts at the lane origin');
+
+  // filenames keep the title verbatim, minus filesystem-hostile characters
+  eq(RMExport.fileName(sEx), 'T.png', 'png filename is the exact title');
+  eq(RMExport.fileName({ meta: { title: 'My Plan: Q3/Q4?' } }), 'My Plan Q3Q4.png',
+    'png filename strips only invalid filename characters');
+
+  // overlapping phase spans stack into separate header lanes
+  var sOv = mkState([
+    { num: 1, feature: 'One', phaseId: 'p1', startDay: 0, durDays: 30 },
+    { num: 2, feature: 'Two', phaseId: 'p2', startDay: 10, durDays: 30 }
+  ]);
+  sOv.phases[1].bucket = false;
+  var ov = RMExport.layout(sOv, {});
+  eq(ov.phaseSpans.map(function (s) { return s.lane; }), [0, 1],
+    'overlapping phase spans take separate lanes');
+  ok(ov.rows[0].y > RMExport.layout(sEx, {}).rows[0].y - 1 &&
+    ov.phLanes === 2, 'a second phase lane grows the header');
+})();
+
 // ------------------------------------------------------------- excel round-trip
 section('excel round-trip');
 var ExcelJS = null;
@@ -649,7 +758,10 @@ if (!ExcelJS) {
   var st = RM.normalizeState(seed);
   st.team = [{ id: 't1', name: 'Ada', type: 'Development', rate: 210, cost: 95 }, { id: 't2', name: 'Grace', type: 'Data' }];
   st = RM.normalizeState(st);
-  st.items[0].stories = [{ id: 's1', title: 'story one', done: false }, { id: 's2', title: 'story two', done: true }];
+  st.items[0].stories = [
+    { id: 's1', title: 'story one', done: false, description: '<b>rich</b> body', ac: '<ul><li>crit one</li></ul>' },
+    { id: 's2', title: 'story two', done: true, description: '', ac: '' }
+  ];
   st.items[0].headcount = 3;
   // a wall of emoji guarantees several chunk boundaries fall inside surrogate pairs
   st.items[1].notes = new Array(20001).join('🚀');
@@ -665,6 +777,8 @@ if (!ExcelJS) {
       eq(r1.state.items.length, st.items.length, 'item count survives');
       eq(r1.state.team.length, 2, 'team survives');
       eq(r1.state.items[0].stories.length, 2, 'stories survive');
+      eq(r1.state.items[0].stories[0].description, '<b>rich</b> body', 'story rich description survives losslessly');
+      eq(r1.state.items[0].stories[0].ac, '<ul><li>crit one</li></ul>', 'story acceptance criteria survive losslessly');
       eq(r1.state.items[0].headcount, 3, 'headcount survives');
       ok(r1.state.items[1].notes === st.items[1].notes, 'emoji notes survive chunk boundaries losslessly');
       var origSched = st.items.filter(function (i2) { return i2.startDay != null; }).length;
@@ -698,6 +812,8 @@ if (!ExcelJS) {
         ok(it2 && it2.deps.indexOf(1) !== -1 && it2.deps.indexOf(2) !== -1, 'deps re-parsed from cell text');
         var withStories = r2.state.items.filter(function (i2) { return i2.stories.length === 2; });
         ok(withStories.length === 1, 'stories re-attached via Stories sheet');
+        eq(withStories[0].stories[0].description, 'rich body', 'template path keeps story description as text');
+        eq(withStories[0].stories[0].ac, 'crit one', 'template path keeps acceptance criteria as text');
         eq(r2.state.team.length, 2, 'team re-parsed from Team sheet');
         eq(r2.state.team[0].rate, 210, 'role rate survives the template path');
         eq(r2.state.team[0].cost, 95, 'role cost survives the template path');

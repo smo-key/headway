@@ -240,6 +240,19 @@
     return si.firstNum + Math.floor((week - si.anchorWeek) / si.wps);
   };
 
+  // plain-text projection of stored rich text (tooltips, Excel cells, search)
+  RM.htmlToText = function (html) {
+    if (!html) return '';
+    var t = String(html)
+      .replace(/<(script|style)[\s\S]*?<\/\1\s*>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|li|ul|ol|h[1-6])\s*>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  };
+
   RM.sizeDays = function (state, size) {
     var map = (state.meta && state.meta.sizeDays) || RM.DEFAULT_SIZE_DAYS;
     return size && map[size] != null ? map[size] : null;
@@ -400,6 +413,9 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays > 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            // rich-text (sanitized HTML) story body + acceptance criteria
+            description: typeof s.description === 'string' ? s.description : '',
+            ac: typeof s.ac === 'string' ? s.ac : '',
             startDay: sched ? Math.max(0, Math.round(s.startDay)) : null,
             durDays: sched ? Math.round(s.durDays) : null
           };

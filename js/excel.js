@@ -240,16 +240,21 @@
 
     // ---- Stories sheet
     var sws = wb.addWorksheet('Stories');
-    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done'];
+    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria'];
     sws.getRow(1).font = { bold: true };
     sws.getColumn(1).width = 8;
     sws.getColumn(2).width = 44;
     sws.getColumn(3).width = 60;
     sws.getColumn(4).width = 7;
+    sws.getColumn(5).width = 50;
+    sws.getColumn(6).width = 50;
     var srow = 2;
     state.items.forEach(function (it) {
       it.stories.forEach(function (st) {
-        sws.getRow(srow).values = [it.num, it.feature, st.title, st.done ? 'Yes' : 'No'];
+        // rich text flattens to plain text in the sheet; the hidden tool
+        // sheet keeps the formatted version losslessly
+        sws.getRow(srow).values = [it.num, it.feature, st.title, st.done ? 'Yes' : 'No',
+          RM.htmlToText(st.description || ''), RM.htmlToText(st.ac || '')];
         srow += 1;
       });
     });
@@ -607,7 +612,10 @@
         if (!numTxt || !title) continue;
         var target = byNum[parseInt(numTxt, 10)];
         if (target) {
-          target.stories.push({ title: title, done: /^y(es)?$/i.test(cellText(sws.getCell(sr, 4))) });
+          target.stories.push({
+            title: title, done: /^y(es)?$/i.test(cellText(sws.getCell(sr, 4))),
+            description: cellText(sws.getCell(sr, 5)), ac: cellText(sws.getCell(sr, 6))
+          });
         }
       }
     }

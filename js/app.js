@@ -18,7 +18,7 @@
   var showCap = true;        // weekly capacity row in the planning header
   var presentMode = false;   // timeline-only preview (hides topbar + left pane); transient
   var repCollapsed = true;   // bottom Reports drawer starts tucked away
-  var leftWBudget = 660;     // frozen left-pane width, budgeting view
+  var leftWBudget = 696;     // frozen left-pane width, budgeting view
   var repMode = 'workstream'; // reports grouping: workstream | phase | phase-ws
   var panelW = 372;          // right edit-panel width (resizable)
   var leftWPlan = 538;       // frozen left-pane width, planning view
@@ -86,7 +86,8 @@
     panelSec = ui.panelSec && typeof ui.panelSec === 'object' ? ui.panelSec : {};
     leftWPlan = ui.leftWPlan > 200 ? ui.leftWPlan : 538;
     leftWScope = ui.leftWScope > 200 ? ui.leftWScope : 538;
-    leftWBudget = ui.leftWBudget > 300 ? ui.leftWBudget : 660;
+    // 660 was the pre-widened-columns default; bump those snapshots to 696
+    leftWBudget = ui.leftWBudget > 300 && ui.leftWBudget !== 660 ? ui.leftWBudget : 696;
     panelW = ui.panelW > 280 ? ui.panelW : 372;
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
@@ -222,6 +223,58 @@
       });
   }
 
+  // ------------------------------------------------------------ rich text
+  // minimal DOM-based whitelist sanitizer for stored WYSIWYG HTML
+  var WZ_TAGS = { B: 1, I: 1, U: 1, S: 1, EM: 1, STRONG: 1, UL: 1, OL: 1, LI: 1, P: 1, DIV: 1, BR: 1 };
+  function sanitizeHtml(html) {
+    if (!html) return '';
+    var box = document.createElement('div');
+    box.innerHTML = String(html);
+    (function walk(node) {
+      Array.prototype.slice.call(node.childNodes).forEach(function (ch) {
+        if (ch.nodeType === 3) return;
+        if (ch.nodeType !== 1 || ch.tagName === 'SCRIPT' || ch.tagName === 'STYLE') { node.removeChild(ch); return; }
+        walk(ch);
+        if (WZ_TAGS[ch.tagName]) {
+          Array.prototype.slice.call(ch.attributes).forEach(function (a) { ch.removeAttribute(a.name); });
+        } else {
+          // unknown tags unwrap: keep their (already-walked) children
+          while (ch.firstChild) node.insertBefore(ch.firstChild, ch);
+          node.removeChild(ch);
+        }
+      });
+    })(box);
+    var out = box.innerHTML;
+    return out === '<br>' ? '' : out;
+  }
+
+  // WYSIWYG editor block; the host wires the commit (blur / Save)
+  function wysHtml(field, html, placeholder) {
+    function btn(cmd, title, label) {
+      return '<button type="button" tabindex="-1" data-wzc="' + cmd + '" title="' + title + '">' + label + '</button>';
+    }
+    return '<div class="wz">' +
+      '<div class="wz-bar">' +
+      btn('bold', 'Bold', '<b>B</b>') +
+      btn('italic', 'Italic', '<i>I</i>') +
+      btn('insertUnorderedList', 'Bullet list', '<i data-lucide="list"></i>') +
+      btn('insertOrderedList', 'Numbered list', '<i data-lucide="list-ordered"></i>') +
+      '</div>' +
+      '<div class="wz-ed" contenteditable="true" data-f="' + field + '" data-ph="' + esc(placeholder || '') + '">' +
+      sanitizeHtml(html) + '</div></div>';
+  }
+  // toolbar buttons act on their editor without stealing its selection
+  document.addEventListener('pointerdown', function (e) {
+    var b = e.target.closest && e.target.closest('[data-wzc]');
+    if (b) e.preventDefault();
+  });
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-wzc]');
+    if (!b) return;
+    var ed = $('.wz-ed', b.closest('.wz'));
+    if (ed) { ed.focus(); document.execCommand(b.dataset.wzc); }
+  });
+
   // ------------------------------------------------------------ geometry
   function visibleSequence() {
     // ordered visible rows: bands and items (stories excluded)
@@ -272,12 +325,12 @@
     var sx = board.scrollLeft, sy = board.scrollTop;
     critCache = RM.criticalPath(state);
     document.documentElement.style.setProperty('--week-px', weekPx + 'px');
-    if (presentMode && view !== 'planning') { presentMode = false; $('#btnPresentExit').hidden = true; }
+    if (presentMode && view === 'setup') { presentMode = false; $('#btnPresentExit').hidden = true; }
     document.body.classList.toggle('no-cap', !showCap || !state.meta.capacityEnabled);
     document.body.classList.toggle('present', presentMode);
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
     document.documentElement.style.setProperty('--left-w',
-      (presentMode ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+      (presentMode && view === 'planning' ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     document.body.dataset.view = view;
 
@@ -510,8 +563,8 @@
         '<span class="ph-h r" data-phh="r"></span></div>');
     });
     var phLine = $('#hdrPhases').parentNode;
-    // the line stays visible even with no phase spans — its left cell hosts
-    // the expand-preview button
+    // the line stays visible even with no phase spans, keeping the header
+    // heights stable
     phLine.style.height = (phLanes.length ? phLanes.length * PH_H + 4 : 22) + 'px';
     phLine.style.display = '';
     $('#hdrPhases').innerHTML = phCells.join('');
@@ -746,7 +799,7 @@
         RM.fmtShort(RM.spanEndDate(meta, it.startDay, RM.itemSpan(it)));
       var tip = it.feature + '  ·  ' + dates + (it.size ? '  ·  ' + it.size : '') +
         (it.risk ? '  ·  risk ' + it.risk : '') + '  ·  ×' + it.headcount +
-        (it.description ? '\n' + it.description : '');
+        (it.description ? '\n' + RM.htmlToText(it.description) : '');
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
       laneInner =
@@ -786,8 +839,12 @@
           fixedContent[c[0]] + '</div>');
       });
       scopeCols().forEach(function (c) {
+        var sv = RM.scopeValue(it, c[0]);
         cells.push('<div class="sc-cell" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
-          '<textarea class="sc-edit" data-scope="' + c[0] + '">' + esc(RM.scopeValue(it, c[0])) + '</textarea></div>');
+          (c[0] === 'description'
+            // description holds rich text — edit it in place as such
+            ? '<div class="sc-edit sc-rich" contenteditable="true" data-scope="description">' + sanitizeHtml(sv) + '</div>'
+            : '<textarea class="sc-edit" data-scope="' + c[0] + '">' + esc(sv) + '</textarea>') + '</div>');
       });
       cells.push('</div>');
       laneInner = cells.join('');
@@ -804,7 +861,7 @@
       '<span class="r-dot" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
-      '<input class="r-name" data-rowname spellcheck="false" value="' + esc(it.feature) + '" placeholder="(untitled)" title="' + esc(it.feature + (it.description ? '\n' + it.description : '')) + '">' +
+      '<input class="r-name" data-rowname spellcheck="false" value="' + esc(it.feature) + '" placeholder="(untitled)" title="' + esc(it.feature + (it.description ? '\n' + RM.htmlToText(it.description) : '')) + '">' +
       (it.epic && !groupEpic ? '<span class="r-epic" title="' + esc(it.epic) + '">' +
         (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
         esc(it.epic) + '</span>' : '') +
@@ -1111,8 +1168,11 @@
       }).join('');
 
     var storyRows = it.stories.map(function (st) {
+      var hasBody = !!(st.description || st.ac);
       return '<div class="p-story">' +
         '<input type="text" data-pst-title="' + st.id + '" value="' + esc(st.title) + '">' +
+        '<button class="st-del st-edit' + (hasBody ? ' has-body' : '') + '" style="opacity:1" data-pst-edit="' + st.id +
+        '" title="Description &amp; acceptance criteria"><i data-lucide="pencil"></i></button>' +
         '<button class="st-del" style="opacity:1" data-pst-del="' + st.id + '"><i data-lucide="x"></i></button></div>';
     }).join('');
 
@@ -1134,7 +1194,7 @@
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
       sec('desc', 'Description', '',
-        '<textarea class="p-text" data-f="description" placeholder="What is this feature?">' + esc(it.description) + '</textarea>') +
+        wysHtml('description', it.description, 'What is this feature?')) +
 
       sec('scope', 'Scope', '',
         '<div class="p-fld"><label class="p-lab">Enables</label><textarea class="p-text" data-f="enables">' + esc(it.enables) + '</textarea></div>' +
@@ -1455,6 +1515,8 @@
     var rdep = e.target.closest('[data-rdep]');
     var depGo = e.target.closest('[data-depgo]');
     var stDel = e.target.closest('[data-pst-del]');
+    var stEd = e.target.closest('[data-pst-edit]');
+    if (stEd) { storyModal(it.id, stEd.dataset.pstEdit); return; }
     if (rdep) {
       // a dependent stops relying on this item
       var depId = rdep.dataset.rdep;
@@ -1591,6 +1653,51 @@
         }, true);
       return;
     }
+  });
+
+  // story editor: title + rich Description / Acceptance Criteria
+  function storyModal(itemId, stId) {
+    var it = RM.itemById(state, itemId);
+    var st = null;
+    (it ? it.stories : []).forEach(function (x) { if (x.id === stId) st = x; });
+    if (!st) return;
+    openModal(
+      '<div class="modal" style="width:560px">' +
+      '<div class="m-head"><h2>Edit story</h2>' +
+      '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body">' +
+      '<div class="m-sec"><label>Title</label><input id="stTitle" style="width:100%" value="' + esc(st.title) + '"></div>' +
+      '<div class="m-sec"><label>Description</label>' + wysHtml('stDesc', st.description, 'What does this story cover?') + '</div>' +
+      '<div class="m-sec"><label>Acceptance criteria</label>' + wysHtml('stAc', st.ac, 'When is it done?') + '</div>' +
+      '</div>' +
+      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
+      '<button data-m="save" class="primary">Save</button></div></div>',
+      function (host) {
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=cancel]', host).onclick = closeModal;
+        $('[data-m=save]', host).onclick = function () {
+          var title = $('#stTitle', host).value.trim() || st.title;
+          var dv = sanitizeHtml($('.wz-ed[data-f=stDesc]', host).innerHTML);
+          var av = sanitizeHtml($('.wz-ed[data-f=stAc]', host).innerHTML);
+          closeModal();
+          commit('edit story', function (s) {
+            RM.itemById(s, itemId).stories.forEach(function (x) {
+              if (x.id === stId) { x.title = title; x.description = dv; x.ac = av; }
+            });
+          });
+        };
+      });
+  }
+
+  // the rich description commits on blur (contenteditable has no change event)
+  $('#panel').addEventListener('focusout', function (e) {
+    var ed = e.target.classList && e.target.classList.contains('wz-ed') ? e.target : null;
+    if (!ed || ed.dataset.f !== 'description') return;
+    var it = selectedId && RM.itemById(state, selectedId);
+    if (!it) return;
+    var v = sanitizeHtml(ed.innerHTML);
+    if (v === it.description) return;
+    commit('description', function (s) { RM.itemById(s, it.id).description = v; });
   });
 
   $('#panel').addEventListener('change', function (e) {
@@ -2366,6 +2473,21 @@
     }
   });
 
+  // the rich scoping description cell commits on blur
+  rowsEl.addEventListener('focusout', function (e) {
+    if (!e.target.dataset || e.target.dataset.scope !== 'description') return;
+    if (e.target.getAttribute('contenteditable') !== 'true') return;
+    var rowEl = e.target.closest('.row');
+    var itemId = rowEl && rowEl.dataset.id;
+    if (!itemId) return;
+    var val = sanitizeHtml(e.target.innerHTML);
+    if (val === RM.scopeValue(RM.itemById(state, itemId), 'description')) return;
+    commit('scope description', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (t) RM.setScopeValue(t, 'description', val);
+    });
+  });
+
   // scoping view: spreadsheet cells commit on change (blur)
   rowsEl.addEventListener('change', function (e) {
     var f = e.target.dataset && e.target.dataset.scope;
@@ -2667,6 +2789,7 @@
     else if (drag.kind === 'port') portDragMove(e);
     else if (drag.kind === 'scol') scolDragMove(e);
     else if (drag.kind === 'rfill') rfillMove(e);
+    else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
     else if (drag.kind === 'pan') {
       board.scrollLeft = drag.sl - (e.clientX - drag.x0);
@@ -2731,6 +2854,7 @@
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
     else if (d.kind === 'rfill') rfillEnd(d);
+    else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
     else if (d.kind === 'pan') requestAnimationFrame(renderArrows);
   });
@@ -3381,7 +3505,7 @@
 
   // budgeting rows render into the shared board: frozen left pane columns
   // (name · type · workstream · rate · cost · margin · total) + week cells
-  var BU_COLS = { type: 96, ws: 108, cost: 58, rate: 58, margin: 54, total: 80 };
+  var BU_COLS = { type: 96, ws: 108, cost: 76, rate: 76, margin: 54, total: 80 };
   function renderBudgetRows() {
     var meta = state.meta;
     var html = [];
@@ -3400,7 +3524,7 @@
         // clipped weeks (holidays) show the ACTUAL hours below in small text —
         // that's what totals and cost are built from
         var clipped = wh.actual < wh.planned;
-        cells.push('<div class="bu-cell' + (clipped ? ' clipped' : '') + '" tabindex="0" data-iso="' + wh.iso +
+        cells.push('<div class="bu-cell' + (clipped ? ' clipped' : '') + '" tabindex="0" data-w="' + w + '" data-iso="' + wh.iso +
           '" style="left:' + (w * weekPx) + 'px;width:' + weekPx +
           'px;background:rgba(' + cr + ',' + cg + ',' + cb + ',' + (a * 0.30).toFixed(3) + ')">' +
           (weekPx >= 20
@@ -3437,6 +3561,97 @@
     }
     rowsEl.innerHTML = html.join('');
     if (window.lucide) lucide.createIcons();
+  }
+
+  // typing into a focused money cell replaces its contents; focused week
+  // cells grow a spreadsheet fill handle
+  rowsEl.addEventListener('focusin', function (e) {
+    if (view !== 'budget') return;
+    if (e.target.classList && e.target.classList.contains('bu-in')) e.target.select();
+    var td = e.target.closest && e.target.closest('.bu-cell');
+    if (td && !td.querySelector('.bu-fill')) addBuFillHandle(td);
+  });
+  rowsEl.addEventListener('focusout', function (e) {
+    var h = e.target.querySelector && e.target.querySelector('.bu-fill');
+    if (h && !(drag && drag.kind === 'bfill')) h.remove();
+  });
+
+  // clicking a cell while another is mid-edit: the blur-commit re-render
+  // destroys the pressed element before the click lands, so remember what
+  // was pressed and put focus there on release
+  var buPendingFocus = null;
+  rowsEl.addEventListener('pointerdown', function (e) {
+    if (view !== 'budget') { buPendingFocus = null; return; }
+    var t = e.target.closest && e.target.closest('input[data-bud], .bu-cell');
+    buPendingFocus = t ? buFocusSelector(t) : null;
+  });
+  window.addEventListener('pointerup', function () {
+    if (!buPendingFocus) return;
+    var sel = buPendingFocus;
+    buPendingFocus = null;
+    if (view !== 'budget') return;
+    var el = rowsEl.querySelector(sel);
+    if (!el || el === document.activeElement) return;
+    if (el.classList.contains('bu-cell')) openBuCellEditor(el);
+    else { el.focus(); if (el.select) el.select(); }
+  });
+
+  // spreadsheet fill: drag the focused cell's corner handle across weeks to
+  // spread its hour value (same commit semantics as the resources panel)
+  function addBuFillHandle(td) {
+    var h = document.createElement('span');
+    h.className = 'bu-fill';
+    h.title = 'Drag to fill weeks with this value';
+    h.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var rowEl2 = td.closest('[data-mid]');
+      var m = null;
+      state.team.forEach(function (x) { if (x.id === rowEl2.dataset.mid) m = x; });
+      if (!m) return;
+      var w = parseInt(td.dataset.w, 10);
+      var r0 = $$('#rows .row.brole[data-mid]').indexOf(rowEl2);
+      drag = {
+        kind: 'bfill', mid: m.id, w0: w, w1: w, r0: r0, r1: r0,
+        val: RM.memberHoursForWeek(state.meta, m, w),
+        x0: e.clientX, y0: e.clientY, moved: false
+      };
+    });
+    td.appendChild(h);
+  }
+  function bfillMove(e) {
+    var rows = $$('#rows .row.brole[data-mid]');
+    var srcRow = rows[drag.r0];
+    if (!srcRow) return;
+    var r = srcRow.querySelector('.row-lane').getBoundingClientRect();
+    drag.w1 = Math.max(0, Math.min(state.meta.numWeeks - 1, Math.floor((e.clientX - r.left) / weekPx)));
+    // vertical: the handle also fills downward/upward across roles
+    drag.r1 = drag.r0;
+    rows.forEach(function (rw, i) {
+      var rr = rw.getBoundingClientRect();
+      if (e.clientY >= rr.top && e.clientY < rr.bottom) drag.r1 = i;
+    });
+    var lo = Math.min(drag.w0, drag.w1), hi = Math.max(drag.w0, drag.w1);
+    var rlo = Math.min(drag.r0, drag.r1), rhi = Math.max(drag.r0, drag.r1);
+    rows.forEach(function (rw, i) {
+      var inRows = i >= rlo && i <= rhi;
+      $$('.bu-cell', rw).forEach(function (c) {
+        var w = parseInt(c.dataset.w, 10);
+        c.classList.toggle('bu-fillsel', inRows && w >= lo && w <= hi);
+      });
+    });
+    dragTip.hidden = false;
+    dragTip.style.left = (e.clientX + 14) + 'px';
+    dragTip.style.top = (e.clientY - 34) + 'px';
+    dragTip.textContent = fmtH(drag.val) + 'h × ' + (hi - lo + 1) + 'w' +
+      (rhi > rlo ? ' × ' + (rhi - rlo + 1) + ' roles' : '');
+  }
+  function bfillEnd(d) {
+    var rows = $$('#rows .row.brole[data-mid]');
+    var rlo = Math.min(d.r0, d.r1), rhi = Math.max(d.r0, d.r1);
+    var mids = rows.slice(rlo, rhi + 1).map(function (rw) { return rw.dataset.mid; });
+    fillWeekHours(mids.length ? mids : [d.mid], d.w0, d.w1, d.val);
   }
 
   // rate/cost commits (budget rows). The commit re-renders, which would eat
@@ -4094,20 +4309,21 @@
     dragTip.textContent = fmtH(drag.val) + 'h × ' + (hi - lo + 1) + 'w';
   }
 
-  function rfillEnd(d) {
-    var lo = Math.min(d.w0, d.w1), hi = Math.max(d.w0, d.w1);
+  function fillWeekHours(mids, w0, w1, val) {
+    var lo = Math.min(w0, w1), hi = Math.max(w0, w1);
     commit('fill hours', function (s) {
-      var m = null;
-      s.team.forEach(function (x) { if (x.id === d.mid) m = x; });
-      if (!m) return;
-      m.weekHours = m.weekHours || {};
-      for (var w = lo; w <= hi; w++) {
-        var iso = RM.fmtISO(RM.weekStartDate(s.meta, w));
-        if (d.val === RM.WEEK_HOURS) delete m.weekHours[iso];
-        else m.weekHours[iso] = d.val;
-      }
+      s.team.forEach(function (m) {
+        if (mids.indexOf(m.id) === -1) return;
+        m.weekHours = m.weekHours || {};
+        for (var w = lo; w <= hi; w++) {
+          var iso = RM.fmtISO(RM.weekStartDate(s.meta, w));
+          if (val === RM.WEEK_HOURS) delete m.weekHours[iso];
+          else m.weekHours[iso] = val;
+        }
+      });
     });
   }
+  function rfillEnd(d) { fillWeekHours([d.mid], d.w0, d.w1, d.val); }
 
   // inline hour editor; Tab / Shift+Tab commits and hops to the next / previous cell
   function editHourCell(mid, w) {
@@ -4451,8 +4667,7 @@
       if (window.lucide) lucide.createIcons();
     }
     RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
-      var slug = state.meta.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'roadmap';
-      var name = slug + '-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      var name = saveFileName();
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = name;
@@ -4571,6 +4786,77 @@
   $('#btnPresent').addEventListener('click', function () { setPresent(true); });
   $('#btnPresentExit').addEventListener('click', function () { setPresent(false); });
 
+  // ------------------------------------------------------------ png export
+  function exportModal() {
+    var meta = state.meta;
+    var sprints = [];
+    for (var w = 0; w < meta.numWeeks; w++) {
+      var n = RM.sprintNumForWeek(meta, w);
+      if (!sprints.length || sprints[sprints.length - 1].num !== n)
+        sprints.push({ num: n, date: RM.fmtShort(RM.dayToDate(meta, w * 5)) });
+    }
+    function distinct(field) {
+      var seen = {}, out = [];
+      state.items.forEach(function (it) {
+        var v = it[field];
+        if (v && !seen[v]) { seen[v] = true; out.push(v); }
+      });
+      return out;
+    }
+    function sprOpts(selNum) {
+      return sprints.map(function (s) {
+        return '<option value="' + s.num + '"' + (s.num === selNum ? ' selected' : '') +
+          '>S' + s.num + ' · ' + esc(s.date) + '</option>';
+      }).join('');
+    }
+    function nameOpts(values, allLabel) {
+      return '<option value="">' + allLabel + '</option>' + values.map(function (v) {
+        return '<option value="' + esc(v) + '">' + esc(v) + '</option>';
+      }).join('');
+    }
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>Export PNG</h2>' +
+      '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body">' +
+      '<div class="m-sec"><label>Date range</label><div class="p-grid2">' +
+      '<div><label class="p-lab">From</label><select id="exFrom" style="width:100%">' + sprOpts(sprints[0].num) + '</select></div>' +
+      '<div><label class="p-lab">To</label><select id="exTo" style="width:100%">' + sprOpts(sprints[sprints.length - 1].num) + '</select></div>' +
+      '</div></div>' +
+      '<div class="m-sec"><label>Filter</label><div class="p-grid2">' +
+      '<div><label class="p-lab">Workstream</label><select id="exWs" style="width:100%">' + nameOpts(distinct('workstream'), 'All workstreams') + '</select></div>' +
+      '<div><label class="p-lab">Epic</label><select id="exEpic" style="width:100%">' + nameOpts(distinct('epic'), 'All epics') + '</select></div>' +
+      '</div>' +
+      '<div style="margin-top:8px"><label class="p-lab">Phase</label><select id="exPhase" style="width:100%">' +
+      '<option value="">All phases</option>' + state.phases.map(function (p) {
+        return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>';
+      }).join('') + '</select></div></div>' +
+      '<div class="m-sec"><label>Options</label><div class="p-row">' +
+      '<select id="exScale"><option value="1">1× scale</option><option value="2" selected>2× scale</option></select>' +
+      '<label class="p-check"><input type="checkbox" id="exArrows"> Dependency arrows</label>' +
+      '</div><div class="m-hint">The exported dates are bounded by the range AND the filtered bars — empty weeks at either end are trimmed.</div></div>' +
+      '</div>' +
+      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
+      '<button id="exGo" class="primary"><i data-lucide="image"></i>Export PNG</button></div></div>',
+      function (host) {
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=cancel]', host).onclick = closeModal;
+        $('#exGo', host).onclick = function () {
+          RM_EXPORT.download(state, {
+            fromSprint: parseInt($('#exFrom', host).value, 10),
+            toSprint: parseInt($('#exTo', host).value, 10),
+            ws: $('#exWs', host).value || null,
+            epic: $('#exEpic', host).value || null,
+            phaseId: $('#exPhase', host).value || null,
+            scale: parseInt($('#exScale', host).value, 10),
+            arrows: $('#exArrows', host).checked
+          });
+          closeModal();
+        };
+      });
+  }
+  $('#btnExport').addEventListener('click', exportModal);
+
   // ------------------------------------------------------------ boot
   function boot() {
     state = loadLocal() || blankState(); // fresh installs start completely empty
@@ -4585,8 +4871,15 @@
   boot();
 
   // console/debug handle (read-only snapshot)
+  // the exact project title, minus filesystem-hostile characters only —
+  // no lowercasing, no hyphenation, no date
+  function saveFileName() {
+    return ((state.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.xlsx';
+  }
+
   window.__headway = {
     getState: function () { return RM.clone(state); },
+    saveFileName: saveFileName,
     getValidation: function () { return validation; },
     templateState: templateState
   };

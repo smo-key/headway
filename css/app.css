@@ -906,10 +906,11 @@ textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12
 .m-body { padding: 4px 18px 16px; overflow-y: auto; }
 .m-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 15px; border-top: 1px solid var(--line); }
 .m-sec { margin-bottom: 16px; }
+/* section headings sit a clear level above field labels (.p-lab) */
 .m-sec > label, .m-sec > .m-label {
   display: block;
-  font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--ink-3); margin-bottom: 6px;
+  font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--ink); margin-bottom: 7px;
 }
 .m-hint { font-size: 11.5px; color: var(--ink-3); margin-top: 5px; line-height: 1.45; }
 
@@ -1133,18 +1134,16 @@ body[data-view="scoping"] .hdr-cap { display: none; }
 body.no-cap .hdr-cap { display: none; }
 
 /* expand button in the phase lane's left cell (planning only) */
-#btnPresent {
-  border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
-  padding: 3px 4px; margin: 2px 0 0 6px;
-}
-#btnPresent:hover { color: var(--blue); }
-#btnPresent svg { width: 13px; height: 13px; display: block; }
-body[data-view="scoping"] #btnPresent, body[data-view="setup"] #btnPresent { display: none; }
+#btnPresent { padding: 5px 8px; }
+body[data-view="setup"] #btnPresent { display: none; }
 
-/* timeline-only preview: just the planning area, everything else hidden */
+/* distraction-free preview: chrome hidden everywhere; the frozen left pane
+   only drops away on the planning timeline (scoping/budgeting need it) */
 body.present #topbar, body.present #panel, body.present #resPanel,
-body.present .hdr-left, body.present .row-left,
 body.present #leftRz, body.present #leftRzLine { display: none !important; }
+body.present[data-view="planning"] .hdr-left,
+body.present[data-view="planning"] .row-left { display: none !important; }
+body.present #board { padding: 12px 14px; }
 #btnPresentExit {
   position: fixed; top: 10px; right: 14px; z-index: 300;
   border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2);
@@ -1234,13 +1233,14 @@ body[data-view="setup"] #resPanel { display: none; }
    (name · type · ws · rate · cost · margin · total) + week-hour cells */
 body[data-view="budget"] #btnPresent,
 body[data-view="budget"] #resPanel { display: none; }
-.row.brole .row-left { align-items: center; gap: 6px; }
-.bu-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 10px; }
+.row.brole .row-left { align-items: center; gap: 6px; padding-left: 10px; }
+.bu-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bu-col { flex: 0 0 auto; }
 /* every budgeting column is LEFT-aligned, matching its header label */
 .row.brole .sc-chip { justify-content: flex-start; text-align: left; }
 .bu-ro { font-size: 11.5px; text-align: left; font-variant-numeric: tabular-nums; color: var(--ink-2); }
-.bu-in { border: 1px solid transparent; background: transparent; font-size: 11.5px; text-align: left; border-radius: 5px; padding: 2px 4px; }
+.bu-in { border: 1px solid transparent; background: transparent; font-size: 11.5px; text-align: left; border-radius: 5px; padding: 2px 4px; appearance: textfield; -moz-appearance: textfield; }
+.bu-in::-webkit-inner-spin-button, .bu-in::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .bu-in:hover { border-color: var(--line-2); }
 .bu-in:focus { outline: none; border-color: var(--blue); background: #fff; }
 body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px; }
@@ -1254,7 +1254,39 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 .bu-cell:focus { outline: 1px solid var(--blue); outline-offset: -1px; }
 .bu-cell .bu-sub { font-size: 8.5px; color: var(--ink-3); }
 .bu-cell .bu-in { width: 100%; height: 100%; text-align: center; border-radius: 0; }
+/* spreadsheet fill: corner handle on the focused cell, dashed range preview */
+.bu-fill {
+  position: absolute; right: -4px; bottom: -4px; z-index: 4;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--blue); border: 1.5px solid #fff;
+  cursor: crosshair;
+}
+.bu-cell.bu-fillsel { box-shadow: inset 0 0 0 1px var(--blue); background-color: var(--blue-soft) !important; }
 .row.btotal .bu-nm, .row.btotal .bu-ro { font-weight: 700; color: var(--ink); }
+
+/* WYSIWYG editor (rich description / acceptance criteria) */
+.wz { border: 1px solid var(--line-2); border-radius: 7px; background: #fff; overflow: hidden; }
+.wz:focus-within { border-color: var(--blue); }
+.wz-bar { display: flex; gap: 2px; padding: 3px 4px; border-bottom: 1px solid var(--line); background: #FBFAF6; }
+.wz-bar button {
+  border: 0; background: transparent; box-shadow: none; padding: 2px 7px;
+  font-size: 11.5px; color: var(--ink-2); border-radius: 5px; min-width: 24px;
+}
+.wz-bar button:hover { background: var(--blue-soft); color: var(--ink); box-shadow: none; border: 0; }
+.wz-bar button svg.lucide { width: 12px; height: 12px; }
+.wz-ed {
+  min-height: 64px; max-height: 240px; overflow-y: auto;
+  padding: 7px 9px; font-size: 12.5px; line-height: 1.5; outline: none;
+}
+.wz-ed:empty::before { content: attr(data-ph); color: var(--ink-3); pointer-events: none; }
+.wz-ed ul, .wz-ed ol { margin: 4px 0; padding-left: 20px; }
+.wz-ed p, .wz-ed div { margin: 0 0 4px; }
+.p-story .st-edit.has-body { color: var(--blue); }
+
+/* rich scoping cell mirrors the textarea look */
+.sc-rich { overflow-y: auto; white-space: normal; }
+.sc-rich ul, .sc-rich ol { margin: 2px 0; padding-left: 18px; }
+.sc-rich:empty::before { content: '·'; color: var(--ink-3); }
 .row.btotal .row-left { border-top: 2px solid var(--line-2); }
 
 /* reports drawer table */

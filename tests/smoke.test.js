@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/excel.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -612,6 +612,97 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   click(doc.querySelector('#rows .row.brole [data-bact="ws"]'));
   ok(!doc.querySelector('#popover').hidden, 'workstream chip opens the shared dropdown');
   doc.querySelector('#popover').hidden = true;
+
+  // money cells: wide enough to edit, contents selected on focus
+  const costInp = doc.querySelector('#rows .row.brole[data-mid] input[data-bud="cost"]');
+  ok(parseInt(costInp.style.width, 10) >= 72, 'budget money cells are wide enough to edit');
+  let selected = false;
+  costInp.select = () => { selected = true; };
+  costInp.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  ok(selected, 'focusing a budget money cell selects its contents');
+
+  // clicking another money cell while one is mid-edit lands focus on the
+  // fresh element even though the commit re-render replaced it
+  {
+    const row = doc.querySelector('#rows .row.brole[data-mid]');
+    const cost2 = row.querySelector('input[data-bud="cost"]');
+    cost2.focus();
+    cost2.value = '111';
+    const rate2 = row.querySelector('input[data-bud="rate"]');
+    rate2.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    cost2.dispatchEvent(new window.Event('change', { bubbles: true })); // blur-commit → re-render
+    window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+    const active = doc.activeElement;
+    ok(active && active.dataset && active.dataset.bud === 'rate' && active !== rate2,
+      'clicking Rate while Cost is mid-edit refocuses the fresh Rate cell');
+  }
+
+  // spreadsheet-style fill handle on week-hour cells
+  {
+    const row = doc.querySelector('#rows .row.brole[data-mid]');
+    const mid = row.dataset.mid;
+    const cell0 = row.querySelector('.bu-cell');
+    click(cell0);
+    const ed = cell0.querySelector('input');
+    ok(!!ed, 'clicking a week cell opens its editor');
+    ed.value = '20';
+    ed.dispatchEvent(new window.FocusEvent('blur')); // commits → re-render
+    const row2 = doc.querySelector('#rows .row.brole[data-mid="' + mid + '"]');
+    const c0 = row2.querySelector('.bu-cell');
+    c0.focus();
+    c0.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+    const handle = c0.querySelector('.bu-fill');
+    ok(!!handle, 'focused week cell grows a fill handle');
+    handle.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 28 * 4 + 3, clientY: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+    const member = state().team.find(t => t.id === mid);
+    const isoOf = w => window.RM.fmtISO(window.RM.weekStartDate(state().meta, w));
+    ok([0, 1, 2, 3, 4].every(w => member.weekHours[isoOf(w)] === 20),
+      'dragging the fill handle spreads the value across the crossed weeks');
+  }
+
+  // vertical fill: dragging the handle down spreads across roles too
+  {
+    if (state().team.length < 2) {
+      click(doc.querySelector('#viewTabs [data-view="planning"]'));
+      click(doc.querySelector('#resGrid [data-resadd]'));
+      const ni = doc.querySelector('#resGrid [data-resadd] input');
+      ni.value = 'Second Role';
+      ni.dispatchEvent(new window.Event('change', { bubbles: true }));
+      click(doc.querySelector('#viewTabs [data-view="budget"]'));
+    }
+    const vRows = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid]'));
+    ok(vRows.length >= 2, 'two roles available for vertical fill');
+    vRows.forEach((r, i) => {
+      const rect = { top: i * 28, bottom: i * 28 + 28, left: 0, right: 9999, width: 9999, height: 28 };
+      r.getBoundingClientRect = () => rect;
+      r.querySelector('.row-lane').getBoundingClientRect = () => rect;
+    });
+    const srcCell = vRows[0].querySelector('.bu-cell'); // week 0 holds 20h from the previous test
+    srcCell.focus();
+    srcCell.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+    const h2 = srcCell.querySelector('.bu-fill');
+    h2.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 3, clientY: 5 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 28 * 2 + 3, clientY: 28 + 14 }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+    const below = state().team[1];
+    const isoOf2 = w => window.RM.fmtISO(window.RM.weekStartDate(state().meta, w));
+    ok([0, 1, 2].every(w => below.weekHours[isoOf2(w)] === 20),
+      'dragging the fill handle downward spreads the value to the roles below');
+  }
+
+  // Expand works from Budgeting (and Scoping), not just Planning
+  window.eval("document.querySelector('#btnPresent').click()");
+  ok(doc.body.classList.contains('present') && doc.body.dataset.view === 'budget',
+    'Expand enters present mode from Budgeting');
+  window.eval("document.querySelector('#btnPresentExit').click()");
+  ok(!doc.body.classList.contains('present'), 'exit restores the full Budgeting UI');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  window.eval("document.querySelector('#btnPresent').click()");
+  ok(doc.body.classList.contains('present') && doc.body.dataset.view === 'scoping',
+    'Expand enters present mode from Scoping');
+  window.eval("document.querySelector('#btnPresentExit').click()");
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -870,7 +961,85 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(state().items.some(i => i.deps.length > 0), 'undo restores the dependency links');
 }
 
+// ---------------------------------------------------------------- rich text editors
+{
+  const withStories = state().items.find(i => i.stories.length);
+  click(doc.querySelector('#rows .row.item[data-id="' + withStories.id + '"] .row-left'));
+  ok(!doc.querySelector('#panel').hidden, 'panel opens for a storied item');
+
+  // feature description is a WYSIWYG editor committing sanitized HTML
+  const ed = doc.querySelector('#panel .wz-ed[data-f="description"]');
+  ok(!!ed && ed.getAttribute('contenteditable') === 'true', 'feature description is a rich editor');
+  ed.innerHTML = 'Hello <i>world</i><script>evil()</script>';
+  ed.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  ok(state().items.find(i => i.id === withStories.id).description === 'Hello <i>world</i>',
+    'rich description commits sanitized on blur');
+
+  // stories: edit affordance opens a modal with rich Description + AC
+  const stBtn = doc.querySelector('#panel [data-pst-edit]');
+  ok(!!stBtn, 'panel stories offer an edit affordance');
+  click(stBtn);
+  ok(!doc.querySelector('#modalHost').hidden, 'story editor modal opens');
+  const sd = doc.querySelector('#modalHost .wz-ed[data-f="stDesc"]');
+  const sa = doc.querySelector('#modalHost .wz-ed[data-f="stAc"]');
+  ok(!!sd && !!sa && sd.getAttribute('contenteditable') === 'true' && sa.getAttribute('contenteditable') === 'true',
+    'story modal has rich Description and Acceptance Criteria editors');
+  sd.innerHTML = 'Does <b>things</b>';
+  sa.innerHTML = '<ul><li>works offline</li></ul>';
+  click(doc.querySelector('#modalHost [data-m=save]'));
+  const st0 = state().items.find(i => i.id === withStories.id).stories[0];
+  ok(st0.description === 'Does <b>things</b>', 'story description saves');
+  ok(st0.ac === '<ul><li>works offline</li></ul>', 'story acceptance criteria save');
+
+  // scoping description cell renders/edits the rich value (column added on demand)
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  if (!doc.querySelector('#rows [data-scope="description"]')) {
+    click(doc.querySelector('#hdrSprints [data-coladd]'));
+    click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Description/.test(b.textContent)));
+  }
+  const cell = doc.querySelector('#rows .row.item[data-id="' + withStories.id + '"] [data-scope="description"]');
+  ok(!!cell && cell.getAttribute('contenteditable') === 'true', 'scoping description cell is rich');
+  ok(/Hello/.test(cell.textContent), 'scoping description shows the committed rich text');
+  cell.innerHTML = 'From <b>scoping</b>';
+  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  ok(state().items.find(i => i.id === withStories.id).description === 'From <b>scoping</b>',
+    'scoping description commits rich text');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.getState && doc.querySelector('#panel [data-f=close]') && click(doc.querySelector('#panel [data-f=close]'));
+}
+
+// ---------------------------------------------------------------- png export UI
+{
+  const tbRight = doc.querySelector('#topbar .tb-right');
+  const kids = Array.from(tbRight.querySelectorAll('button')).map(b => b.id);
+  ok(kids.indexOf('btnPresent') !== -1, 'Expand button lives in the topbar right group');
+  ok(kids.indexOf('btnExport') !== -1 &&
+    kids.indexOf('btnPresent') < kids.indexOf('btnExport') &&
+    kids.indexOf('btnExport') < kids.indexOf('btnSave'),
+    'Export sits between Expand and Save');
+
+  window.eval("document.querySelector('#btnExport').click()");
+  ok(!doc.querySelector('#modalHost').hidden, 'Export opens a dialog');
+  ok(!!doc.querySelector('#modalHost #exFrom') && !!doc.querySelector('#modalHost #exTo'),
+    'dialog offers a range');
+  ok(/Date range/.test(doc.querySelector('#modalHost .modal').textContent) &&
+    !/Sprint range/.test(doc.querySelector('#modalHost .modal').textContent),
+    'range section is titled Date range');
+  const wsOpts = Array.from(doc.querySelectorAll('#modalHost #exWs option')).map(o => o.textContent);
+  ok(wsOpts.length > 1 && wsOpts.some(t => /Product/.test(t)), 'dialog lists workstreams to filter by');
+  ok(!!doc.querySelector('#modalHost #exEpic') && !!doc.querySelector('#modalHost #exPhase'),
+    'dialog offers epic and phase filters');
+  const lay = window.RM_EXPORT.layout(state(), {});
+  ok(lay.rows.filter(r => r.kind === 'item').length ===
+    state().items.filter(i => i.startDay != null).length,
+    'export layout covers every scheduled item of the live document');
+  click(doc.querySelector('#modalHost [data-m=cancel], #modalHost [data-m=x]'));
+  ok(doc.querySelector('#modalHost').hidden, 'export dialog closes');
+}
+
 // ---------------------------------------------------------------- export smoke
+ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
+  'save uses the exact project title as the filename (no slug, no date)');
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
 window.RMExcel.exportWorkbook(state()).then((buf) => {
   const bytes = buf.size != null ? buf.size : buf.byteLength;
