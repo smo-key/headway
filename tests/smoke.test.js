@@ -147,6 +147,38 @@ descTa.value = 'A crisp description';
 descTa.dispatchEvent(new window.Event('change', { bubbles: true }));
 ok(state().items.find(i => i.id === itId).description === 'A crisp description', 'description saves');
 
+// Backspace while typing in the rich description edits text — it must not
+// trigger the delete-item shortcut (Mac delete key sends "Backspace")
+{
+  const before = state().items.length;
+  const descEd = doc.querySelector('#panel .wz-ed[data-f=description]');
+  ok(!!descEd && descEd.getAttribute('contenteditable') === 'true', 'panel description is a rich contenteditable editor');
+  descEd.focus();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+  ok(doc.querySelector('#modalHost').hidden, 'Backspace in the description does not open the delete confirm');
+  ok(state().items.length === before, 'Backspace in the description does not delete the item');
+  descEd.blur();
+}
+
+// ---------------------------------------------------------------- sticky bands
+// phase / workstream / epic band rows freeze under the header while scrolling;
+// the offsets come from a measured --hdr-h (header height varies per view)
+{
+  ok((doc.documentElement.style.getPropertyValue('--hdr-h') || '').endsWith('px'),
+    'render measures the header and syncs --hdr-h');
+  const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const decl = (sel) => {
+    const m = css.match(new RegExp(sel.replace(/[.\\]/g, '\\$&') + '\\s*{([^}]*)}', 'g')) || [];
+    return m.join(' ');
+  };
+  ok(/position:\s*sticky/.test(decl('.row.band')) && /top:\s*var\(--hdr-h\)/.test(decl('.row.band')),
+    'phase bands are sticky below the header');
+  ok(/position:\s*sticky/.test(decl('.row.eband')) && /var\(--band-h\)/.test(decl('.row.eband')),
+    'epic/workstream bands are sticky below the phase band');
+  ok(/\.row\.eband\.sub\s*{[^}]*top:/.test(css),
+    'nested epic bands stack below workstream bands');
+}
+
 // ---------------------------------------------------------------- chips
 click(doc.querySelector('#rows .row.item .r-size'));
 ok(!doc.querySelector('#popover').hidden, 'size chip opens a dropdown');

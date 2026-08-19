@@ -478,8 +478,9 @@ body.cap-off .hc-lab { display: none !important; }
 .r-chev:hover { color: var(--blue); }
 .r-lock { flex: 0 0 auto; font-size: 10px; margin-right: 4px; }
 
-/* phase band rows */
-.row.band { height: auto; min-height: var(--band-h); }
+/* phase band rows — sticky below the header; the next phase's band slides
+   over the stuck one, so only the current phase stays pinned */
+.row.band { height: auto; min-height: var(--band-h); position: sticky; top: var(--hdr-h); z-index: 14; }
 .row.band .row-lane { display: flex; align-items: center; }
 .row.band .row-left, .row.band .row-lane {
   background: var(--band);
@@ -1009,8 +1010,10 @@ body.panning, body.panning * { cursor: grabbing !important; }
 .r-risk.rk-med:not(.has-risk) { color: var(--warn); }
 .r-risk.rk-high:not(.has-risk) { color: var(--err); }
 
-/* epic group bands (group-by-epic mode) */
-.row.eband { height: 26px; }
+/* epic group bands (group-by-epic mode) — sticky under the pinned phase band;
+   nested (.sub) epics stack one band lower, under their workstream band */
+.row.eband { height: 26px; position: sticky; top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h))); z-index: 13; }
+.row.eband.sub { top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h)) + var(--eband-real-h, 26px)); z-index: 12; }
 .row.eband .row-left {
   background: #EFEBE1;
   border-bottom: 1px solid var(--line-2);

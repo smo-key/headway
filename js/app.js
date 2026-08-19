@@ -321,6 +321,17 @@
     return allScopeCols().reduce(function (a, c) { return a + scopeColWidth(c); }, 40);
   }
 
+  // sticky band offsets need the real header and band heights (they vary by
+  // view, capacity row, and band content); the CSS defaults are only fallbacks
+  function syncHdrH() {
+    var root = document.documentElement.style;
+    root.setProperty('--hdr-h', $('#hdr').offsetHeight + 'px');
+    var b = $('.row.band', rowsEl);
+    if (b && b.offsetHeight) root.setProperty('--band-real-h', b.offsetHeight + 'px');
+    var eb = $('.row.eband', rowsEl);
+    if (eb && eb.offsetHeight) root.setProperty('--eband-real-h', eb.offsetHeight + 'px');
+  }
+
   function render() {
     var sx = board.scrollLeft, sy = board.scrollTop;
     critCache = RM.criticalPath(state);
@@ -353,6 +364,7 @@
       $('#arrows').setAttribute('height', 0);
       renderReports();
       renderPanel();
+      syncHdrH();
       board.scrollLeft = sx; board.scrollTop = sy;
       requestAnimationFrame(positionToday);
       return;
@@ -372,6 +384,7 @@
       renderRows();
       autoGrowScope();
       renderPanel();
+      syncHdrH();
       board.scrollLeft = sx; board.scrollTop = sy;
       return;
     }
@@ -382,6 +395,7 @@
     renderRows();
     renderResources();
     renderPanel();
+    syncHdrH();
     board.scrollLeft = sx; board.scrollTop = sy;
     requestAnimationFrame(function () { renderArrows(); positionToday(); });
   }
@@ -4703,7 +4717,10 @@
 
   // ------------------------------------------------------------ keyboard
   window.addEventListener('keydown', function (e) {
-    var inField = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    var ae = document.activeElement;
+    // contenteditable editors (rich description, scoping cells) count as fields too
+    var inField = /INPUT|TEXTAREA|SELECT/.test(ae.tagName) ||
+      ae.isContentEditable || (ae.closest && ae.closest('[contenteditable="true"]') !== null);
     // Esc/Delete while drawing a dependency line cancels the add
     if (drag && drag.kind === 'port' && (e.key === 'Escape' || e.key === 'Delete' || e.key === 'Backspace')) {
       e.preventDefault();
