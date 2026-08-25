@@ -52,7 +52,8 @@
     }, { delayMs: 800 }).then(function (un) {
       unwatch = un;
     }).catch(function (err) {
-      app().toast('Could not watch for external changes: ' + err.message, 'err');
+      // plugin errors are plain strings, not Error objects
+      app().toast('Could not watch for external changes: ' + (err && err.message || err), 'err');
     });
   }
 
@@ -128,10 +129,21 @@
       function (el) { el.setAttribute('data-tauri-drag-region', ''); }
     );
     document.body.classList.add(isMac ? 'chrome-mac' : 'chrome-win');
+
+    // explicit drag handler — the built-in data-tauri-drag-region listener
+    // has proven unreliable here, so start the drag ourselves
+    var win = window.__TAURI__.window.getCurrentWindow();
+    topbar.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      var t = e.target;
+      if (!t.hasAttribute || !t.hasAttribute('data-tauri-drag-region')) return;
+      e.preventDefault();
+      if (e.detail >= 2) win.toggleMaximize();
+      else win.startDragging();
+    });
     if (isMac) return;
 
     // Windows caption buttons
-    var win = window.__TAURI__.window.getCurrentWindow();
     var GLYPH = {
       min: '<svg viewBox="0 0 10 10" width="10" height="10"><path d="M0 5h10" stroke="currentColor" fill="none"/></svg>',
       max: '<svg viewBox="0 0 10 10" width="10" height="10"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor" fill="none"/></svg>',
@@ -283,5 +295,49 @@
       timer = setTimeout(syncNow, 200);
     };
     window.HeadwayDesktop.syncMenu();
+  })();
+
+  // ------------------------------------------------------- auto-update
+  // Check on launch, download in the background, then flash an Update
+  // button on the right of the header; clicking it installs and relaunches.
+  (function autoUpdate() {
+    var up = window.__TAURI__.updater;
+    var proc = window.__TAURI__.process;
+    if (!up || !proc) return;
+
+    function showUpdateButton(update) {
+      if (document.getElementById('btnUpdate')) return;
+      var right = document.querySelector('.tb-right');
+      if (!right) return;
+      var b = document.createElement('button');
+      b.id = 'btnUpdate';
+      b.title = 'Version ' + update.version + ' downloaded — click to restart and update';
+      b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
+      b.addEventListener('click', function () {
+        b.disabled = true;
+        b.textContent = 'Updating…';
+        update.install().then(function () {
+          return proc.relaunch(); // NSIS on Windows exits/relaunches itself
+        }).catch(function (err) {
+          b.disabled = false;
+          b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
+          if (window.lucide) lucide.createIcons();
+          app().toast('Update failed: ' + (err && err.message || err), 'err');
+        });
+      });
+      right.insertBefore(b, right.firstChild);
+      if (window.lucide) lucide.createIcons();
+    }
+
+    setTimeout(function () {
+      up.check().then(function (update) {
+        if (!update) return;
+        return update.download().then(function () {
+          showUpdateButton(update);
+        });
+      }).catch(function () {
+        // offline, dev build, or no release yet — silently fine
+      });
+    }, 4000);
   })();
 })();

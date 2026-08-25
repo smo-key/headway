@@ -28,6 +28,9 @@
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
   var capType = 'Development'; // work type the header capacity row counts ('' = all)
+  var filterText = '';       // planning/scoping row filter (⌘F); transient
+  var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
+  var autoSave = true;       // desktop: write to the open file after each change
   var resPanelH = 150;       // resources panel height (px)
   var resCollapsed = false;  // resources section collapsed
   var drag = null;           // active drag descriptor
@@ -64,7 +67,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave };
   }
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
@@ -91,6 +94,7 @@
     panelW = ui.panelW > 280 ? ui.panelW : 372;
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
+    autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -157,9 +161,32 @@
     afterChange();
   }
   function afterChange() {
+    docSaved = false;
     validation = RM.validate(state);
     saveLocal();
     render();
+    scheduleAutoSave();
+  }
+
+  var autoSaveTimer = null;
+  function scheduleAutoSave() {
+    // desktop only, and only once the doc lives in a real file
+    if (!autoSave || !window.HeadwayDesktop || !HeadwayDesktop.currentPath()) return;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(function () {
+      if (!docSaved && !savingNow) doSave(false, true);
+    }, 1500);
+  }
+
+  function matchesFilter(it) {
+    if (!filterText) return true;
+    var q = filterText.toLowerCase();
+    return (it.feature || '').toLowerCase().indexOf(q) !== -1 ||
+      (it.epic || '').toLowerCase().indexOf(q) !== -1 ||
+      (it.workstream || '').toLowerCase().indexOf(q) !== -1 ||
+      (it.stories || []).some(function (st) {
+        return (st.title || '').toLowerCase().indexOf(q) !== -1;
+      });
   }
 
   // ------------------------------------------------------------ toasts, popover, modal
@@ -282,7 +309,7 @@
     state.phases.forEach(function (p) {
       seq.push({ kind: 'band', phaseId: p.id });
       if (!p.collapsed) {
-        RM.itemsInPhase(state, p.id).forEach(function (it) {
+        RM.itemsInPhase(state, p.id).filter(matchesFilter).forEach(function (it) {
           seq.push({ kind: 'item', id: it.id, phaseId: p.id });
         });
       }
@@ -372,6 +399,7 @@
     if (view === 'scoping') {
       grid.style.width = 'calc(var(--left-w) + ' + scopeW() + 'px)';
       renderScopeHeader();
+      $('#hdrPhases').innerHTML = ''; // line stays visible for the row filter
       $('#bgcols').innerHTML = '';
       $('#hdrCap').innerHTML = '';
       $('#capTypeCell').innerHTML = '';
@@ -480,6 +508,7 @@
     if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
     var t = $('#docTitle');
     if (t.value !== state.meta.title && document.activeElement !== t) t.value = state.meta.title;
+    updateSaveBtn();
     var counts = validation.counts;
     var n = counts.error + counts.warn;
     $('#valCount').textContent = n || '✓';
@@ -932,7 +961,7 @@
     var html = [];
     var cyclic = RM.cycleMembers(state);
     state.phases.forEach(function (p) {
-      var items = RM.itemsInPhase(state, p.id);
+      var items = RM.itemsInPhase(state, p.id).filter(matchesFilter);
       html.push(
         '<div class="row band" data-kind="band" data-phase="' + p.id + '">' +
         '<div class="row-left">' +
@@ -2476,7 +2505,70 @@
     if (ta) {
       e.preventDefault();
       ta.focus();
-      ta.setSelectionRange(ta.value.length, ta.value.length);
+      if (ta.setSelectionRange) {
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+      } else {
+        // rich (contenteditable) cell: caret to the end
+        var rg = document.createRange();
+        rg.selectNodeContents(ta);
+        rg.collapse(false);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(rg);
+      }
+    }
+  });
+
+  // Tab / ⇧Tab hop cell-to-cell across the scoping grid (the rich
+  // Description cell would otherwise swallow Tab entirely)
+  rowsEl.addEventListener('keydown', function (e) {
+    if (e.key !== 'Tab') return;
+    var ed = e.target.closest && e.target.closest('.sc-edit');
+    if (!ed) return;
+    var edits = $$('.sc-edit', rowsEl);
+    var i = edits.indexOf(ed);
+    if (i === -1) return;
+    var next = edits[i + (e.shiftKey ? -1 : 1)];
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
+    if (next.setSelectionRange) next.setSelectionRange(0, next.value.length);
+  });
+
+  // floating B / I / list toolbar for the rich Description cells (the panel
+  // editor has its own inline bar; scoping cells get this shared one)
+  var scFmtBar = null;
+  function ensureScFmtBar() {
+    if (scFmtBar) return scFmtBar;
+    scFmtBar = document.createElement('div');
+    scFmtBar.id = 'scFmtBar';
+    scFmtBar.hidden = true;
+    scFmtBar.innerHTML =
+      '<button type="button" tabindex="-1" data-scfmt="bold" title="Bold"><b>B</b></button>' +
+      '<button type="button" tabindex="-1" data-scfmt="italic" title="Italic"><i>I</i></button>' +
+      '<button type="button" tabindex="-1" data-scfmt="insertUnorderedList" title="Bullet list"><i data-lucide="list"></i></button>' +
+      '<button type="button" tabindex="-1" data-scfmt="insertOrderedList" title="Numbered list"><i data-lucide="list-ordered"></i></button>';
+    // pointerdown is swallowed so the editor keeps focus and selection
+    scFmtBar.addEventListener('pointerdown', function (e) { e.preventDefault(); });
+    scFmtBar.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-scfmt]');
+      if (b) document.execCommand(b.dataset.scfmt);
+    });
+    document.body.appendChild(scFmtBar);
+    if (window.lucide) lucide.createIcons();
+    return scFmtBar;
+  }
+  rowsEl.addEventListener('focusin', function (e) {
+    if (!e.target.classList || !e.target.classList.contains('sc-rich')) return;
+    var bar = ensureScFmtBar();
+    var r = e.target.getBoundingClientRect();
+    bar.style.left = Math.max(4, r.left) + 'px';
+    bar.style.top = Math.max(4, r.top - 32) + 'px';
+    bar.hidden = false;
+  });
+  rowsEl.addEventListener('focusout', function (e) {
+    if (e.target.classList && e.target.classList.contains('sc-rich') && scFmtBar) {
+      scFmtBar.hidden = true;
     }
   });
 
@@ -3140,6 +3232,37 @@
   $('#docTitle').addEventListener('change', function (e) {
     commit('title', function (s) { s.meta.title = e.target.value || 'Roadmap'; });
   });
+  // the title edits only via its pencil — readonly otherwise, so header
+  // clicks can't accidentally start a rename (and can drag the window)
+  $('#titleEdit').addEventListener('click', function () {
+    var t = $('#docTitle');
+    t.removeAttribute('readonly');
+    t.focus(); t.select();
+  });
+  $('#docTitle').addEventListener('blur', function (e) {
+    e.target.setAttribute('readonly', '');
+  });
+  $('#docTitle').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') e.target.blur();
+  });
+
+  var filterTimer = null;
+  $('#rowFilter').addEventListener('input', function (e) {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(function () {
+      filterText = e.target.value.trim();
+      render();
+    }, 120);
+  });
+  $('#rowFilter').addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      e.target.value = '';
+      filterText = '';
+      e.target.blur();
+      render();
+    }
+  });
 
   $('#viewTabs').addEventListener('click', function (e) {
     var b = e.target.closest('[data-view]');
@@ -3207,6 +3330,14 @@
         { icon: 'download', label: 'Save .xlsx', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
         window.HeadwayDesktop
           ? { icon: 'save', label: 'Save As…', fn: function () { window.HeadwayApp.save(true); } }
+          : null,
+        window.HeadwayDesktop
+          ? { icon: 'timer-reset', label: 'Auto-save', checked: autoSave, fn: function () {
+              autoSave = !autoSave;
+              saveLocal(); renderTopbar();
+              if (autoSave) scheduleAutoSave();
+              toast('Auto-save ' + (autoSave ? 'on — writes to the open file' : 'off'));
+            } }
           : null,
         { sep: true },
         { icon: 'image', label: 'Export PNG…', fn: function () { $('#btnExport').click(); } },
@@ -4683,13 +4814,28 @@
   }
 
   // ------------------------------------------------------------ files
-  function doSave(forceDialog) {
+  var savingNow = false;
+  function updateSaveBtn() {
+    var sb = $('#btnSave');
+    if (savingNow) return;
+    var mode = docSaved ? 'saved' : 'save';
+    if (sb.dataset.mode === mode) return;
+    sb.dataset.mode = mode;
+    sb.disabled = docSaved;
+    sb.innerHTML = docSaved
+      ? '<i data-lucide="check"></i>Saved'
+      : '<i data-lucide="download"></i>Save';
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function doSave(forceDialog, quiet) {
     var btn = $('#btnSave');
+    savingNow = true;
     btn.disabled = true; btn.textContent = 'Saving…';
     function restoreBtn() {
-      btn.disabled = false;
-      btn.innerHTML = '<i data-lucide="download"></i>Save';
-      if (window.lucide) lucide.createIcons();
+      savingNow = false;
+      btn.dataset.mode = '';
+      updateSaveBtn();
     }
     RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
       var name = saveFileName();
@@ -4697,8 +4843,9 @@
         return HeadwayDesktop.saveBlob(blob, name, forceDialog).then(function (path) {
           if (!path) return; // dialog canceled
           lastExport = new Date().toTimeString().slice(0, 5);
+          docSaved = true;
           saveLocal();
-          toast('Saved ' + HeadwayDesktop.basename(path));
+          if (!quiet) toast('Saved ' + HeadwayDesktop.basename(path));
         });
       }
       var a = document.createElement('a');
@@ -4707,6 +4854,7 @@
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
       lastExport = new Date().toTimeString().slice(0, 5);
+      docSaved = true;
       saveLocal();
       toast('Saved ' + name);
     }).catch(function (err) {
@@ -4721,6 +4869,8 @@
     return RMExcel.importWorkbook(buf).then(function (r) {
       if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
       replaceState('open', r.state);
+      docSaved = true; // fresh from disk — matches its file
+      updateSaveBtn();
       selectedId = null;
       if (!quiet) {
         toast(r.source === 'tool'
@@ -4769,6 +4919,13 @@
       if (selectedEdge) { selectedEdge = null; requestAnimationFrame(renderArrows); return; }
       if (selectedId) { select(null); return; }
       if (presentMode) { setPresent(false); return; }
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' &&
+        (view === 'planning' || view === 'scoping')) {
+      e.preventDefault();
+      var ff = $('#rowFilter');
+      ff.focus(); ff.select();
       return;
     }
     if (inField) return;

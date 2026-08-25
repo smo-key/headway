@@ -498,16 +498,18 @@ eq(sEd2.meta.endDate, '2026-10-16', 'endDate normalizes to that week\'s Friday')
 section('scope columns');
 var sSc = mkState([{ num: 1, feature: 'a' }]);
 eq(sSc.meta.scopeCols.map(function (c) { return c.key; }),
-  ['enables', 'outOfScope', 'extDeps', 'notes'], 'default columns exclude description');
+  ['description', 'enables', 'outOfScope', 'extDeps', 'notes'], 'description leads the default columns');
 var ck = RM.addScopeCol(sSc, 'Owner');
-eq(sSc.meta.scopeCols.length, 5, 'custom column appended');
-eq(RM.scopeColLabel(sSc.meta.scopeCols[4]), 'Owner', 'custom label kept');
+eq(sSc.meta.scopeCols.length, 6, 'custom column appended');
+eq(RM.scopeColLabel(sSc.meta.scopeCols[5]), 'Owner', 'custom label kept');
 RM.setScopeValue(sSc.items[0], ck, 'Rita');
 eq(RM.scopeValue(sSc.items[0], ck), 'Rita', 'custom value stored in item.custom');
 RM.setScopeValue(sSc.items[0], 'notes', 'n1');
 eq(sSc.items[0].notes, 'n1', 'built-in key routes to the item field');
 RM.moveScopeCol(sSc, ck, -2);
-eq(sSc.meta.scopeCols[2].key, ck, 'column moved by two');
+eq(sSc.meta.scopeCols[3].key, ck, 'column moved by two');
+RM.removeScopeCol(sSc, 'description');
+eq(sSc.meta.scopeCols.length, 5, 'built-in column removable');
 RM.addScopeCol(sSc, null, 'description');
 eq(sSc.meta.scopeCols[5].key, 'description', 'hidden built-in re-added');
 RM.addScopeCol(sSc, null, 'description');

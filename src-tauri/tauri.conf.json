@@ -26,10 +26,20 @@
   "plugins": {
     "fs": {
       "requireLiteralLeadingDot": false
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCMTE4RDIxOUJBMjU1RjEKUldUeFZhS2JJWTBScTVxVC9oSTZ0bncwc2tGRWM0U1lLdXVKUTBnL0VwSThtdkVqa2VFV1BRbU4K",
+      "endpoints": [
+        "https://github.com/smo-key/headway/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "category": "Productivity",
     "icon": [
       "icons/32x32.png",

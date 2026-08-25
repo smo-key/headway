@@ -12,7 +12,8 @@
 <header id="topbar">
   <div class="tb-brand">
     <div class="tb-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-    <input id="docTitle" class="tb-title" spellcheck="false" aria-label="Roadmap title">
+    <input id="docTitle" class="tb-title" spellcheck="false" aria-label="Roadmap title" readonly>
+    <button id="titleEdit" title="Rename roadmap" aria-label="Rename roadmap"><i data-lucide="pencil"></i></button>
   </div>
 
   <nav class="menus" id="menus">
@@ -43,7 +44,7 @@
     <div id="grid">
       <div id="bgcols"></div>
       <div id="hdr">
-        <div class="hdr-line hdr-phases"><div class="hdr-left"></div><div class="hdr-lane" id="hdrPhases"></div></div>
+        <div class="hdr-line hdr-phases"><div class="hdr-left" id="filterCell"><input id="rowFilter" type="search" placeholder="Filter rows… (⌘F)" aria-label="Filter rows"></div><div class="hdr-lane" id="hdrPhases"></div></div>
         <div class="hdr-line hdr-sprints"><div class="hdr-left corner">
           <span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Role</span><span class="hl-cols"><i class="pl-only" style="width:34px">size</i><i class="pl-only" style="width:34px">wks</i><i class="pl-only hc-lab" style="width:30px">hc</i><i class="pl-only" style="width:22px"></i><i class="bu-only" style="width:96px">Type</i><i class="bu-only" style="width:108px">Workstream</i><i class="bu-only" style="width:76px">Cost</i><i class="bu-only" style="width:76px">Rate</i><i class="bu-only" style="width:54px">Margin</i><i class="bu-only" style="width:80px">Total</i></span><span id="leftRz" title="Drag to resize the left pane"></span>
         </div><div class="hdr-lane" id="hdrSprints"></div></div>

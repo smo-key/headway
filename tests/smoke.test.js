@@ -480,23 +480,32 @@ ok(doc.body.dataset.view === 'scoping', 'view switches to scoping');
 ok(doc.querySelectorAll('#rows .sc-cell').length > 400, 'scoping cells rendered (' + doc.querySelectorAll('#rows .sc-cell').length + ')');
 ok(doc.querySelectorAll('#rows .bar').length === 0, 'no bars in scoping view');
 ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 5, 'fixed lead columns: size/risk/weeks/workstream/epic');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 9, 'default columns are 5 fixed + 4 text (no Description)');
-ok(!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description column hidden by default');
-ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 9, 'column resize handles present');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 10, 'default columns are 5 fixed + 5 text (incl. Description)');
+ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description column shown by default');
+const descIdx = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).findIndex(c => c.dataset.col === 'description');
+const enIdx = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).findIndex(c => c.dataset.col === 'enables');
+ok(descIdx !== -1 && enIdx !== -1 && descIdx < enIdx, 'Description sits left of Enables');
+ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 10, 'column resize handles present');
 const cell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="notes"]');
 cell.value = 'noted in the grid';
 cell.dispatchEvent(new window.Event('change', { bubbles: true }));
 ok(state().items.find(i => i.id === itId).notes === 'noted in the grid', 'scoping cell edit commits');
 
-// column management: re-add the hidden Description built-in via the "+" menu
+// column management: remove the Description built-in via its column menu…
+click(doc.querySelector('#hdrSprints [data-colmenu="description"]'));
+click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Remove column/.test(b.textContent)));
+ok(!doc.querySelector('#hdrSprints [data-col="description"]'), 'column removed via its menu');
+// …then re-add it (now hidden) through the "+" menu
 click(doc.querySelector('#hdrSprints [data-coladd]'));
 const descAdd = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^Description$/.test(b.textContent.trim()));
 click(descAdd);
 ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'hidden built-in column re-added via + menu');
-// …and remove it again through its column menu
+// leave the grid as it started: Description back in front of Enables
 click(doc.querySelector('#hdrSprints [data-colmenu="description"]'));
-click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Remove column/.test(b.textContent)));
-ok(!doc.querySelector('#hdrSprints [data-col="description"]'), 'column removed via its menu');
+{
+  const mv = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Move left/.test(b.textContent));
+  if (mv) click(mv);
+}
 
 // custom column: create, edit a cell, move it left
 click(doc.querySelector('#hdrSprints [data-coladd]'));

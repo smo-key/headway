@@ -20,8 +20,7 @@
   RM.ANY_TYPE = '';
 
   // Scoping-view columns. Built-ins map to fixed item fields; custom columns
-  // ('c…' keys) store their text in item.custom. Description exists but is
-  // hidden by default.
+  // ('c…' keys) store their text in item.custom.
   RM.SCOPE_BUILTIN_LABELS = {
     description: 'Description',
     enables: 'Enables',
@@ -29,7 +28,7 @@
     extDeps: 'External dependencies',
     notes: 'Notes'
   };
-  RM.DEFAULT_SCOPE_COLS = ['enables', 'outOfScope', 'extDeps', 'notes'];
+  RM.DEFAULT_SCOPE_COLS = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -331,6 +330,15 @@
         seenCol[c.key] = true;
         return true;
       });
+    // one-time migration: Description used to be hidden by default — surface
+    // it left of Enables in docs saved before it joined the defaults
+    if (!m.scopeDescV1) {
+      m.scopeDescV1 = true;
+      if (!seenCol.description) {
+        var descAt = m.scopeCols.findIndex(function (c) { return c.key === 'enables'; });
+        m.scopeCols.splice(descAt === -1 ? 0 : descAt, 0, { key: 'description' });
+      }
+    }
     m.sizeDays = m.sizeDays || RM.clone(RM.DEFAULT_SIZE_DAYS);
     // migrate documents saved under the pre-2026-08 size metric
     var isLegacyMap = RM.SIZE_ORDER.every(function (s) { return m.sizeDays[s] === RM.LEGACY_SIZE_DAYS[s]; });

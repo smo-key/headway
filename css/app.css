@@ -166,7 +166,9 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   background: #EDE9DE;
   border: 1px solid var(--line);
   border-radius: 10px;
-  margin: 0 auto;
+  /* true centering in the header, independent of the unequal widths on
+     either side (brand+menus left, toolbar right) */
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
 }
 .view-tabs button { border-color: transparent; background: transparent; font-weight: 700; color: var(--ink-2); }
 .view-tabs button:hover { box-shadow: none; background: rgba(255, 255, 255, .55); }
@@ -1429,3 +1431,55 @@ body.chrome-win #topbar { padding-right: 0; }
 .win-caption .cap-close:hover { background: #c42b1c; color: #fff; }
 .win-caption .cap-close:active { background: #b02015; color: #fff; }
 .win-caption svg { pointer-events: none; }
+
+/* ------------------------------------------------- title pencil + filter */
+#topbar { position: relative; } /* anchors the absolutely-centered view tabs */
+#docTitle[readonly] {
+  pointer-events: none; /* clicks fall through to the header (drag region) */
+  border-color: transparent; background: transparent;
+  text-overflow: ellipsis;
+}
+#titleEdit {
+  border: 0; background: transparent; padding: 4px; border-radius: 6px;
+  color: var(--ink-3); box-shadow: none; margin-left: -4px;
+}
+#titleEdit:hover { color: var(--ink); background: rgba(24, 36, 48, .06); box-shadow: none; transform: none; }
+
+#rowFilter {
+  width: 100%; margin-bottom: 3px;
+  border: 1px solid var(--line-2); border-radius: 6px;
+  padding: 3px 8px; font: inherit; font-size: 11.5px;
+  background: var(--surface); color: var(--ink);
+}
+#rowFilter:focus { outline: none; border-color: var(--blue); }
+/* scoping hides the phase lane but keeps the line so the filter stays put */
+body[data-view="scoping"] .hdr-phases { display: flex !important; height: 30px !important; }
+body[data-view="scoping"] .hdr-phases .hdr-lane { visibility: hidden; }
+body[data-view="budget"] #rowFilter, body[data-view="setup"] #rowFilter { display: none; }
+
+/* Save button once the doc matches its file */
+#btnSave[data-mode="saved"] { opacity: .8; }
+
+/* update-ready button (desktop auto-updater) */
+#btnUpdate {
+  border-color: var(--blue); color: var(--blue);
+  animation: hw-update-pulse 1.1s ease-in-out infinite alternate;
+}
+@keyframes hw-update-pulse {
+  from { background: transparent; }
+  to { background: rgba(0, 87, 184, .16); }
+}
+
+/* floating format bar for rich scoping cells */
+#scFmtBar {
+  position: fixed; z-index: 90;
+  display: flex; gap: 2px; padding: 3px;
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: 8px; box-shadow: var(--shadow-1);
+}
+#scFmtBar button {
+  border: 0; background: transparent; box-shadow: none;
+  padding: 3px 7px; border-radius: 5px; color: var(--ink-2);
+}
+#scFmtBar button:hover { background: rgba(24, 36, 48, .07); color: var(--ink); transform: none; }
+#scFmtBar svg.lucide { width: 13px; height: 13px; }
