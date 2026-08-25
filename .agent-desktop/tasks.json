@@ -1,1 +1,1 @@
-{"version":1,"tasks":[{"id":"term-mt8xuyg2-1","name":"Start app (dev)","kind":"terminal","command":"make dev","cwd":null}]}
+{"version":1,"tasks":[{"id":"term-mt8xuyg2-1","name":"Start app (dev)","kind":"terminal","command":"make dev","cwd":null},{"id":"term-mt8zmlsg-2","name":"Release","kind":"agent","command":null,"cwd":null,"prompt":"Increment the package version, commit, create a tag, and push"}]}

@@ -12,7 +12,6 @@
   var XLSX_FILTER = [{ name: 'Excel workbook', extensions: ['xlsx'] }];
   var currentPath = null;   // absolute path of the open document (null = unsaved)
   var unwatch = null;       // stops the active directory watcher
-  var suppressUntil = 0;    // ignore watch events this soon after our own write
   var reloading = false;
 
   function app() { return window.HeadwayApp; }
@@ -49,7 +48,8 @@
     fs.watch(dirname(currentPath), function (event) {
       var paths = (event && event.paths) || [];
       var hit = paths.some(function (p) { return samePath(p, currentPath); });
-      if (!hit || reloading || Date.now() < suppressUntil) return;
+      // own writes are filtered by the content fingerprint, not by timing
+      if (!hit || reloading) return;
       reloadFromDisk();
     }, { delayMs: 800 }).then(function (un) {
       unwatch = un;
@@ -59,18 +59,47 @@
     });
   }
 
-  function reloadFromDisk() {
+  // fingerprint of the workbook bytes we last loaded or wrote — reloads are
+  // applied (and announced) only when the content actually changed
+  var lastSig = null;
+  function sigOf(bytes) {
+    var h = 2166136261;
+    for (var i = 0; i < bytes.length; i++) {
+      h ^= bytes[i];
+      h = (h * 16777619) >>> 0;
+    }
+    return bytes.length + ':' + h.toString(16);
+  }
+
+  // Sync clients (OneDrive especially) fire the change event before the new
+  // bytes are fully on disk — an immediate read can return the old content
+  // or a partial file. Retry with backoff until genuinely new bytes appear.
+  var RELOAD_RETRY_MS = [1200, 3000, 8000];
+  function reloadFromDisk(attempt) {
+    attempt = attempt || 0;
     var p = currentPath;
     reloading = true;
     fs.readFile(p).then(function (bytes) {
-      if (!bytes.length) throw new Error('file is empty (still syncing?)');
-      return app().loadBuffer(bytes.buffer, basename(p), true);
-    }).then(function () {
-      app().toast('Reloaded “' + basename(p) + '” — changed on disk');
+      var validZip = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4B; // xlsx = 'PK…'
+      var sig = validZip ? sigOf(bytes) : null;
+      if (!validZip || sig === lastSig) {
+        reloading = false;
+        if (attempt < RELOAD_RETRY_MS.length) {
+          setTimeout(function () {
+            if (currentPath === p && !reloading) reloadFromDisk(attempt + 1);
+          }, RELOAD_RETRY_MS[attempt]);
+        }
+        return;
+      }
+      return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
+        lastSig = sig;
+        app().toast('Reloaded “' + basename(p) + '” — changed on disk');
+      }).finally(function () {
+        reloading = false;
+      });
     }).catch(function (err) {
-      app().toast('Auto-reload failed: ' + err.message, 'err');
-    }).finally(function () {
       reloading = false;
+      app().toast('Auto-reload failed: ' + (err && err.message || err), 'err');
     });
   }
 
@@ -80,7 +109,10 @@
       dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {
         if (!p) return;
         fs.readFile(p).then(function (bytes) {
-          return app().loadBuffer(bytes.buffer, basename(p));
+          var sig = sigOf(bytes);
+          return app().loadBuffer(bytes.buffer, basename(p)).then(function () {
+            lastSig = sig;
+          });
         }).then(function () {
           setPath(p);
         }).catch(function (err) {
@@ -99,10 +131,10 @@
         if (!p) return null;
         if (!/\.xlsx$/i.test(p)) p += '.xlsx';
         return blob.arrayBuffer().then(function (buf) {
-          suppressUntil = Date.now() + 3000;
-          return fs.writeFile(p, new Uint8Array(buf));
+          var u8 = new Uint8Array(buf);
+          lastSig = sigOf(u8);
+          return fs.writeFile(p, u8);
         }).then(function () {
-          suppressUntil = Date.now() + 3000;
           if (!samePath(p, currentPath || '')) setPath(p);
           return p;
         });
@@ -120,7 +152,10 @@
     try { p = localStorage.getItem(LAST_KEY); } catch (e) { /* storage optional */ }
     if (!p) return;
     fs.readFile(p).then(function (bytes) {
-      return app().loadBuffer(bytes.buffer, basename(p), true);
+      var sig = sigOf(bytes);
+      return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
+        lastSig = sig;
+      });
     }).then(function () {
       setPath(p);
       app().toast('Reopened “' + basename(p) + '”');
