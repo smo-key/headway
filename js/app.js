@@ -475,6 +475,9 @@
   }
 
   function renderTopbar() {
+    // the desktop shell mirrors File/Edit/View into the macOS menu bar;
+    // nudge it so checkmarks and enabled states track the app state
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
     var t = $('#docTitle');
     if (t.value !== state.meta.title && document.activeElement !== t) t.value = state.meta.title;
     var counts = validation.counts;
@@ -3191,18 +3194,26 @@
   function menuItems(name) {
     if (name === 'file') {
       return [
-        { icon: 'folder-open', label: 'Open .xlsx…', fn: function () { $('#filePick').click(); } },
-        { icon: 'download', label: 'Save .xlsx', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
-        { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
-        { sep: true },
         { icon: 'file', label: 'New blank roadmap', fn: function () {
           confirmBox('Start a blank roadmap?', 'Current roadmap stays in undo history.', 'New roadmap', function () {
             replaceState('blank', blankState());
           });
         } },
+        { icon: 'folder-open', label: 'Open .xlsx…', fn: function () {
+          if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+          else $('#filePick').click();
+        } },
+        { sep: true },
+        { icon: 'download', label: 'Save .xlsx', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
+        window.HeadwayDesktop
+          ? { icon: 'save', label: 'Save As…', fn: function () { window.HeadwayApp.save(true); } }
+          : null,
+        { sep: true },
+        { icon: 'image', label: 'Export PNG…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         { icon: 'circle-help', label: 'Shortcuts & help', fn: helpModal }
-      ];
+      ].filter(Boolean);
     }
     if (name === 'edit') {
       return [
@@ -3255,6 +3266,7 @@
         saveLocal(); render();
         toast('Capacity row ' + (showCap ? 'shown' : 'hidden'));
       } } : null,
+      { sep: true },
       { icon: 'layers', label: 'Group by workstream', checked: groupWs, fn: function () {
         groupWs = !groupWs;
         saveLocal(); render();
@@ -3263,6 +3275,7 @@
         groupEpic = !groupEpic;
         saveLocal(); render();
       } },
+      { sep: true },
       { icon: 'chevrons-up-down', label: 'Expand all features', fn: function () {
         state.items.forEach(function (it) { if (it.stories.length) expanded[it.id] = true; });
         render();
@@ -3281,10 +3294,8 @@
       { sep: true },
       { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
       { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
-    ].filter(Boolean).concat([
-      { sep: true },
-      { icon: 'crosshair', label: 'Scroll to today', fn: goToday }
-    ]));
+      { icon: 'crosshair', label: 'Scroll to today', fn: goToday },
+    ].filter(Boolean));
   }
 
   var openMenuName = null;
@@ -4672,7 +4683,7 @@
   }
 
   // ------------------------------------------------------------ files
-  $('#btnSave').addEventListener('click', function () {
+  function doSave(forceDialog) {
     var btn = $('#btnSave');
     btn.disabled = true; btn.textContent = 'Saving…';
     function restoreBtn() {
@@ -4682,6 +4693,14 @@
     }
     RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
       var name = saveFileName();
+      if (window.HeadwayDesktop) { // desktop: write straight to disk
+        return HeadwayDesktop.saveBlob(blob, name, forceDialog).then(function (path) {
+          if (!path) return; // dialog canceled
+          lastExport = new Date().toTimeString().slice(0, 5);
+          saveLocal();
+          toast('Saved ' + HeadwayDesktop.basename(path));
+        });
+      }
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = name;
@@ -4695,25 +4714,41 @@
     }).finally(function () {
       restoreBtn();
     });
-  });
+  }
+  $('#btnSave').addEventListener('click', function () { doSave(false); });
+
+  function loadWorkbookBuffer(buf, name, quiet) {
+    return RMExcel.importWorkbook(buf).then(function (r) {
+      if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
+      replaceState('open', r.state);
+      selectedId = null;
+      if (!quiet) {
+        toast(r.source === 'tool'
+          ? 'Loaded “' + name + '” (full tool state)'
+          : 'Parsed “' + name + '” from the template layout');
+      }
+    });
+  }
 
   $('#filePick').addEventListener('change', function (e) {
     var file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
     file.arrayBuffer().then(function (buf) {
-      return RMExcel.importWorkbook(buf);
-    }).then(function (r) {
-      if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
-      replaceState('open', r.state);
-      selectedId = null;
-      toast(r.source === 'tool'
-        ? 'Loaded “' + file.name + '” (full tool state)'
-        : 'Parsed “' + file.name + '” from the template layout');
+      return loadWorkbookBuffer(buf, file.name);
     }).catch(function (err) {
       toast('Could not open: ' + err.message, 'err');
     });
   });
+
+  // hooks for the Tauri shell (js/desktop.js); harmless in a plain browser
+  window.HeadwayApp = {
+    toast: toast,
+    loadBuffer: loadWorkbookBuffer,
+    saveFileName: saveFileName,
+    save: doSave,
+    menuItems: menuItems
+  };
 
   // ------------------------------------------------------------ keyboard
   window.addEventListener('keydown', function (e) {

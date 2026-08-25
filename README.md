@@ -1,8 +1,43 @@
 # Headway
 
-Standalone roadmap planning tool. **Open
-`index.html` directly in a browser** — no server, no build, everything is local
-(vendored ExcelJS + Lucide, localStorage autosave).
+Standalone roadmap planning tool. Runs two ways:
+
+- **Desktop app** (Windows & macOS, via Tauri) — real Open/Save to disk,
+  including synced folders like OneDrive, with auto-reload when the open file
+  changes externally. Install below.
+- **Web page** — open `index.html` directly in a browser: no server, no build,
+  everything is local (vendored ExcelJS + Lucide, localStorage autosave).
+
+## Install the desktop app
+
+No admin rights needed — both installs are per-user.
+
+**macOS** (installs to `~/Applications`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/smo-key/headway/main/install.sh | sh
+```
+
+**Windows** (installs under `%LOCALAPPDATA%`; run in PowerShell or cmd):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/smo-key/headway/main/install.ps1 | iex"
+```
+
+Both scripts fetch the latest [GitHub release](https://github.com/smo-key/headway/releases)
+(built by `.github/workflows/release.yml` on every `v*` tag). Re-run the same
+one-liner to update.
+
+In the desktop app, File → Open… / Save / Save As… use native dialogs and write
+straight to disk. On macOS the File / Edit / View menus live in the system menu
+bar (with the standard clipboard, window and quit items); the in-window menu
+buttons appear only on Windows and in the browser. The app header is the
+titlebar: on macOS the native bar is hidden with overlay traffic lights, on
+Windows the frame is custom with Windows-11-style caption buttons — empty
+header space drags the window, double-click zooms/maximizes. Save any workbook into a OneDrive (or Dropbox, iCloud, …)
+folder and it syncs like any other file; if the file changes on disk — another
+machine syncs an edit, or Excel saves over it — Headway reloads it
+automatically and shows a toast.
 
 It boots **completely empty** — start from scratch, open a saved `.xlsx`, or
 File → Download template for a starter workbook with one worked example.
@@ -62,17 +97,34 @@ rows have right-click context menus; dropdowns share one list UI.
 - `js/core.js` — pure logic (calendar, deps, capacity, scheduler, risk, critical path); node-testable
 - `js/excel.js` — ExcelJS import/export
 - `js/app.js` — UI
+- `js/desktop.js` — Tauri desktop bridge (native dialogs, disk save/load, file watching); no-op in a browser
 - `tests/seed.fixture.js` — sample document used by the test suites only
 - `js/vendor/exceljs.min.js`, `js/vendor/lucide.min.js` — vendored libraries
+- `src-tauri/` — Tauri shell (Rust); `scripts/copy-frontend.mjs` stages the static files into `dist/` for bundling
+- `install.sh` / `install.ps1` — per-user desktop installers (fetch the latest GitHub release)
 - `DESIGN.md` — data model + decisions
+
+## Desktop development
+
+```bash
+make setup           # npm install — @tauri-apps/cli (plus jsdom/exceljs for the tests)
+make dev             # run the desktop app with live frontend
+make build           # build the platform installer locally (needs Rust)
+make test            # core + headless UI smoke suites
+```
+
+Releases: push a tag like `v1.0.1` (matching `version` in
+`src-tauri/tauri.conf.json`) and the GitHub Actions workflow builds the macOS
+universal .app/.dmg and the Windows per-user NSIS installer and publishes them
+to a GitHub release.
 
 ## Tests
 
 ```bash
 # core + excel round-trip (needs exceljs resolvable)
-NODE_PATH=<dir-with-node_modules> node tools/roadmapping/tests/core.test.js
+NODE_PATH=./node_modules node tests/core.test.js
 # headless UI smoke (needs jsdom + exceljs; skips politely without them)
-NODE_PATH=<dir-with-node_modules> node tools/roadmapping/tests/smoke.test.js
+NODE_PATH=./node_modules node tests/smoke.test.js
 ```
 
 213 core assertions (calendar, deps/cycles, validation, capacity incl. time

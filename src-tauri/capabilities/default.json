@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Headway main window: native open/save dialogs plus read, write and watch of user-chosen workbook paths anywhere on disk (documents live in arbitrary folders, including OneDrive).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "**" }, { "path": "/**" }, { "path": "$HOME/**" }]
+    }
+  ]
+}
