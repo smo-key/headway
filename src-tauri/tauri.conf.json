@@ -28,7 +28,7 @@
       "requireLiteralLeadingDot": false
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCMTE4RDIxOUJBMjU1RjEKUldUeFZhS2JJWTBScTVxVC9oSTZ0bncwc2tGRWM0U1lLdXVKUTBnL0VwSThtdkVqa2VFV1BRbU4K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMyODY3MUVERjMxRUY5NkQKUldSdCtSN3o3WEdHd3A2VTFDTzVXMnNnWXY1Si91TEszT2c0QWI2RE1rODlTUW0xaTQwMkY4V3YK",
       "endpoints": [
         "https://github.com/smo-key/headway/releases/latest/download/latest.json"
       ],
