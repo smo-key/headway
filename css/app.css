@@ -115,9 +115,9 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   padding: 2px 6px;
   margin-left: -6px;
   border-radius: 6px;
-  min-width: 180px;
+  /* width set from the text by sizeTitle() so the pencil hugs the name */
 }
-.tb-title:hover { border-color: var(--line-2); background: var(--surface); }
+.tb-title:not([readonly]) { border-color: var(--line-2); background: var(--surface); }
 #saveStatus.dirty { color: var(--warn); }
 #finishStat { color: var(--ink-2); }
 

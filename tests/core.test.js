@@ -819,7 +819,41 @@ if (!ExcelJS) {
         eq(r2.state.team.length, 2, 'team re-parsed from Team sheet');
         eq(r2.state.team[0].rate, 210, 'role rate survives the template path');
         eq(r2.state.team[0].cost, 95, 'role cost survives the template path');
-        finish();
+
+        // Excel-style edits to the visible sheets must win over hidden state
+        var wb3 = new ExcelJS.Workbook();
+        var target = st.items[0].num;
+        return wb3.xlsx.load(buf).then(function () {
+          var rws = wb3.getWorksheet('Roadmap');
+          for (var rr = 4; rr <= rws.rowCount; rr++) {
+            if (String(rws.getRow(rr).getCell(1).value) === String(target)) {
+              rws.getRow(rr).getCell(4).value = 'Renamed in Excel';
+              rws.getRow(rr).getCell(7).value = 'note from excel';
+              break;
+            }
+          }
+          var stws = wb3.getWorksheet('Stories');
+          for (var sr = 2; sr <= stws.rowCount; sr++) {
+            if (String(stws.getRow(sr).getCell(1).value) === String(target)) {
+              stws.getRow(sr).getCell(3).value = 'Story renamed in Excel';
+              stws.getRow(sr).getCell(4).value = 'Yes';
+              break;
+            }
+          }
+          return wb3.xlsx.writeBuffer();
+        }).then(function (buf3) {
+          return RMExcel.importWorkbook(buf3);
+        }).then(function (r3) {
+          ok(r3.source === 'tool', 'excel-edited file still loads via the lossless path');
+          var e1 = r3.state.items.filter(function (i2) { return i2.num === target; })[0];
+          eq(e1.feature, 'Renamed in Excel', 'visible Feature edit wins over hidden state');
+          eq(e1.notes, 'note from excel', 'visible Notes edit wins over hidden state');
+          eq(e1.stories[0].title, 'Story renamed in Excel', 'visible story rename wins');
+          ok(e1.stories[0].done === true, 'story Done toggled from the sheet');
+          var un = r3.state.items.filter(function (i2) { return i2.num === st.items[1].num; })[0];
+          ok(un.feature === st.items[1].feature, 'untouched rows keep their hidden-state values');
+          finish();
+        });
       });
     });
   }).catch(function (err) {

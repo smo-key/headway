@@ -33,8 +33,10 @@
     if (t) t.title = currentPath || '';
   }
 
+  var LAST_KEY = 'headway-last-path';
   function setPath(p) {
     currentPath = p;
+    try { localStorage.setItem(LAST_KEY, p || ''); } catch (e) { /* storage optional */ }
     markTitle();
     rewatch();
   }
@@ -110,6 +112,22 @@
     currentPath: function () { return currentPath; },
     basename: basename
   };
+
+  // reopen the last document on launch (falls back to the blank/localStorage
+  // boot if the file has moved or gone)
+  (function reopenLast() {
+    var p = null;
+    try { p = localStorage.getItem(LAST_KEY); } catch (e) { /* storage optional */ }
+    if (!p) return;
+    fs.readFile(p).then(function (bytes) {
+      return app().loadBuffer(bytes.buffer, basename(p), true);
+    }).then(function () {
+      setPath(p);
+      app().toast('Reopened “' + basename(p) + '”');
+    }).catch(function () {
+      try { localStorage.removeItem(LAST_KEY); } catch (e) { /* ignore */ }
+    });
+  })();
 
   // ------------------------------------------------------- window chrome
   // The header doubles as the titlebar. macOS: native titlebar hidden with

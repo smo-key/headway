@@ -418,12 +418,68 @@
           var parsed = JSON.parse(chunks.join(''));
           var ui = null;
           try { ui = JSON.parse(cellRaw(hws.getCell('A3')) || 'null'); } catch (e2) { /* prefs optional */ }
-          return { state: RM.normalizeState(parsed), source: 'tool', ui: ui };
+          var st = RM.normalizeState(parsed);
+          try { reconcileVisibleEdits(wb, st); } catch (e3) { /* visible sheets optional */ }
+          return { state: st, source: 'tool', ui: ui };
         } catch (e) { /* fall through to template parse */ }
       }
       return parseTemplate(wb);
     });
   };
+
+  // Tool files load losslessly from the hidden JSON — but people also edit
+  // the visible sheets in Excel. Where a visible text cell disagrees with
+  // the hidden state, the visible edit wins (feature names, scope text,
+  // story titles/done). Structural edits (rows added/removed, bars moved)
+  // stay out of scope: the hidden state remains authoritative for those.
+  function reconcileVisibleEdits(wb, state) {
+    function norm(v) { return String(v == null ? '' : v).replace(/\r\n?/g, '\n').trim(); }
+    var byNum = {};
+    state.items.forEach(function (it) { byNum[it.num] = it; });
+
+    var ws = wb.getWorksheet('Roadmap');
+    if (ws) {
+      // column layout matches the export: 1 ID · 4 Feature · 5 Enables ·
+      // 6 Out of scope · 7 Notes · 9 External dependencies
+      var FIELDS = [[4, 'feature'], [5, 'enables'], [6, 'outOfScope'], [7, 'notes'], [9, 'extDeps']];
+      for (var r = 4; r <= ws.rowCount; r++) {
+        var row = ws.getRow(r);
+        var idTxt = cellText(row.getCell(1));
+        if (!/^\d+$/.test(idTxt)) continue; // band/blank rows
+        var it = byNum[parseInt(idTxt, 10)];
+        if (!it) continue;
+        FIELDS.forEach(function (f) {
+          var v = cellText(row.getCell(f[0]));
+          if (norm(v) !== norm(it[f[1]])) it[f[1]] = norm(v);
+        });
+      }
+    }
+
+    var sws = wb.getWorksheet('Stories');
+    if (sws) {
+      var sheetStories = {}; // item num -> [{title, done}] in sheet order
+      for (var sr = 2; sr <= sws.rowCount; sr++) {
+        var srow = sws.getRow(sr);
+        var sid = cellText(srow.getCell(1));
+        if (!/^\d+$/.test(sid)) continue;
+        (sheetStories[parseInt(sid, 10)] = sheetStories[parseInt(sid, 10)] || []).push({
+          title: cellText(srow.getCell(3)),
+          done: /^yes$/i.test(cellText(srow.getCell(4)))
+        });
+      }
+      Object.keys(sheetStories).forEach(function (num) {
+        var it = byNum[num];
+        // only positional matching is safe — skip items whose story count
+        // changed in the sheet
+        if (!it || it.stories.length !== sheetStories[num].length) return;
+        it.stories.forEach(function (st, i) {
+          var sv = sheetStories[num][i];
+          if (norm(sv.title) && norm(sv.title) !== norm(st.title)) st.title = norm(sv.title);
+          st.done = sv.done;
+        });
+      });
+    }
+  }
 
   function parseTemplate(wb) {
     var ws = wb.getWorksheet('Roadmap');

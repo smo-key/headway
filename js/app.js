@@ -508,6 +508,7 @@
     if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
     var t = $('#docTitle');
     if (t.value !== state.meta.title && document.activeElement !== t) t.value = state.meta.title;
+    sizeTitle();
     updateSaveBtn();
     var counts = validation.counts;
     var n = counts.error + counts.warn;
@@ -3233,18 +3234,48 @@
     commit('title', function (s) { s.meta.title = e.target.value || 'Roadmap'; });
   });
   // the title edits only via its pencil — readonly otherwise, so header
-  // clicks can't accidentally start a rename (and can drag the window)
+  // clicks can't accidentally start a rename (and can drag the window).
+  // While editing, the pencil becomes a checkmark that commits the rename.
+  var titleMeasure = null;
+  function sizeTitle() {
+    var t = $('#docTitle');
+    if (!titleMeasure) titleMeasure = document.createElement('canvas').getContext('2d');
+    var w;
+    if (titleMeasure) {
+      var cs = getComputedStyle(t);
+      titleMeasure.font = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      w = Math.ceil(titleMeasure.measureText(t.value || '').width) + 18;
+    } else {
+      w = (t.value || '').length * 8 + 18; // headless fallback (no canvas 2d)
+    }
+    var editing = !t.hasAttribute('readonly');
+    t.style.width = Math.min(420, Math.max(editing ? 220 : 30, w)) + 'px';
+  }
+  function setTitleEditing(on) {
+    var t = $('#docTitle'), b = $('#titleEdit');
+    if (on) t.removeAttribute('readonly');
+    else t.setAttribute('readonly', '');
+    b.innerHTML = '<i data-lucide="' + (on ? 'check' : 'pencil') + '"></i>';
+    b.title = on ? 'Save name' : 'Rename roadmap';
+    if (window.lucide) lucide.createIcons();
+    sizeTitle();
+    if (on) { t.focus(); t.select(); }
+  }
+  // pointerdown is swallowed so clicking the checkmark doesn't blur first
+  // (which would flip the button back to a pencil before the click lands)
+  $('#titleEdit').addEventListener('pointerdown', function (e) { e.preventDefault(); });
   $('#titleEdit').addEventListener('click', function () {
     var t = $('#docTitle');
-    t.removeAttribute('readonly');
-    t.focus(); t.select();
+    if (t.hasAttribute('readonly')) setTitleEditing(true);
+    else t.blur(); // fires change → commit; the blur handler restores the pencil
   });
-  $('#docTitle').addEventListener('blur', function (e) {
-    e.target.setAttribute('readonly', '');
+  $('#docTitle').addEventListener('blur', function () {
+    setTitleEditing(false);
   });
   $('#docTitle').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') e.target.blur();
   });
+  $('#docTitle').addEventListener('input', sizeTitle);
 
   var filterTimer = null;
   $('#rowFilter').addEventListener('input', function (e) {

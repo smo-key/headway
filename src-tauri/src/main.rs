@@ -12,7 +12,7 @@ mod traffic {
 
     // keep in sync with trafficLightPosition in tauri.macos.conf.json
     const X: f64 = 16.0;
-    const Y: f64 = 26.0;
+    const Y: f64 = 22.0;
 
     pub fn apply(ns_window: *mut std::ffi::c_void) {
         unsafe {
@@ -79,6 +79,21 @@ fn main() {
                 ) {
                     if let Ok(ns) = _window.ns_window() {
                         traffic::apply(ns);
+                    }
+                    // AppKit re-lays the titlebar out again *after* this event
+                    // on focus changes (which is what hid the buttons on
+                    // blur), so re-apply once its pass has finished too
+                    for delay_ms in [50u64, 250, 600] {
+                        let w = _window.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                            let w2 = w.clone();
+                            let _ = w.run_on_main_thread(move || {
+                                if let Ok(ns) = w2.ns_window() {
+                                    traffic::apply(ns);
+                                }
+                            });
+                        });
                     }
                 }
             }
