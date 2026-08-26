@@ -105,8 +105,10 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode };
   }
+  var sprintSel = 'cur';    // Sprinting view: 'cur' | 'all' | a sprint number
+  var sprintMode = 'board'; // Sprinting view: 'board' (kanban) | 'grid'
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
   function applyUi(ui) {
@@ -134,6 +136,8 @@
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
+    sprintSel = ui.sprintSel != null ? ui.sprintSel : 'cur';
+    sprintMode = ui.sprintMode === 'grid' ? 'grid' : 'board';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -574,6 +578,11 @@
       renderPanel();
       return;
     }
+    if (view === 'sprints') {
+      renderSprintPage();
+      renderPanel();
+      return;
+    }
     if (view === 'budget') {
       // budgeting lives on the same board as planning: shared header
       // (phase lane + dates/sprints), frozen left pane, one scroll surface
@@ -792,6 +801,301 @@
       '</div></div>';
     if (window.lucide) lucide.createIcons();
   }
+
+  // ------------------------------------------------------------ sprinting view
+  function currentSprintNum() {
+    var meta = state.meta;
+    var now = new Date();
+    var d = RM.dateToDay(meta, new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
+    var wk = Math.max(0, Math.min(meta.numWeeks - 1, Math.floor((d || 0) / SPW())));
+    return RM.sprintNumForWeek(meta, wk);
+  }
+  function sprintNums() {
+    var meta = state.meta;
+    var out = [], seen = {};
+    for (var w = 0; w < meta.numWeeks; w++) {
+      var n = RM.sprintNumForWeek(meta, w);
+      if (!seen[n]) { seen[n] = true; out.push(n); }
+    }
+    return out;
+  }
+  function sprintLabel(n) {
+    var meta = state.meta;
+    var r = RM.sprintRange(meta, n);
+    var d = RM.weekStartDate(meta, Math.max(0, r.w0));
+    return (RM.sprintsEnabled(meta) ? 'Sprint ' + n + ' \u00B7 ' : 'Week of ') + RM.fmtShort(d);
+  }
+  function itemsInSprint(num) {
+    var meta = state.meta;
+    var r = RM.sprintRange(meta, num);
+    return state.items.filter(function (it) {
+      return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
+    });
+  }
+
+  function spStatusChip(kind, cur, act, id) {
+    var list = RM.statusesOf(state, kind);
+    var idx = list.indexOf(cur);
+    var pos = idx <= 0 ? 'first' : (idx === list.length - 1 ? 'done' : 'mid');
+    return '<button class="sp-status st-' + pos + '" data-' + act + '="' + id + '" title="Status \u2014 click to change">' +
+      esc(cur) + '</button>';
+  }
+
+  function spCardHtml(it) {
+    var color = '#' + RM.colorForItem(state, it);
+    var dates = isScheduled(it)
+      ? RM.fmtShort(RM.dayToDate(state.meta, it.startDay)) +
+        (it.milestone ? '' : ' \u2192 ' + RM.fmtShort(RM.spanEndDate(state.meta, it.startDay, RM.itemSpan(it))))
+      : '';
+    return '<div class="sp-card" data-spcard="' + it.id + '" tabindex="0">' +
+      '<div class="sp-card-top">' +
+      '<span class="r-num">#' + it.num + '</span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
+      '<span class="sp-card-dates">' + esc(dates) + '</span>' +
+      avatarStack(it.assignees) +
+      '</div>' +
+      '<div class="sp-card-title">' + esc(it.feature || '(untitled)') + '</div>' +
+      (it.size || it.epic
+        ? '<div class="sp-card-meta">' + (it.size ? '<span class="r-size">' + esc(it.size) + '</span>' : '') +
+          (it.epic ? '<span class="r-epic">' + esc(shorten(it.epic, 18)) + '</span>' : '') + '</div>'
+        : '') +
+      '</div>';
+  }
+
+  function spGroupHtml(num, items) {
+    var out = [];
+    var label = sprintSel === 'all' ? '<div class="sp-ghd">' + esc(sprintLabel(num)) + '</div>' : '';
+    if (sprintMode === 'board') {
+      var cols = RM.statusesOf(state, 'feature').map(function (st) {
+        var mine = items.filter(function (it) { return RM.statusOf(state, it, 'feature') === st; });
+        return '<div class="sp-col" data-spcol="' + esc(st) + '">' +
+          '<div class="sp-colhd">' + esc(st) + '<span class="band-count">' + mine.length + '</span></div>' +
+          '<div class="sp-colbody">' + mine.map(spCardHtml).join('') + '</div>' +
+          '</div>';
+      }).join('');
+      out.push(label + '<div class="sp-board">' + cols + '</div>');
+    } else {
+      var rows = [];
+      items.forEach(function (it) {
+        rows.push('<tr class="sp-r" data-id="' + it.id + '">' +
+          '<td class="sp-c-num">#' + it.num + '</td>' +
+          '<td class="sp-c-title"><span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:#' + RM.colorForItem(state, it) + '"></span>' +
+          '<input class="sp-title" data-sptitle="' + it.id + '" value="' + esc(it.feature) + '"></td>' +
+          '<td>' + spStatusChip('feature', RM.statusOf(state, it, 'feature'), 'spstatus', it.id) + '</td>' +
+          '<td class="sp-c-asg"><button class="sp-asgbtn" data-spasg="' + it.id + '" title="Assignees">' +
+          (avatarStack(it.assignees) || '<i data-lucide="user-plus"></i>') + '</button></td>' +
+          '<td>' + (RM.sizingEnabled(state) && !it.milestone
+            ? '<button class="sp-szbtn" data-spsize="' + it.id + '">' + (it.size ? esc(it.size) : '\u2014') + '</button>' : '') + '</td>' +
+          '<td class="sp-c-dur">' + (it.milestone ? '\u25C6' : (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '')) + '</td>' +
+          '</tr>');
+        (it.stories || []).forEach(function (st) {
+          rows.push('<tr class="sp-r sp-story" data-id="' + it.id + '" data-spst="' + st.id + '">' +
+            '<td class="sp-c-num"></td>' +
+            '<td class="sp-c-title sp-ind"><input class="sp-title" data-spsttitle="' + st.id + '" value="' + esc(st.title) + '"></td>' +
+            '<td>' + spStatusChip('story', RM.statusOf(state, st, 'story'), 'spststatus', st.id) + '</td>' +
+            '<td></td><td></td>' +
+            '<td class="sp-c-dur">' + (st.startDay != null && st.durDays != null ? totalWeeks(st) : '') + '</td>' +
+            '</tr>');
+        });
+      });
+      out.push(label +
+        '<table class="sp-grid"><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Assignees</th><th>Size</th><th>Dur</th></tr></thead>' +
+        '<tbody>' + (rows.join('') || '<tr><td colspan="6" class="p-none">Nothing scheduled in this sprint.</td></tr>') + '</tbody></table>');
+    }
+    return out.join('');
+  }
+
+  function renderSprintPage() {
+    var host = $('#sprintView');
+    if (!host) return;
+    var meta = state.meta;
+    var withS = RM.sprintsEnabled(meta);
+    var selNum = sprintSel === 'cur' ? currentSprintNum() : sprintSel;
+    var selLabel = sprintSel === 'all' ? (withS ? 'All sprints' : 'All weeks')
+      : sprintSel === 'cur' ? (withS ? 'Current sprint' : 'This week') + ' \u2014 ' + sprintLabel(selNum)
+      : sprintLabel(selNum);
+    var groups;
+    if (sprintSel === 'all') {
+      groups = sprintNums().map(function (n) { return { num: n, items: itemsInSprint(n) }; })
+        .filter(function (g) { return g.items.length; });
+    } else {
+      groups = [{ num: selNum, items: itemsInSprint(selNum) }];
+    }
+    host.innerHTML =
+      '<div class="sp-page">' +
+      '<div class="sp-toolbar">' +
+      '<button class="dd-btn" data-sprsel><span>' + esc(selLabel) + '</span><i data-lucide="chevron-down"></i></button>' +
+      '<div class="seg sp-modeseg">' +
+      '<button data-spmode="board"' + (sprintMode === 'board' ? ' class="on"' : '') + ' title="Kanban board"><i data-lucide="square-kanban"></i>Board</button>' +
+      '<button data-spmode="grid"' + (sprintMode === 'grid' ? ' class="on"' : '') + ' title="Editable list"><i data-lucide="rows-3"></i>Grid</button>' +
+      '</div>' +
+      '</div>' +
+      groups.map(function (g) { return spGroupHtml(g.num, g.items); }).join('') +
+      (groups.length ? '' : '<div class="p-none" style="padding:30px">Nothing scheduled' + (sprintSel === 'all' ? '' : ' in this sprint') + '.</div>') +
+      '</div>';
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // sprint view interactions
+  $('#sprintView').addEventListener('click', function (e) {
+    if (dragConsumedClick) { dragConsumedClick = false; return; }
+    var selBtn = e.target.closest('[data-sprsel]');
+    if (selBtn) {
+      var withS = RM.sprintsEnabled(state.meta);
+      var items = [
+        { label: withS ? 'Current sprint' : 'This week', checked: sprintSel === 'cur', fn: function () { sprintSel = 'cur'; saveLocal(); render(); } },
+        { label: withS ? 'All sprints' : 'All weeks', checked: sprintSel === 'all', fn: function () { sprintSel = 'all'; saveLocal(); render(); } },
+        { sep: true }
+      ];
+      sprintNums().forEach(function (n) {
+        items.push({ label: esc(sprintLabel(n)), checked: sprintSel === n, fn: function () {
+          sprintSel = n; saveLocal(); render();
+        } });
+      });
+      openDropdown(selBtn, items);
+      return;
+    }
+    var modeBtn = e.target.closest('[data-spmode]');
+    if (modeBtn) {
+      sprintMode = modeBtn.dataset.spmode;
+      saveLocal();
+      render();
+      return;
+    }
+    var stBtn = e.target.closest('[data-spstatus]');
+    if (stBtn) {
+      var sid = stBtn.dataset.spstatus;
+      openDropdown(stBtn, RM.statusesOf(state, 'feature').map(function (stName) {
+        var cur = RM.statusOf(state, RM.itemById(state, sid), 'feature');
+        return { label: esc(stName), checked: cur === stName, fn: function () {
+          commit('status', function (s) { RM.setStatus(s, RM.itemById(s, sid), 'feature', stName); });
+        } };
+      }));
+      return;
+    }
+    var ssBtn = e.target.closest('[data-spststatus]');
+    if (ssBtn) {
+      var stId = ssBtn.dataset.spststatus;
+      var rowElS = ssBtn.closest('[data-id]');
+      var pid = rowElS && rowElS.dataset.id;
+      var pIt = pid && RM.itemById(state, pid);
+      var stObj = pIt && storyById(pIt, stId);
+      if (!stObj) return;
+      openDropdown(ssBtn, RM.statusesOf(state, 'story').map(function (stName) {
+        return { label: esc(stName), checked: RM.statusOf(state, stObj, 'story') === stName, fn: function () {
+          commit('status', function (s) {
+            var t = storyById(RM.itemById(s, pid) || {}, stId);
+            if (t) RM.setStatus(s, t, 'story', stName);
+          });
+        } };
+      }));
+      return;
+    }
+    var asgBtn = e.target.closest('[data-spasg]');
+    if (asgBtn) {
+      var aid2 = asgBtn.dataset.spasg;
+      var itA = RM.itemById(state, aid2);
+      if (!itA) return;
+      if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
+      openDropdown(asgBtn, state.team.map(function (mm) {
+        var onA = (itA.assignees || []).indexOf(mm.id) !== -1;
+        return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA, fn: function () {
+          commit('assignees', function (s) {
+            var t = RM.itemById(s, aid2);
+            t.assignees = t.assignees || [];
+            var at = t.assignees.indexOf(mm.id);
+            if (at === -1) t.assignees.push(mm.id);
+            else t.assignees.splice(at, 1);
+          });
+        } };
+      }));
+      return;
+    }
+    var szBtn = e.target.closest('[data-spsize]');
+    if (szBtn) {
+      var szId = szBtn.dataset.spsize;
+      var itZ = RM.itemById(state, szId);
+      openDropdown(szBtn, [{ label: '<i>no size</i>', checked: !itZ.size, fn: function () { setItemSize(szId, null); } }]
+        .concat(RM.sizeOrderOf(state).map(function (sz) {
+          return { label: esc(sz), checked: itZ.size === sz, fn: function () { setItemSize(szId, sz); } };
+        })));
+      return;
+    }
+  });
+  $('#sprintView').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.dataset.sptitle) {
+      var nv = t.value;
+      commit('rename', function (s) { RM.itemById(s, t.dataset.sptitle).feature = nv; });
+      return;
+    }
+    if (t.dataset.spsttitle) {
+      var rowT = t.closest('[data-id]');
+      var pidT = rowT && rowT.dataset.id;
+      var nv2 = t.value;
+      commit('rename story', function (s) {
+        var stT = storyById(RM.itemById(s, pidT) || {}, t.dataset.spsttitle);
+        if (stT) stT.title = nv2;
+      });
+    }
+  });
+  // kanban: drag a card between status columns
+  $('#sprintView').addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return;
+    var card = e.target.closest('.sp-card');
+    if (!card || e.target.closest('button,input')) return;
+    drag = { kind: 'spcard', itemId: card.dataset.spcard, x0: e.clientX, y0: e.clientY, moved: false, ghost: null };
+  });
+  function spCardDragMove(e) {
+    if (!drag.ghost) {
+      var src = $('#sprintView .sp-card[data-spcard="' + drag.itemId + '"]');
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'sp-card sp-card-ghost';
+      drag.ghost.textContent = (RM.itemById(state, drag.itemId) || {}).feature || '';
+      document.body.appendChild(drag.ghost);
+      if (src) src.classList.add('sp-dragging');
+    }
+    drag.ghost.style.left = (e.clientX + 10) + 'px';
+    drag.ghost.style.top = (e.clientY + 8) + 'px';
+    var col = document.elementFromPoint(e.clientX, e.clientY);
+    col = col && col.closest ? col.closest('.sp-col') : null;
+    $$('#sprintView .sp-col').forEach(function (c) { c.classList.toggle('drop', c === col); });
+    drag.overCol = col ? col.dataset.spcol : null;
+  }
+  function spCardDragEnd(d) {
+    if (d.ghost) d.ghost.remove();
+    $$('#sprintView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
+    if (!d.overCol) { render(); return; }
+    var target = d.overCol;
+    commit('status', function (s) {
+      var t = RM.itemById(s, d.itemId);
+      if (t) RM.setStatus(s, t, 'feature', target);
+    });
+  }
+  // right-click a card / grid row: quick status + jump to Planning
+  $('#sprintView').addEventListener('contextmenu', function (e) {
+    var card = e.target.closest('.sp-card,[data-id].sp-r');
+    if (!card || e.target.closest('input')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var cid = card.dataset.spcard || card.dataset.id;
+    var itC = RM.itemById(state, cid);
+    if (!itC) return;
+    var items = RM.statusesOf(state, 'feature').map(function (stName) {
+      return { label: esc(stName), checked: RM.statusOf(state, itC, 'feature') === stName, fn: function () {
+        commit('status', function (s) { RM.setStatus(s, RM.itemById(s, cid), 'feature', stName); });
+      } };
+    });
+    items.push({ sep: true });
+    items.push({ icon: 'chart-gantt', label: 'Show in Planning', fn: function () {
+      view = 'planning';
+      selectedId = cid;
+      panelOpen = true;
+      saveLocal();
+      render();
+    } });
+    openContextMenu(e.clientX, e.clientY, items);
+  });
 
   function renderScopeHeader() {
     var out = ['<div class="sc-hrow">'];
@@ -3717,6 +4021,7 @@
     else if (drag.kind === 'port') portDragMove(e);
     else if (drag.kind === 'scol') scolDragMove(e);
     else if (drag.kind === 'scolmove') scolMoveMove(e);
+    else if (drag.kind === 'spcard') spCardDragMove(e);
     else if (drag.kind === 'rfill') rfillMove(e);
     else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
@@ -3783,6 +4088,7 @@
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
     else if (d.kind === 'scolmove') scolMoveEnd(d);
+    else if (d.kind === 'spcard') spCardDragEnd(d);
     else if (d.kind === 'rfill') rfillEnd(d);
     else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
@@ -5244,6 +5550,24 @@
         '<label class="p-check" title="Roster limits scheduling and validation; shows the availability row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
         '<div class="m-hint">People and their weekly hours live in the Resources panel under the timeline.</div>' +
         '</section>',
+      statuses: ['feature', 'story'].map(function (kind) {
+        var list = RM.statusesOf(state, kind);
+        var rows = list.map(function (stName, si2) {
+          var last = si2 === list.length - 1;
+          return '<tr>' +
+            '<td><input data-sustat="' + kind + '" data-old="' + esc(stName) + '" value="' + esc(stName) + '" aria-label="Status name"></td>' +
+            '<td>' + (last ? '<span class="band-bucket-tag">done</span>' : '') + '</td>' +
+            '<td class="hol-x">' + (list.length > 2 ? '<button data-sustatrm="' + kind + ':' + esc(stName) + '" title="Remove status"><i data-lucide="x"></i></button>' : '') + '</td>' +
+            '</tr>';
+        }).join('');
+        return '<section class="su-card"><h2>' + (kind === 'feature' ? 'Feature statuses' : 'Story statuses') + '</h2>' +
+          '<table class="hol-table"><thead><tr><th>Status</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<div class="p-row" style="margin-top:8px"><input id="suStAdd-' + kind + '" placeholder="New status\u2026"><button data-sustatadd="' + kind + '" class="fixed">Add</button></div>' +
+          (kind === 'feature'
+            ? '<div class="m-hint">Used on the Sprinting board and grid. The last status counts as done.</div>'
+            : '') +
+          '</section>';
+      }).join(''),
       sizing:
         '<section class="su-card"><h2>Approach</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
@@ -5290,6 +5614,7 @@
       ['phases', 'Phases', 'flag'],
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
+      ['statuses', 'Statuses', 'list-checks'],
       ['sizing', 'Sizing', 'ruler']
     ]],
     ['Personal', [
@@ -5350,6 +5675,19 @@
       commit('work days', function (s2) {
         RM.changeWorkWeek(s2, { workDays: list });
       });
+      return;
+    }
+    if (t.dataset.sustat != null) {
+      var stKind = t.dataset.sustat;
+      var oldSt = t.dataset.old;
+      var newSt = t.value.trim();
+      if (!newSt || newSt === oldSt) { render(); return; }
+      if (RM.statusesOf(state, stKind).indexOf(newSt) !== -1) {
+        toast('\u201C' + newSt + '\u201D already exists', 'err');
+        render();
+        return;
+      }
+      commit('rename status', function (s2) { RM.renameStatus(s2, stKind, oldSt, newSt); });
       return;
     }
     if (t.dataset.rcname != null) {
@@ -5483,6 +5821,22 @@
       commit('add workstream', function (s2) {
         if (!s2.wsColors[wv]) s2.wsColors[wv] = RM.DEFAULT_WS_COLORS[wv] || RM.PALETTE.product;
       });
+      return;
+    }
+    if (t.dataset.sustatadd) {
+      var addKind = t.dataset.sustatadd;
+      var addInp = $('#suStAdd-' + addKind);
+      var addVal = addInp && addInp.value.trim();
+      if (!addVal) return;
+      if (RM.statusesOf(state, addKind).indexOf(addVal) !== -1) { toast('Status already exists', 'err'); return; }
+      commit('add status', function (s2) { RM.addStatus(s2, addKind, addVal); });
+      return;
+    }
+    if (t.dataset.sustatrm) {
+      var rmParts = t.dataset.sustatrm.split(':');
+      var rmKind = rmParts.shift();
+      var rmName = rmParts.join(':');
+      commit('remove status', function (s2) { RM.removeStatus(s2, rmKind, rmName); });
       return;
     }
     if (t.dataset.suwps != null) {

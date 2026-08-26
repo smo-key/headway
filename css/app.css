@@ -2047,8 +2047,7 @@ body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
 #zoomCtl svg.lucide { width: 14px; height: 14px; }
 /* on Planning the cluster sits above the Resources panel, not over it */
 body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px); }
-body.present #zoomCtl { bottom: 14px; }
-#resPanel:not(.collapsed) ~ #zoomCtl { bottom: 14px; }
+body.present #zoomCtl { bottom: 14px !important; }
 
 /* budget chips follow the scoping grid language: full-height rectangular
    cells, keyboard focusable, no pill styling */
@@ -2102,6 +2101,98 @@ body.present #zoomCtl { bottom: 14px; }
 
 /* ------------------------------------------------- reports dashboard */
 #reportsView { display: none; }
+
+/* ------------------------------------------------------------- sprinting */
+#sprintView { display: none; }
+body[data-view="sprints"] #sprintView { display: block; flex: 1; overflow: auto; background: var(--paper); }
+body[data-view="sprints"] #board,
+body[data-view="sprints"] #leftRzLine,
+body[data-view="sprints"] #resPanel,
+body[data-view="sprints"] .filter-kbd,
+body[data-view="sprints"] #rowFilter { display: none; }
+.sp-page { padding: 18px 22px 40px; max-width: 1500px; margin: 0 auto; }
+.sp-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.sp-toolbar .dd-btn { min-width: 230px; }
+.sp-modeseg button { padding: 6px 12px; }
+.sp-ghd {
+  font-size: 13px; font-weight: 700; color: var(--ink);
+  margin: 22px 0 10px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.sp-board {
+  display: grid; gap: 12px;
+  grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr);
+  align-items: start;
+  overflow-x: auto; padding-bottom: 8px;
+}
+.sp-col {
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  min-height: 120px;
+}
+.sp-col.drop { border-color: var(--blue); background: var(--blue-soft); }
+.sp-colhd {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ink-2);
+  padding: 4px 6px 8px;
+}
+.sp-colbody { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.sp-card {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 9px 11px;
+  cursor: grab;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .06);
+}
+.sp-card:hover { border-color: var(--line-3); }
+.sp-card:focus-visible { outline: 2px solid var(--blue); }
+.sp-card.sp-dragging { opacity: .4; }
+.sp-card-ghost {
+  position: fixed; z-index: 140; pointer-events: none;
+  max-width: 220px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 12px;
+  box-shadow: var(--shadow-2);
+}
+.sp-card-top { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.sp-card-top .r-num { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.sp-card-dates { flex: 1; font-size: 10px; color: var(--ink-3); font-family: var(--mono); }
+.sp-card-title { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.35; }
+.sp-card-meta { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+.sp-card-meta .r-size { border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
+.sp-card-meta .r-epic { font-size: 10.5px; color: var(--ink-3); }
+.sp-grid { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.sp-grid th {
+  text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ink-3); padding: 8px 10px; border-bottom: 1px solid var(--line-2); background: var(--paper-2);
+}
+.sp-grid td { padding: 4px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; vertical-align: middle; }
+.sp-grid .sp-c-num { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); width: 44px; }
+.sp-grid .sp-c-title { display: flex; align-items: center; gap: 7px; }
+.sp-grid .sp-c-title.sp-ind { padding-left: 26px; }
+.sp-grid .sp-title {
+  flex: 1; min-width: 220px; border-color: transparent; background: transparent;
+  padding: 4px 6px;
+}
+.sp-grid .sp-title:hover { border-color: var(--line-2); background: var(--surface); }
+.sp-grid .sp-title:focus { border-color: var(--blue); background: var(--surface); }
+.sp-grid .sp-story .sp-title { font-size: 12px; color: var(--ink-2); }
+.sp-status {
+  border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 2px 10px; font-size: 11px; font-weight: 600;
+  background: var(--surface); color: var(--ink-2);
+}
+.sp-status.st-done { color: var(--ok); border-color: var(--ok); }
+.sp-status.st-mid { color: var(--blue); border-color: var(--blue); }
+.sp-asgbtn, .sp-szbtn {
+  border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 3px 6px;
+}
+.sp-asgbtn:hover, .sp-szbtn:hover { border-color: var(--line-2); background: var(--surface); box-shadow: none; }
+.sp-asgbtn svg { width: 14px; height: 14px; color: var(--ink-3); }
+.sp-c-dur { font-family: var(--mono); font-size: 11px; color: var(--ink-2); width: 56px; }
+
 body[data-view="reports"] #reportsView { display: block; flex: 1; overflow: auto; }
 body[data-view="reports"] #board,
 body[data-view="reports"] #leftRzLine,

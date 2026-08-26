@@ -131,6 +131,80 @@
     });
   };
 
+  // workflow statuses — features and stories carry separate lists; the
+  // LAST status of a list means done (kept in sync with the done flag)
+  RM.DEFAULT_STATUSES = {
+    feature: ['Not started', 'In progress', 'Blocked', 'Done'],
+    story: ['To do', 'In progress', 'Done']
+  };
+  RM.statusesOf = function (state, kind) {
+    var st = state.meta && state.meta.statuses;
+    var list = st && Array.isArray(st[kind]) ? st[kind] : null;
+    return list && list.length ? list.slice() : RM.DEFAULT_STATUSES[kind].slice();
+  };
+  // effective status: explicit value, else done -> last, else first
+  RM.statusOf = function (state, obj, kind) {
+    var list = RM.statusesOf(state, kind);
+    if (obj.status && list.indexOf(obj.status) !== -1) return obj.status;
+    return obj.done ? list[list.length - 1] : list[0];
+  };
+  RM.setStatus = function (state, obj, kind, status) {
+    var list = RM.statusesOf(state, kind);
+    if (list.indexOf(status) === -1) return;
+    obj.status = status;
+    obj.done = status === list[list.length - 1];
+  };
+  RM.renameStatus = function (state, kind, oldName, newName) {
+    newName = String(newName || '').trim();
+    var list = RM.statusesOf(state, kind);
+    var i = list.indexOf(oldName);
+    if (!newName || i === -1 || list.indexOf(newName) !== -1) return false;
+    list[i] = newName;
+    state.meta.statuses = state.meta.statuses || {};
+    state.meta.statuses[kind] = list;
+    var fix = function (o) { if (o.status === oldName) o.status = newName; };
+    state.items.forEach(function (it) {
+      if (kind === 'feature') fix(it);
+      else (it.stories || []).forEach(fix);
+    });
+    return true;
+  };
+  RM.addStatus = function (state, kind, name) {
+    name = String(name || '').trim();
+    var list = RM.statusesOf(state, kind);
+    if (!name || list.indexOf(name) !== -1) return false;
+    // new statuses land before the done (last) column
+    list.splice(Math.max(0, list.length - 1), 0, name);
+    state.meta.statuses = state.meta.statuses || {};
+    state.meta.statuses[kind] = list;
+    return true;
+  };
+  RM.removeStatus = function (state, kind, name) {
+    var list = RM.statusesOf(state, kind);
+    if (list.length <= 2 || list.indexOf(name) === -1) return false;
+    list = list.filter(function (x) { return x !== name; });
+    state.meta.statuses = state.meta.statuses || {};
+    state.meta.statuses[kind] = list;
+    var fix = function (o) { if (o.status === name) o.status = null; };
+    state.items.forEach(function (it) {
+      if (kind === 'feature') fix(it);
+      else (it.stories || []).forEach(fix);
+    });
+    return true;
+  };
+  // weeks [w0, w1) of a numbered sprint
+  RM.sprintRange = function (meta, num) {
+    var si = RM.sprintInfo(meta);
+    var w0 = si.anchorWeek + (num - si.firstNum) * si.wps;
+    return { w0: w0, w1: w0 + si.wps };
+  };
+  RM.itemInWeeks = function (meta, it, w0, w1) {
+    if (it.startDay == null) return false;
+    var S = RM.slotsOf(meta);
+    var span = Math.max(1, (it.durDays || 0) + (it.riskDays || 0));
+    return it.startDay < w1 * S && it.startDay + span > w0 * S;
+  };
+
   RM.DEFAULT_TEAM_TYPES = ['Software Engineer', 'Product Designer', 'Product Manager', 'Data Scientist', 'QA Engineer'];
   RM.DEFAULT_WORK_TYPE = 'Software Engineer';
   RM.WEEK_HOURS = 40; // one person's full week
@@ -785,6 +859,20 @@
       var hex = String(m.defaultWsColor || '').replace(/^#/, '').toUpperCase();
       return /^[0-9A-F]{6}$/.test(hex) ? hex : RM.PALETTE.product;
     })();
+    // workflow statuses (feature + story lists may differ)
+    m.statuses = (function () {
+      var out = {};
+      ['feature', 'story'].forEach(function (kind) {
+        var raw = m.statuses && Array.isArray(m.statuses[kind]) ? m.statuses[kind] : null;
+        var seenS = {}, list = [];
+        (raw || RM.DEFAULT_STATUSES[kind]).forEach(function (x) {
+          x = String(x || '').trim();
+          if (x && !seenS[x]) { seenS[x] = true; list.push(x); }
+        });
+        out[kind] = list.length >= 2 ? list : RM.DEFAULT_STATUSES[kind].slice();
+      });
+      return out;
+    })();
     // assessment column scheme — docs that predate schemes keep their Risk
     // column only if they actually used it; new docs start without one
     if (!RM.RISK_SCHEMES[m.riskScheme]) {
@@ -886,6 +974,8 @@
         // team-member ids working on this feature (validated against the
         // roster once the team is normalized below)
         assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
+        // workflow status; null = derived from done (last) / first
+        status: it.status && m.statuses.feature.indexOf(it.status) !== -1 ? it.status : null,
         done: !!it.done,
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
@@ -893,6 +983,7 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays > 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            status: s.status && m.statuses.story.indexOf(s.status) !== -1 ? s.status : null,
             // rich-text (sanitized HTML) story body + acceptance criteria
             description: typeof s.description === 'string' ? s.description : '',
             ac: typeof s.ac === 'string' ? s.ac : '',

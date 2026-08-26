@@ -319,9 +319,9 @@ click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 7 &&
+ok(doc.querySelectorAll('#setupView .su-tab').length === 8 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 7 vertical tabs under Project + Personal sections');
+  'settings rail: 8 vertical tabs under Project + Personal sections');
 ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelector('#suCapEnable'),
   'Team tab shows roles + work week + capacity');
 ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
@@ -1525,6 +1525,68 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // export renders through toBlob (folder choice happens in the picker/dialog)
 ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob renderer for save-to-folder flows');
+
+// ---------------------------------------------------------------- sprinting view + statuses
+{
+  ok(!!doc.querySelector('#viewTabs [data-view="sprints"]'), 'Sprinting tab sits in the view tabs');
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  ok(doc.body.dataset.view === 'sprints', 'view switches to Sprinting');
+  ok(!!doc.querySelector('#sprintView .sp-toolbar [data-sprsel]'), 'sprint selector present');
+  ok(doc.querySelectorAll('#sprintView .sp-col').length === 4, 'kanban board shows the 4 default feature statuses');
+  ok(doc.querySelectorAll('#sprintView .sp-card').length > 0, 'cards rendered for the selected sprint');
+
+  // grid mode: editable + tab-navigable
+  click(doc.querySelector('#sprintView [data-spmode="grid"]'));
+  ok(doc.querySelectorAll('#sprintView .sp-grid').length > 0, 'grid mode renders a table');
+  const titleInp = doc.querySelector('#sprintView [data-sptitle]');
+  ok(!!titleInp && titleInp.tagName === 'INPUT', 'grid titles are real inputs (tabbable)');
+  const gid = titleInp.dataset.sptitle;
+  titleInp.value = 'Renamed in sprint grid';
+  titleInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().items.find(i => i.id === gid).feature === 'Renamed in sprint grid', 'grid title edit commits');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+
+  // status chip commits + syncs the done flag on the last status
+  const stBtn = doc.querySelector('#sprintView [data-spstatus]');
+  const stId = stBtn.dataset.spstatus;
+  click(stBtn);
+  const doneOpt = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^Done$/.test(b.textContent.trim()));
+  ok(!!doneOpt, 'status dropdown lists the feature statuses');
+  click(doneOpt);
+  const stItem = state().items.find(i => i.id === stId);
+  ok(stItem.status === 'Done' && stItem.done === true, 'last status marks the item done');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+
+  // all-sprints grouping
+  click(doc.querySelector('#sprintView [data-sprsel]'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /All sprints/.test(b.textContent)));
+  ok(doc.querySelectorAll('#sprintView .sp-ghd').length > 1, 'All sprints groups by sprint');
+  click(doc.querySelector('#sprintView [data-sprsel]'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Current sprint/.test(b.textContent)));
+  click(doc.querySelector('#sprintView [data-spmode="board"]'));
+}
+
+// statuses configurable in Setup, feature and story lists separate
+{
+  suTab('statuses');
+  ok(doc.querySelectorAll('#setupView .su-card').length === 2, 'Statuses tab: feature + story cards');
+  ok(doc.querySelectorAll('#setupView [data-sustat="feature"]').length === 4 &&
+     doc.querySelectorAll('#setupView [data-sustat="story"]').length === 3,
+    'default lists: 4 feature statuses, 3 story statuses');
+  const inp = doc.querySelector('#setupView [data-sustat="feature"][data-old="Blocked"]');
+  inp.value = 'Waiting';
+  inp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.statuses.feature.includes('Waiting') && !state().meta.statuses.feature.includes('Blocked'),
+    'renaming a status commits');
+  const addInp = doc.querySelector('#suStAdd-story');
+  addInp.value = 'In review';
+  click(doc.querySelector('#setupView [data-sustatadd="story"]'));
+  ok(state().meta.statuses.story.indexOf('In review') === state().meta.statuses.story.length - 2,
+    'new story status lands before Done');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 
 // ---------------------------------------------------------------- export smoke
 ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',

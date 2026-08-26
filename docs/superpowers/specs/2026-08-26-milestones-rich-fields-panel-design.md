@@ -272,3 +272,33 @@ final report.
   `risk` (manual L/M/H), `auto` (computed dependency risk, read-only),
   `confidence` (H/M/L), `moscow` (M/S/C/W). Column label follows the
   scheme (Risk / Confidence / Priority); configured in Setup → Sizing.
+
+## 12. Batch 5 (2026-08-26, evening)
+
+- **Sprinting view** (new tab after Budgeting): current sprint by default,
+  any sprint via selector, or All sprints grouped; kanban board (drag
+  cards between status columns) or a fully tab-navigable editable grid
+  (features + stories: title, status, assignees, size, duration).
+- **Statuses**: configurable per document in Setup → Statuses, separate
+  feature and story lists; the last status counts as done and syncs the
+  done flag.
+- **True 1–7 day work week**: the day-index space now has exactly as many
+  slots per week as the checked working days; day indices re-encode
+  through calendar dates on any work-week change; legacy 5-slot docs
+  migrate once.
+- **Sprint length**: Disabled (plain weeks) / 1 / 2 / 4 weeks.
+- **Assignees**: features carry roster assignees; people render as
+  deterministic-color initial avatars (panel, planning rows, Budgeting,
+  Resources, sprint cards); Resources rows read as Name | Role columns.
+- **Scoping**: one user-ordered column list across fixed chips and text
+  columns (drag headers to reorder); new Start date column; new default
+  order leads with Description and Epic. Milestone rows keep editable
+  size/risk/duration chips; duration 0 ⇄ milestone, empty = unscheduled;
+  milestone dots are diamonds.
+- **Polish**: today line above the header (ducks under the frozen pane);
+  filter input with search icon, right-aligned ⌘F kbd chip and far-right
+  clear button; done text/checkmarks at full opacity; thicker milestone
+  diamonds; expand keeps the app header and toggles from the in-place
+  zoom cluster, which sits above the Resources panel; phase description
+  is rich multiline; '- ' / '1. ' auto-lists in rich editors; panel
+  section headers left-aligned with icons; NO_SIZE validation removed.
