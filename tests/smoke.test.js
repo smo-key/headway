@@ -60,6 +60,32 @@ const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles:
 
 // ---------------------------------------------------------------- boot
 ok(errors.length === 0, 'no window errors during boot' + (errors.length ? ' — ' + errors.join('; ') : ''));
+
+// ------------------------------------------------------------ start page
+// a fresh launch lands on the start page; entering via Continue restores
+// the localStorage session and reveals the editor
+ok(doc.documentElement.dataset.theme === 'light' || doc.documentElement.dataset.theme === 'dark',
+  'theme stamped on <html> (' + doc.documentElement.dataset.theme + ')');
+ok(doc.body.classList.contains('start') && !doc.querySelector('#startPage').hidden,
+  'boot shows the start page');
+ok(doc.querySelector('#startBody [data-sp-new]') && doc.querySelector('#startBody [data-sp-opendlg]'),
+  'start page offers New project and Open');
+{
+  click(doc.querySelector('#startBody [data-sp-settings]'));
+  ok(!doc.querySelector('#modalHost').hidden &&
+    doc.querySelectorAll('#modalHost [data-pref-theme]').length === 3,
+    'start page settings modal offers the three themes');
+  click(doc.querySelector('#modalHost [data-pref-theme="dark"]'));
+  ok(doc.documentElement.dataset.theme === 'dark', 'picking Dark stamps data-theme=dark');
+  click(doc.querySelector('#modalHost [data-pref-theme="system"]'));
+  ok(window.localStorage.getItem('headway-theme-v1') === 'system', 'theme choice persists');
+  click(doc.querySelector('#modalHost [data-m="x2"]'));
+}
+const contBtn = doc.querySelector('#startBody [data-sp-continue]');
+ok(!!contBtn, 'browser session offers Continue where you left off');
+click(contBtn);
+ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidden,
+  'Continue enters the editor');
 ok(doc.querySelectorAll('#rows .row.band').length === 6, 'six phase bands rendered');
 const itemRows = doc.querySelectorAll('#rows .row.item').length;
 ok(itemRows > 100, 'item rows rendered (' + itemRows + ')');

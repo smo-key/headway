@@ -32,13 +32,20 @@
     if (t) t.title = currentPath || '';
   }
 
-  var LAST_KEY = 'headway-last-path';
   function setPath(p) {
     currentPath = p;
-    try { localStorage.setItem(LAST_KEY, p || ''); } catch (e) { /* storage optional */ }
     markTitle();
     rewatch();
+    if (p) app().noteRecent(p); // the start page's Recent list
   }
+
+  // migrate the pre-start-page single last-path memory into the recents list
+  (function () {
+    try {
+      var p = localStorage.getItem('headway-last-path');
+      if (p) { app().noteRecent(p); localStorage.removeItem('headway-last-path'); }
+    } catch (e) { /* storage optional */ }
+  })();
 
   // Watch the parent directory, not the file: editors and sync clients
   // (OneDrive included) replace files by rename, which kills a file watch.
@@ -141,28 +148,22 @@
       });
     },
 
+    // open a known path (start page recents) — rejects if unreadable
+    openPath: function (p) {
+      return fs.readFile(p).then(function (bytes) {
+        var sig = sigOf(bytes);
+        return app().loadBuffer(bytes.buffer, basename(p)).then(function () {
+          lastSig = sig;
+        });
+      }).then(function () {
+        setPath(p);
+        return p;
+      });
+    },
+
     currentPath: function () { return currentPath; },
     basename: basename
   };
-
-  // reopen the last document on launch (falls back to the blank/localStorage
-  // boot if the file has moved or gone)
-  (function reopenLast() {
-    var p = null;
-    try { p = localStorage.getItem(LAST_KEY); } catch (e) { /* storage optional */ }
-    if (!p) return;
-    fs.readFile(p).then(function (bytes) {
-      var sig = sigOf(bytes);
-      return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
-        lastSig = sig;
-      });
-    }).then(function () {
-      setPath(p);
-      app().toast('Reopened “' + basename(p) + '”');
-    }).catch(function () {
-      try { localStorage.removeItem(LAST_KEY); } catch (e) { /* ignore */ }
-    });
-  })();
 
   // ------------------------------------------------------- window chrome
   // The header doubles as the titlebar. macOS: native titlebar hidden with
@@ -184,9 +185,10 @@
     document.body.classList.add(isMac ? 'chrome-mac' : 'chrome-win');
 
     // explicit drag handler — the built-in data-tauri-drag-region listener
-    // has proven unreliable here, so start the drag ourselves
+    // has proven unreliable here, so start the drag ourselves. Document-level
+    // so the start page's bar drags too.
     var win = window.__TAURI__.window.getCurrentWindow();
-    topbar.addEventListener('mousedown', function (e) {
+    document.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
       var t = e.target;
       if (!t.hasAttribute || !t.hasAttribute('data-tauri-drag-region')) return;
@@ -194,36 +196,56 @@
       if (e.detail >= 2) win.toggleMaximize();
       else win.startDragging();
     });
+
+    // macOS native fullscreen hides the traffic lights — body.fullscreen
+    // lets the CSS reclaim their header inset
+    function syncFullscreen() {
+      win.isFullscreen().then(function (fs) {
+        document.body.classList.toggle('fullscreen', fs);
+      }).catch(function () { /* window gone */ });
+    }
+    win.onResized(syncFullscreen);
+    syncFullscreen();
     if (isMac) return;
 
-    // Windows caption buttons
+    // Windows caption buttons — one set in the editor header, one on the
+    // start page bar (whichever surface is visible carries them)
     var GLYPH = {
       min: '<svg viewBox="0 0 10 10" width="10" height="10"><path d="M0 5h10" stroke="currentColor" fill="none"/></svg>',
       max: '<svg viewBox="0 0 10 10" width="10" height="10"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor" fill="none"/></svg>',
       restore: '<svg viewBox="0 0 10 10" width="10" height="10"><rect x=".5" y="2.5" width="7" height="7" stroke="currentColor" fill="none"/><path d="M2.5 2.5v-2h7v7h-2" stroke="currentColor" fill="none"/></svg>',
       close: '<svg viewBox="0 0 10 10" width="10" height="10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" fill="none"/></svg>'
     };
-    var bar = document.createElement('div');
-    bar.className = 'win-caption';
-    bar.innerHTML =
-      '<button class="cap-min" title="Minimize" aria-label="Minimize">' + GLYPH.min + '</button>' +
-      '<button class="cap-max" title="Maximize" aria-label="Maximize">' + GLYPH.max + '</button>' +
-      '<button class="cap-close" title="Close" aria-label="Close">' + GLYPH.close + '</button>';
-    topbar.appendChild(bar);
+    var bars = [];
+    function makeCaptionBar(host) {
+      if (!host) return;
+      var bar = document.createElement('div');
+      bar.className = 'win-caption';
+      bar.innerHTML =
+        '<button class="cap-min" title="Minimize" aria-label="Minimize">' + GLYPH.min + '</button>' +
+        '<button class="cap-max" title="Maximize" aria-label="Maximize">' + GLYPH.max + '</button>' +
+        '<button class="cap-close" title="Close" aria-label="Close">' + GLYPH.close + '</button>';
+      bar.querySelector('.cap-min').addEventListener('click', function () { win.minimize(); });
+      bar.querySelector('.cap-max').addEventListener('click', function () {
+        win.toggleMaximize().then(syncMaxGlyph);
+      });
+      bar.querySelector('.cap-close').addEventListener('click', function () { win.close(); });
+      host.appendChild(bar);
+      bars.push(bar);
+    }
+    makeCaptionBar(topbar);
+    makeCaptionBar(document.getElementById('startBar'));
 
     function syncMaxGlyph() {
       win.isMaximized().then(function (max) {
-        var b = bar.querySelector('.cap-max');
-        b.innerHTML = max ? GLYPH.restore : GLYPH.max;
-        b.title = max ? 'Restore' : 'Maximize';
-        b.setAttribute('aria-label', b.title);
+        bars.forEach(function (bar) {
+          var b = bar.querySelector('.cap-max');
+          b.innerHTML = max ? GLYPH.restore : GLYPH.max;
+          b.title = max ? 'Restore' : 'Maximize';
+          b.setAttribute('aria-label', b.title);
+        });
       });
     }
-    bar.querySelector('.cap-min').addEventListener('click', function () { win.minimize(); });
-    bar.querySelector('.cap-max').addEventListener('click', function () {
-      win.toggleMaximize().then(syncMaxGlyph);
-    });
-    bar.querySelector('.cap-close').addEventListener('click', function () { win.close(); });
     win.onResized(syncMaxGlyph);
     syncMaxGlyph();
   })();

@@ -5,6 +5,42 @@
   var LS_KEY = 'headway-v1';
   var UI_KEY = 'headway-ui-v1';
 
+  // ------------------------------------------------------------ theme
+  // Personal, per-machine — deliberately NOT part of uiSnapshot(), so a
+  // shared .xlsx never overrides another machine's theme. index.html stamps
+  // data-theme before first paint; this manager owns it from then on.
+  var THEME_KEY = 'headway-theme-v1';
+  var themePref = 'system'; // system | light | dark
+  try { themePref = localStorage.getItem(THEME_KEY) || 'system'; } catch (e) { /* storage optional */ }
+  if (['system', 'light', 'dark'].indexOf(themePref) === -1) themePref = 'system';
+  var themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  function darkActive() {
+    return themePref === 'dark' || (themePref === 'system' && !!(themeMedia && themeMedia.matches));
+  }
+  function applyTheme() {
+    document.documentElement.dataset.theme = darkActive() ? 'dark' : 'light';
+  }
+  function setTheme(pref) {
+    themePref = pref;
+    try { localStorage.setItem(THEME_KEY, pref); } catch (e) { /* storage optional */ }
+    applyTheme();
+    if (state) render(); // theme-aware paints (resource heat cells) refresh
+  }
+  if (themeMedia && themeMedia.addEventListener) {
+    themeMedia.addEventListener('change', function () {
+      if (themePref !== 'system') return;
+      applyTheme();
+      if (state) render();
+    });
+  }
+  applyTheme();
+  var THEME_CHOICES = [['system', 'System theme', 'monitor'], ['light', 'Light theme', 'sun'], ['dark', 'Dark theme', 'moon']];
+  function themeMenuItems() {
+    return THEME_CHOICES.map(function (t) {
+      return { icon: t[2], label: t[1], checked: themePref === t[0], fn: function () { setTheme(t[0]); } };
+    });
+  }
+
   // ------------------------------------------------------------ app state
   var state;                 // document state (undo-tracked)
   var validation;            // RM.validate cache
@@ -2279,6 +2315,16 @@
     });
   }
 
+  // right-click on app chrome (header, setup, start page background) →
+  // quick app menu: theme switch lives here
+  document.addEventListener('contextmenu', function (e) {
+    if (e.defaultPrevented) return; // rows / resources handled it already
+    if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (!e.target.closest('#topbar, #setupView, #startPage')) return;
+    e.preventDefault();
+    openContextMenu(e.clientX, e.clientY, themeMenuItems());
+  });
+
   // menu-item builders shared by the panel dropdowns and row context menus
   function movePhaseMenu(itemId) {
     var it = RM.itemById(state, itemId);
@@ -3348,11 +3394,9 @@
   function menuItems(name) {
     if (name === 'file') {
       return [
-        { icon: 'file', label: 'New blank roadmap', fn: function () {
-          confirmBox('Start a blank roadmap?', 'Current roadmap stays in undo history.', 'New roadmap', function () {
-            replaceState('blank', blankState());
-          });
-        } },
+        { icon: 'house', label: 'Start page', fn: showStart },
+        { sep: true },
+        { icon: 'file-plus-2', label: 'New project…', fn: newProjectModal },
         { icon: 'folder-open', label: 'Open .xlsx…', fn: function () {
           if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
           else $('#filePick').click();
@@ -3457,7 +3501,8 @@
       { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
       { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
       { icon: 'crosshair', label: 'Scroll to today', fn: goToday },
-    ].filter(Boolean));
+      { sep: true },
+    ].concat(themeMenuItems()).filter(Boolean));
   }
 
   var openMenuName = null;
@@ -4316,6 +4361,15 @@
 
   function fmtH(h) { return h % 1 === 0 ? String(h) : String(Math.round(h * 10) / 10); }
 
+  // blend hex a → hex b (no '#') by t in [0,1]
+  function mixHex(a, b, t) {
+    function c(h, i) { return parseInt(h.slice(i, i + 2), 16); }
+    function h2(v) { var s = Math.round(v).toString(16).toUpperCase(); return s.length === 1 ? '0' + s : s; }
+    return h2(c(a, 0) + (c(b, 0) - c(a, 0)) * t) +
+      h2(c(a, 2) + (c(b, 2) - c(a, 2)) * t) +
+      h2(c(a, 4) + (c(b, 4) - c(a, 4)) * t);
+  }
+
   function renderResources() {
     $('#resCount').textContent = state.team.length;
     $('#resPanel').classList.toggle('collapsed', resCollapsed);
@@ -4330,10 +4384,10 @@
       for (var w = 0; w < meta.numWeeks; w++) {
         var h = RM.memberHoursForWeek(meta, m, w);
         var cls = h > RM.WEEK_HOURS ? ' rh-over' : '';
-        // white at 0h → light blue at 20h → blue at 40h (kept light enough
-        // that the black hour label stays readable)
+        // 0h → 40h ramps toward blue from the theme's ground: white in light
+        // (dark label), surface in dark (light label) — see --cell-ink
         var t2 = Math.max(0, Math.min(1, h / RM.WEEK_HOURS));
-        var bg = '#' + RM.tint('7FAEDD', 1 - t2);
+        var bg = '#' + (darkActive() ? mixHex('242C35', '31597F', t2) : RM.tint('7FAEDD', 1 - t2));
         cells.push('<div class="rh' + cls + '" data-w="' + w + '" style="left:' + (w * weekPx) +
           'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(m.name + ' — week of ' +
             RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + fmtH(h) + 'h') + '">' +
@@ -4844,6 +4898,283 @@
     });
   }
 
+  // ------------------------------------------------------------ personal settings
+  // One set of controls, used by Setup → Personal and the start page modal.
+  // Everything here is per-machine (UI_KEY / THEME_KEY), never document data.
+  function personalFieldsHtml() {
+    var desktop = !!window.HeadwayDesktop;
+    function chk(key, label, on) {
+      return '<label class="p-check" style="margin-top:7px">' +
+        '<input type="checkbox" data-pref="' + key + '"' + (on ? ' checked' : '') + '> ' + label + '</label>';
+    }
+    var themeSeg = '<div class="seg">' + THEME_CHOICES.map(function (t) {
+      return '<button data-pref-theme="' + t[0] + '"' + (themePref === t[0] ? ' class="on"' : '') + '>' +
+        t[1].replace(' theme', '') + '</button>';
+    }).join('') + '</div>';
+    var snapSeg = '<div class="seg">' + [[1, 'Day'], [5, 'Week'], [10, '2 weeks']].map(function (sn) {
+      return '<button data-pref-snap="' + sn[0] + '"' + (snapDays === sn[0] ? ' class="on"' : '') + '>' +
+        sn[1] + '</button>';
+    }).join('') + '</div>';
+    return '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>' +
+      '<div class="m-sec"><label>Drag snap</label>' + snapSeg + '</div>' +
+      '<div class="m-sec"><label>Timeline</label>' +
+      chk('deps', 'Dependency arrows', depsMode === 'on') +
+      chk('crit', 'Critical path highlight', showCrit) +
+      chk('cap', 'Capacity row', showCap) +
+      chk('autoOrder', 'Auto-order rows by start', autoOrder) +
+      '</div>' +
+      '<div class="m-sec"><label>Grouping</label>' +
+      chk('groupWs', 'Group by workstream', groupWs) +
+      chk('groupEpic', 'Group by epic', groupEpic) +
+      '</div>' +
+      (desktop
+        ? '<div class="m-sec"><label>Files</label>' + chk('autoSave', 'Auto-save to the open file', autoSave) + '</div>'
+        : '');
+  }
+  // delegated wiring; `after` refreshes whatever surface hosts the fields
+  function wirePersonalFields(host, after) {
+    host.addEventListener('click', function (e) {
+      var tb = e.target.closest('[data-pref-theme]');
+      if (tb) { setTheme(tb.dataset.prefTheme); after(); return; }
+      var sb = e.target.closest('[data-pref-snap]');
+      if (sb) { snapDays = parseInt(sb.dataset.prefSnap, 10); saveLocal(); renderTopbar(); after(); return; }
+    });
+    host.addEventListener('change', function (e) {
+      var key = e.target.dataset.pref;
+      if (!key) return;
+      var on = e.target.checked;
+      if (key === 'deps') depsMode = on ? 'on' : 'none';
+      else if (key === 'crit') showCrit = on;
+      else if (key === 'cap') showCap = on;
+      else if (key === 'autoOrder') {
+        autoOrder = on;
+        if (on) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
+      }
+      else if (key === 'groupWs') groupWs = on;
+      else if (key === 'groupEpic') groupEpic = on;
+      else if (key === 'autoSave') { autoSave = on; if (on) scheduleAutoSave(); }
+      else return;
+      saveLocal();
+      render();
+      after();
+    });
+  }
+
+  function personalSettingsModal() {
+    openModal(
+      '<div class="modal" style="width:460px">' +
+      '<div class="m-head"><h2>Personal settings</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body"><div id="ppFields">' + personalFieldsHtml() + '</div>' +
+      '<div class="m-hint">Personal settings live on this machine — they never travel inside a project file.</div></div>' +
+      '<div class="m-foot"><button data-m="x2" class="primary">Done</button></div></div>',
+      function (host) {
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=x2]', host).onclick = closeModal;
+        wirePersonalFields(host, function () {
+          var f = $('#ppFields', host);
+          if (f) { f.innerHTML = personalFieldsHtml(); if (window.lucide) lucide.createIcons(); }
+        });
+      });
+  }
+
+  // ------------------------------------------------------------ start page
+  // The app opens here: pick a recent file, create a project (always saved
+  // to disk first), open a file, or adjust personal settings. A tab refresh
+  // mid-session skips it (sessionStorage flag); a fresh launch shows it.
+  var RECENTS_KEY = 'headway-recents-v1';
+  var SESSION_KEY = 'headway-in-editor';
+
+  function loadRecents() {
+    try {
+      var r = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]');
+      return Array.isArray(r) ? r : [];
+    } catch (e) { return []; }
+  }
+  function saveRecents(list) {
+    try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch (e) { /* storage optional */ }
+  }
+  // upsert a path at the top of the recents; title comes from the live doc
+  function noteRecent(path) {
+    if (!path) return;
+    var list = loadRecents().filter(function (r) { return r.path !== path; });
+    list.unshift({ path: path, title: (state && state.meta.title) || '', at: Date.now() });
+    saveRecents(list);
+    if (document.body.classList.contains('start')) renderStartPage();
+  }
+  function dropRecent(path) {
+    saveRecents(loadRecents().filter(function (r) { return r.path !== path; }));
+  }
+
+  function relTime(t) {
+    if (!t) return '';
+    var s = (Date.now() - t) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400 * 2) return Math.floor(s / 3600) + ' h ago';
+    if (s < 86400 * 14) return Math.floor(s / 86400) + ' days ago';
+    return new Date(t).toLocaleDateString();
+  }
+
+  function enterEditor() {
+    document.body.classList.remove('start');
+    $('#startPage').hidden = true;
+    try { sessionStorage.setItem(SESSION_KEY, '1'); } catch (e) { /* storage optional */ }
+    render();
+    if (view === 'planning') requestAnimationFrame(goToday);
+  }
+  function showStart() {
+    document.body.classList.add('start');
+    renderStartPage();
+    $('#startPage').hidden = false;
+    try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* storage optional */ }
+  }
+
+  function renderStartPage() {
+    var host = $('#startBody');
+    if (!host) return;
+    var desktop = !!window.HeadwayDesktop;
+    var hasLocal = false;
+    try { hasLocal = !!localStorage.getItem(LS_KEY); } catch (e) { /* storage optional */ }
+    var recents = desktop ? loadRecents() : [];
+    var rows = recents.map(function (r) {
+      var base = String(r.path).replace(/^.*[\\/]/, '');
+      return '<div class="sp-row" role="button" tabindex="0" data-sp-open="' + esc(r.path) + '">' +
+        '<span class="sp-ico"><i data-lucide="file-spreadsheet"></i></span>' +
+        '<span class="sp-rmain"><span class="sp-rtitle">' + esc(r.title || base) + '</span>' +
+        '<span class="sp-rpath">' + esc(r.path) + '</span></span>' +
+        '<span class="sp-rtime">' + esc(relTime(r.at)) + '</span>' +
+        '<button class="sp-rx" data-sp-drop="' + esc(r.path) + '" title="Remove from this list (keeps the file)"><i data-lucide="x"></i></button>' +
+        '</div>';
+    }).join('');
+    // a localStorage session without a recents entry (browser, or pre-file
+    // desktop work) can be picked up where it left off
+    var continueCard = hasLocal && (!desktop || !recents.length)
+      ? '<div class="sp-row" role="button" tabindex="0" data-sp-continue>' +
+        '<span class="sp-ico"><i data-lucide="history"></i></span>' +
+        '<span class="sp-rmain"><span class="sp-rtitle">' + esc((state && state.meta.title) || 'Last session') + '</span>' +
+        '<span class="sp-rpath">Continue where you left off — stored in this ' + (desktop ? 'app' : 'browser') + '</span></span></div>'
+      : '';
+    host.innerHTML =
+      '<div class="sp-inner">' +
+      '<div class="sp-hero">' +
+      '<div class="tb-mark sp-mark" aria-hidden="true"><span></span><span></span><span></span></div>' +
+      '<div class="sp-brand"><h1>Headway</h1><div class="sp-sub">Roadmap planner</div></div>' +
+      '<button data-sp-settings title="Personal settings — theme, view options"><i data-lucide="settings"></i>Settings</button>' +
+      '</div>' +
+      '<div class="sp-actions">' +
+      '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
+      '<button class="sp-big" data-sp-opendlg><i data-lucide="folder-open"></i>Open…</button>' +
+      '</div>' +
+      '<div class="sp-recent-hd">Recent</div>' +
+      '<div class="sp-recents">' +
+      ((continueCard + rows) || '<div class="sp-empty">Nothing yet — projects you create or open appear here.</div>') +
+      '</div>' +
+      '<div class="sp-hint">Every project lives in an .xlsx file on disk' +
+      (desktop ? ' — edits auto-save to the open file.' : '.') + '</div>' +
+      '</div>';
+    if (window.lucide) lucide.createIcons();
+  }
+
+  $('#startPage').addEventListener('click', function (e) {
+    var drop = e.target.closest('[data-sp-drop]');
+    if (drop) { dropRecent(drop.dataset.spDrop); renderStartPage(); return; }
+    var open = e.target.closest('[data-sp-open]');
+    if (open) { openRecent(open.dataset.spOpen); return; }
+    if (e.target.closest('[data-sp-continue]')) { enterEditor(); return; }
+    if (e.target.closest('[data-sp-new]')) { newProjectModal(); return; }
+    if (e.target.closest('[data-sp-opendlg]')) {
+      if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+      else $('#filePick').click();
+      return;
+    }
+    if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
+  });
+  $('#startPage').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var row = e.target.closest('.sp-row');
+    if (row) { e.preventDefault(); row.click(); }
+  });
+
+  function openRecent(path) {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.openPath) return;
+    HeadwayDesktop.openPath(path).catch(function (err) {
+      toast('Could not open “' + String(path).replace(/^.*[\\/]/, '') + '” — ' +
+        (err && err.message || err), 'err');
+      dropRecent(path);
+      renderStartPage();
+    });
+  }
+
+  // every project starts life as a file on disk: desktop picks a location
+  // first; the browser fires the .xlsx download the moment it's created
+  function newProjectModal() {
+    var desktop = !!window.HeadwayDesktop;
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>New project</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body">' +
+      '<div class="m-sec"><label>Project name</label>' +
+      '<input id="npName" style="width:100%" maxlength="120" placeholder="Q1 Platform Roadmap">' +
+      '<div class="m-hint">' + (desktop
+        ? 'Every project lives in an .xlsx file — you’ll pick where to save it next. Edits then auto-save to that file.'
+        : 'Every project lives in an .xlsx file — a copy downloads right away; use Save to keep it current.') +
+      '</div></div></div>' +
+      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
+      '<button id="npCreate" class="primary"><i data-lucide="file-plus-2"></i>Create project</button></div></div>',
+      function (host) {
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=cancel]', host).onclick = closeModal;
+        var inp = $('#npName', host);
+        function go() {
+          var name = inp.value.trim() || 'New Roadmap';
+          var st = blankState();
+          st.meta.title = name;
+          closeModal();
+          // flush pending edits to the currently-open file before the paths
+          // switch, so the last few seconds of work can't land in the wrong file
+          var flush = (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath())
+            ? (doSave(false, true) || Promise.resolve()) : Promise.resolve();
+          flush.then(function () { createProjectOnDisk(st); },
+            function () { createProjectOnDisk(st); });
+        }
+        $('#npCreate', host).onclick = go;
+        inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go(); });
+        inp.focus();
+      });
+  }
+
+  function adoptProject(st, savedPath) {
+    replaceState('new project', st);
+    selectedId = null;
+    docSaved = true;
+    updateSaveBtn();
+    if (savedPath) noteRecent(savedPath);
+    enterEditor();
+  }
+
+  function createProjectOnDisk(st) {
+    var fname = ((st.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.xlsx';
+    RMExcel.exportWorkbook(st, uiSnapshot()).then(function (blob) {
+      if (window.HeadwayDesktop) {
+        // the file must exist before the project does — Save dialog first
+        return HeadwayDesktop.saveBlob(blob, fname, true).then(function (path) {
+          if (!path) { toast('Project not created — no file chosen'); return; }
+          adoptProject(st, path);
+          toast('Created “' + st.meta.title + '” — ' + HeadwayDesktop.basename(path));
+        });
+      }
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      adoptProject(st, null);
+      toast('Created “' + st.meta.title + '” — saved ' + fname + ' to your downloads');
+    }).catch(function (err) {
+      toast('Could not create the project: ' + (err && err.message || err), 'err');
+    });
+  }
+
   // ------------------------------------------------------------ files
   var savingNow = false;
   function updateSaveBtn() {
@@ -4868,7 +5199,7 @@
       btn.dataset.mode = '';
       updateSaveBtn();
     }
-    RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
+    return RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
       var name = saveFileName();
       if (window.HeadwayDesktop) { // desktop: write straight to disk
         return HeadwayDesktop.saveBlob(blob, name, forceDialog).then(function (path) {
@@ -4876,6 +5207,7 @@
           lastExport = new Date().toTimeString().slice(0, 5);
           docSaved = true;
           saveLocal();
+          noteRecent(path); // keep the start page's title + timestamp fresh
           if (!quiet) toast('Saved ' + HeadwayDesktop.basename(path));
         });
       }
@@ -4903,6 +5235,7 @@
       docSaved = true; // fresh from disk — matches its file
       updateSaveBtn();
       selectedId = null;
+      enterEditor(); // opening a file always lands in the editor
       if (!quiet) {
         toast(r.source === 'tool'
           ? 'Loaded “' + name + '” (full tool state)'
@@ -4928,7 +5261,8 @@
     loadBuffer: loadWorkbookBuffer,
     saveFileName: saveFileName,
     save: doSave,
-    menuItems: menuItems
+    menuItems: menuItems,
+    noteRecent: noteRecent
   };
 
   // ------------------------------------------------------------ keyboard
@@ -4952,6 +5286,8 @@
       if (presentMode) { setPresent(false); return; }
       return;
     }
+    // on the start page only Escape (above, for its modals) applies
+    if (document.body.classList.contains('start')) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' &&
         (view === 'planning' || view === 'scoping')) {
       e.preventDefault();
@@ -5105,8 +5441,12 @@
     // (unless a saved expansion map — local or from an imported file — says otherwise)
     if (!uiExpandedLoaded) state.items.forEach(function (it) { if (it.stories.length) expanded[it.id] = true; });
     render();
-    // land at today on first paint
-    if (view === 'planning') requestAnimationFrame(goToday);
+    // fresh launches land on the start page; a mid-session reload (the
+    // sessionStorage flag survives those, not app restarts) rejoins the editor
+    var inEditor = false;
+    try { inEditor = sessionStorage.getItem(SESSION_KEY) === '1'; } catch (e) { /* storage optional */ }
+    if (inEditor) enterEditor();
+    else showStart();
   }
   boot();
 

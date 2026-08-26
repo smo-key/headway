@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Headway — Roadmap Planner</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230057B8'/%3E%3Crect x='6' y='8' width='14' height='4' rx='2' fill='%23fff'/%3E%3Crect x='10' y='14' width='16' height='4' rx='2' fill='%23fff' opacity='.75'/%3E%3Crect x='8' y='20' width='11' height='4' rx='2' fill='%23fff' opacity='.5'/%3E%3C/svg%3E">
+<script>
+/* stamp the theme before first paint (js/app.js owns it afterwards) */
+(function () {
+  var t = 'light';
+  try {
+    var pref = localStorage.getItem('headway-theme-v1') || 'system';
+    if (pref === 'dark' || (pref !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) t = 'dark';
+  } catch (e) { /* storage/matchMedia optional */ }
+  document.documentElement.dataset.theme = t;
+})();
+</script>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -102,6 +113,11 @@
 
   <aside id="panel" hidden></aside>
   <button id="btnPresentExit" hidden title="Exit preview (Esc)"><i data-lucide="minimize-2"></i></button>
+</div>
+
+<div id="startPage" hidden>
+  <div id="startBar" data-tauri-drag-region></div>
+  <div id="startBody"></div>
 </div>
 
 <div id="dragTip" hidden></div>
