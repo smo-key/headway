@@ -4422,11 +4422,11 @@
         '<div class="su-schemes">' + schemeRows + '</div>' +
         '</section>' + sizingCards,
       appearance:
-        '<section class="su-card"><h2>Appearance</h2>' + personalFieldsHtml('appearance') +
+        '<section class="su-card">' + personalFieldsHtml('appearance') +
         '<div class="m-hint">System follows your OS.</div>' +
         '</section>',
       prefs:
-        '<section class="su-card"><h2>Preferences</h2>' + personalFieldsHtml('behavior') + '</section>'
+        '<section class="su-card">' + personalFieldsHtml('behavior') + '</section>'
     };
     if (!tabBodies[setupTab]) setupTab = 'timeline';
 
