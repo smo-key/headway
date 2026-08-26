@@ -993,10 +993,25 @@ ok(!RM.riskEnabled(sRs), 'riskEnabled false when none');
 var sRs2 = mkState([{ num: 1, feature: 'a', risk: 'H' }]);
 eq(RM.riskSchemeOf(sRs2), 'risk', 'legacy docs that used Risk keep the risk scheme');
 eq(sRs2.items[0].risk, 'H', 'risk value survives');
-RM.setRiskScheme(sRs2, 'moscow');
-eq(sRs2.items[0].risk, null, 'switching schemes clears values the new scheme does not know');
-eq(RM.riskColLabel(sRs2), 'Priority', 'MoSCoW relabels the column Priority');
-eq(RM.riskOrderOf(sRs2).join(''), 'MSCW', 'MoSCoW options');
+RM.setRiskScheme(sRs2, 'confidence');
+eq(RM.riskColLabel(sRs2), 'Confidence', 'confidence relabels the column');
+
+// priority is its own column now
+var sPr = mkState([{ num: 1, feature: 'a' }]);
+eq(RM.prioritySchemeOf(sPr), 'none', 'new docs have no priority column');
+RM.setPriorityScheme(sPr, 'moscow');
+eq(RM.priorityOrderOf(sPr).join(''), 'MSCW', 'MoSCoW priority options');
+RM.setPriorityScheme(sPr, 'levels');
+eq(RM.priorityOrderOf(sPr).join(''), 'CHML', 'Critical/High/Medium/Low options');
+// a doc saved when MoSCoW lived under Risk migrates its values across
+var sPrMig = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, riskScheme: 'moscow', holidaysV2026: true },
+  phases: [{ id: 'p' }], items: [{ num: 1, feature: 'a', risk: 'W' }]
+});
+eq(sPrMig.meta.priorityScheme, 'moscow', 'moscow risk scheme migrates to the Priority column');
+eq(sPrMig.items[0].priority, 'W', 'the value moves to item.priority');
+eq(sPrMig.items[0].risk, null, 'risk is cleared');
+ok(RM.SCOPE_FIXED_KEYS.indexOf('priority') !== -1, 'priority is a fixed scoping column');
 var sRs3 = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8, riskScheme: 'confidence', holidaysV2026: true },
   phases: [{ id: 'p' }], items: [{ num: 1, feature: 'a', risk: 'H' }, { num: 2, feature: 'b', risk: 'W' }]

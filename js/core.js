@@ -106,11 +106,36 @@
     auto: { name: 'Risk (auto)', label: 'Risk', auto: true,
       desc: 'Computed from the dependency graph: cycles, unscheduled or many dependencies, zero slack, deep chains.' },
     confidence: { name: 'Confidence', label: 'Confidence', order: ['H', 'M', 'L'],
-      desc: 'Estimation confidence, planning-poker style — High / Medium / Low.' },
-    moscow: { name: 'MoSCoW', label: 'Priority', order: ['M', 'S', 'C', 'W'],
-      desc: 'Must / Should / Could / Won’t — classic scope-negotiation priority.' }
+      desc: 'Estimation confidence, planning-poker style — High / Medium / Low.' }
   };
-  RM.RISK_SCHEME_ORDER = ['none', 'risk', 'auto', 'confidence', 'moscow'];
+  RM.RISK_SCHEME_ORDER = ['none', 'risk', 'auto', 'confidence'];
+
+  // Priority is its own column (risk measures uncertainty; priority ranks
+  // importance): MoSCoW or Critical/High/Medium/Low ladders.
+  RM.PRIORITY_SCHEMES = {
+    none: { name: 'None', label: 'Priority', desc: 'No priority column.' },
+    moscow: { name: 'MoSCoW', label: 'Priority', order: ['M', 'S', 'C', 'W'],
+      desc: 'Must / Should / Could / Won’t — classic scope-negotiation priority.' },
+    levels: { name: 'Critical / High / Medium / Low', label: 'Priority', order: ['C', 'H', 'M', 'L'],
+      desc: 'A severity ladder — Critical, High, Medium, Low.' }
+  };
+  RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels'];
+  RM.prioritySchemeOf = function (state) {
+    var s = state && state.meta && state.meta.priorityScheme;
+    return RM.PRIORITY_SCHEMES[s] ? s : 'none';
+  };
+  RM.priorityEnabled = function (state) { return RM.prioritySchemeOf(state) !== 'none'; };
+  RM.priorityOrderOf = function (state) {
+    return (RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state)].order || []).slice();
+  };
+  RM.setPriorityScheme = function (state, key) {
+    if (!RM.PRIORITY_SCHEMES[key]) return;
+    state.meta.priorityScheme = key;
+    var order = RM.PRIORITY_SCHEMES[key].order || [];
+    state.items.forEach(function (it) {
+      if (it.priority && order.indexOf(it.priority) === -1) it.priority = null;
+    });
+  };
   RM.riskSchemeOf = function (state) {
     var s = state && state.meta && state.meta.riskScheme;
     return RM.RISK_SCHEMES[s] ? s : 'none';
@@ -224,8 +249,8 @@
   RM.DEFAULT_SCOPE_COLS = ['description'];
   RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
   // fixed (chip) scoping columns and the canonical full-order template
-  RM.SCOPE_FIXED_KEYS = ['size', 'risk', 'duration', 'start', 'workstream', 'epic'];
-  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'size', 'risk', 'duration', 'start', 'workstream'];
+  RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'workstream', 'epic'];
+  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'workstream'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -873,6 +898,16 @@
       });
       return out;
     })();
+    // priority column scheme (own column, separate from risk)
+    m.priorityScheme = RM.PRIORITY_SCHEMES[m.priorityScheme] ? m.priorityScheme : 'none';
+    // a doc saved while MoSCoW lived under Risk migrates to the Priority column
+    if (m.riskScheme === 'moscow') {
+      m.riskScheme = 'none';
+      m.priorityScheme = 'moscow';
+      (state.items || []).forEach(function (it) {
+        if (it && it.risk && !it.priority) { it.priority = it.risk; it.risk = null; }
+      });
+    }
     // assessment column scheme — docs that predate schemes keep their Risk
     // column only if they actually used it; new docs start without one
     if (!RM.RISK_SCHEMES[m.riskScheme]) {
@@ -919,6 +954,7 @@
     var fallbackPhase = state.phases[0].id;
 
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
+    var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
     var firstType = state.teamTypes && state.teamTypes.length
       ? state.teamTypes[0] : RM.DEFAULT_WORK_TYPE;
     state.items = (state.items || []).map(function (it) {
@@ -949,6 +985,8 @@
           }
           return null;
         })(),
+        priority: it.priority && prioOrder.indexOf(String(it.priority).toUpperCase()) !== -1
+          ? String(it.priority).toUpperCase() : null,
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
         // role is descriptive metadata (capacity is role-agnostic)
         teamType: it.teamType != null && it.teamType !== '' ? it.teamType : firstType,
@@ -984,6 +1022,7 @@
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
             status: s.status && m.statuses.story.indexOf(s.status) !== -1 ? s.status : null,
+            size: s.size || null,
             // rich-text (sanitized HTML) story body + acceptance criteria
             description: typeof s.description === 'string' ? s.description : '',
             ac: typeof s.ac === 'string' ? s.ac : '',

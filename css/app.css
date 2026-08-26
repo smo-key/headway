@@ -870,12 +870,17 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .p-sechead .p-secico { display: inline-flex; color: var(--ink-2); }
 .p-sechead .p-secico svg { width: 14px; height: 14px; }
-.p-sechead > svg {
+.p-sechead > svg:not(.p-secico) {
   width: 13px; height: 13px; flex: 0 0 auto;
   color: var(--ink-3);
   transition: transform .14s cubic-bezier(.2, .8, .3, 1);
 }
-.p-sec.c.open > .p-sechead > svg { transform: rotate(90deg); }
+.p-sechead > svg.p-secico {
+  width: 14px; height: 14px; flex: 0 0 auto;
+  color: var(--ink-2);
+  transform: none !important;
+}
+.p-sec.c.open > .p-sechead > svg:not(.p-secico) { transform: rotate(90deg); }
 .p-seclab {
   font-size: 13.5px; font-weight: 700; letter-spacing: .01em;
   color: var(--ink);
@@ -1097,6 +1102,24 @@ table.roster .rm { width: 30px; }
 
 /* scoping chip: the default workstream shows as a quiet italic name */
 .sc-chip i.dws, .r-ws i.dws { color: var(--ink-3); font-style: italic; }
+
+/* assignee chip in the planning left pane */
+.r-asg {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; padding: 1px 3px;
+  border: 1px solid transparent; border-radius: 5px;
+  cursor: pointer;
+}
+.r-asg:hover { border-color: var(--line-2); background: var(--surface); }
+.r-asg > svg { width: 13px; height: 13px; color: var(--ink-3); }
+
+/* scoping cells that don't apply to stories */
+.sc-cell.sc-na { background: var(--paper-2); }
+
+/* ladder glyphs inside risk/priority chips and segs */
+.r-risk svg, .seg button svg.lucide-chevron-down, .seg button svg.lucide-chevron-up,
+.seg button svg.lucide-equal, .seg button svg.lucide-arrow-up { width: 13px; height: 13px; }
+.r-risk { display: inline-flex; align-items: center; justify-content: center; }
 
 /* profile avatars: deterministic color + initials */
 .avatar {
@@ -1696,7 +1719,9 @@ body.chrome-win #topbar { padding-right: 0; }
 #rowFilter:focus ~ .filter-kbd,
 #rowFilter:not(:placeholder-shown) ~ .filter-kbd { display: none; }
 #rowFilter::-webkit-search-cancel-button { margin-left: 4px; }
-/* scoping hides the phase lane but keeps the line so the filter stays put */
+/* scoping hides the phase lane but keeps the line so the filter stays put;
+   the whole header block paints opaque so scrolled rows never show through */
+body[data-view="scoping"] #hdr { background: var(--paper); }
 body[data-view="scoping"] .hdr-phases { display: flex !important; height: 34px !important; }
 body[data-view="scoping"] .hdr-phases .hdr-lane { visibility: hidden; }
 body[data-view="budget"] #rowFilter, body[data-view="setup"] #rowFilter { display: none; }
@@ -1952,7 +1977,8 @@ body.no-size .sz-lab { visibility: hidden; }
   color: var(--ink-3);
 }
 #panelPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
-body[data-view="scoping"] #panelPeek, body[data-view="budget"] #panelPeek,
+body[data-view="budget"] #panelPeek, body[data-view="reports"] #panelPeek,
+body[data-view="sprints"] #panelPeek,
 body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
 
 /* settings tables (holidays, size options) */

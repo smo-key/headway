@@ -229,9 +229,9 @@ click(doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-risk'));
 ok(!doc.querySelector('#popover').hidden, 'scoping risk chip opens a dropdown');
 {
   const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent.trim());
-  ok(labels.includes('None') && ['L', 'M', 'H'].every(v => labels.some(l => l.startsWith(v + ' '))) && !labels.some(l => /^XL/.test(l)),
-    'risk options are None / L / M / H with full labels (no t-shirt sizes)');
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^L /.test(b.textContent.trim())));
+  ok(labels.includes('None') && ['Low', 'Medium', 'High'].every(v => labels.includes(v)) && !labels.some(l => /^XL/.test(l)),
+    'risk options are None / Low / Medium / High (glyph + label, no t-shirt sizes)');
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => b.textContent.trim() === 'Low'));
   ok(state().items.find(i => i.id === itId).risk === 'L', 'picking a risk commits (L)');
 }
 click(doc.querySelector('#viewTabs [data-view="planning"]'));
@@ -314,14 +314,19 @@ doc.querySelector('#popover').hidden = true;
 }
 
 // ---------------------------------------------------------------- setup view
-const suTab = (k) => click(doc.querySelector('#setupView [data-sutab="' + k + '"]'));
+const suTab = (k) => {
+  // entering Setup first keeps the tab click live (a hidden #setupView keeps
+  // stale DOM from its last visit)
+  if (doc.body.dataset.view !== 'setup') click(doc.querySelector('#btnSetup'));
+  click(doc.querySelector('#setupView [data-sutab="' + k + '"]'));
+};
 click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 8 &&
+ok(doc.querySelectorAll('#setupView .su-tab').length === 9 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 8 vertical tabs under Project + Personal sections');
+  'settings rail: 9 vertical tabs under Project + Personal sections');
 ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelector('#suCapEnable'),
   'Team tab shows roles + work week + capacity');
 ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
@@ -605,8 +610,8 @@ click(doc.querySelector('#viewTabs [data-view="scoping"]'));
 ok(doc.body.dataset.view === 'scoping', 'view switches to scoping');
 ok(doc.querySelectorAll('#rows .sc-cell').length > 400, 'scoping cells rendered (' + doc.querySelectorAll('#rows .sc-cell').length + ')');
 ok(doc.querySelectorAll('#rows .bar').length === 0, 'no bars in scoping view');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 6, 'fixed columns: size/risk/duration/start/workstream/epic');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 11, 'default columns are 6 fixed + 5 text (incl. Description)');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 7, 'fixed columns: assignees/size/risk/duration/start/workstream/epic');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 12, 'default columns are 7 fixed + 5 text (incl. Description)');
 ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description column shown by default');
 {
   const hdrOrder = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(c => c.dataset.col);
@@ -616,7 +621,7 @@ ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description col
     'default order leads with Description and Epic before Size');
   ok(hdrOrder.indexOf('start') === hdrOrder.indexOf('duration') + 1, 'Start column follows Duration');
 }
-ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 11, 'column resize handles present');
+ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 12, 'column resize handles present');
 const cell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="notes"]');
 ok(cell.getAttribute('contenteditable') === 'true', 'scoping cells are rich editors');
 cell.innerHTML = 'noted in the grid';
@@ -1280,7 +1285,9 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#panelPeek'));
   ok(!doc.querySelector('#panel').hidden, 'the peek handle reopens the panel');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-  ok(doc.querySelector('#panel').hidden, 'the panel does not render on Scoping');
+  ok(!doc.querySelector('#panel').hidden, 'the panel is available on Scoping too');
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  ok(doc.querySelector('#panel').hidden, 'the panel does not render on Budgeting');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -1481,12 +1488,9 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 {
   suTab('sizing');
   const riskCards = doc.querySelectorAll('#setupView [data-surisk]');
-  ok(riskCards.length === 5, 'five assessment schemes offered (none, risk, auto, confidence, moscow)');
-  click(Array.from(riskCards).find(b => b.dataset.surisk === 'moscow'));
-  ok(state().meta.riskScheme === 'moscow', 'MoSCoW scheme commits');
-  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-  ok(/Priority/.test(doc.querySelector('#hdr').textContent || '') ||
-    !!doc.querySelector('#rows .r-risk'), 'assessment column present under MoSCoW');
+  ok(riskCards.length === 4, 'four risk schemes offered (none, risk, auto, confidence)');
+  click(Array.from(riskCards).find(b => b.dataset.surisk === 'confidence'));
+  ok(state().meta.riskScheme === 'confidence', 'Confidence scheme commits');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   // scheme none removes the column
   suTab('sizing');
@@ -1585,6 +1589,70 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'new story status lands before Done');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- batch 6: priority, story cells, columns tab
+{
+  // priority column: enable MoSCoW in Setup, chip appears in Scoping
+  suTab('sizing');
+  const priCards = doc.querySelectorAll('#setupView [data-supri]');
+  ok(priCards.length === 3, 'three priority schemes (none, MoSCoW, levels)');
+  click(Array.from(priCards).find(b => b.dataset.supri === 'moscow'));
+  ok(state().meta.priorityScheme === 'moscow', 'MoSCoW priority commits');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  ok(!!doc.querySelector('#hdrSprints [data-col="priority"]'), 'Priority column renders when enabled');
+  const priChip = doc.querySelector('#rows .row.item [data-act="priority"]');
+  click(priChip);
+  const mustOpt = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Must/.test(b.textContent));
+  ok(!!mustOpt, 'priority dropdown offers MoSCoW values');
+  click(mustOpt);
+  const priRow = priChip.closest('.row');
+  ok(state().items.find(i => i.id === priRow.dataset.id).priority === 'M', 'priority commits to item.priority');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+
+  // assignees is a fixed scoping column before Size
+  const ordCols = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(c => c.dataset.col);
+  ok(ordCols.indexOf('assignees') !== -1 && ordCols.indexOf('assignees') < ordCols.indexOf('size'),
+    'Assignees column sits before Size');
+
+  // stories: text cells + size editable, other fixed cells n/a
+  // (expand a feature with stories first — collapsed features hide them)
+  {
+    const withStories = state().items.find(i => i.stories.length);
+    click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    const chev = doc.querySelector('#rows .row.item[data-id="' + withStories.id + '"] [data-act="stories"]');
+    if (!doc.querySelector('#rows .row.story[data-story]')) click(chev);
+    click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  }
+  const stRow = doc.querySelector('#rows .row.story[data-story]');
+  ok(!!stRow && !!stRow.querySelector('[data-stscope="description"]'), 'story rows carry editable text cells');
+  ok(!!stRow.querySelector('[data-act="st-size"]'), 'story rows carry an editable Size chip');
+  ok(stRow.querySelectorAll('.sc-cell.sc-na').length > 0, 'non-applicable story cells gray out');
+  const stCell = stRow.querySelector('[data-stscope="description"]');
+  stCell.innerHTML = 'story desc from grid';
+  stCell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const stParent = state().items.find(i => i.id === stRow.dataset.id);
+  ok(stParent.stories.find(s2 => s2.id === stRow.dataset.story).description === 'story desc from grid',
+    'story cell edit commits to the story');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+
+// columns tab in Setup: full ordered list, add/remove text columns
+{
+  suTab('columns');
+  ok(doc.querySelectorAll('#setupView [data-sulist="scol"] .su-row').length ===
+    doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length ||
+    doc.querySelectorAll('#setupView [data-sulist="scol"] .su-row').length > 5,
+    'Columns tab lists the scoping columns');
+  const addInp2 = doc.querySelector('#suColAdd');
+  addInp2.value = 'Reviewer';
+  click(doc.querySelector('#suColAddBtn'));
+  ok(state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column added from Setup');
+  const revKey = state().meta.scopeCols.find(c => c.label === 'Reviewer').key;
+  click(doc.querySelector('#setupView [data-sucolrm="' + revKey + '"]'));
+  ok(!state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column removed from Setup');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 

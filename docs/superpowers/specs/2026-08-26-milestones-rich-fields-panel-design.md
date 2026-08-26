@@ -302,3 +302,26 @@ final report.
   zoom cluster, which sits above the Resources panel; phase description
   is rich multiline; '- ' / '1. ' auto-lists in rich editors; panel
   section headers left-aligned with icons; NO_SIZE validation removed.
+
+## 13. Batch 6 (2026-08-26, night)
+
+- **Priority column** (separate from Risk): meta.priorityScheme — none
+  (default) / MoSCoW (M/S/C/W) / Critical-High-Medium-Low; configured in
+  Setup → Sizing next to the Risk card. Docs saved when MoSCoW lived
+  under Risk migrate their values to item.priority.
+- **Ladder glyphs**: L/M/H/C values draw as chevron-down / equal /
+  chevron-up / arrow-up in chips, panel segs and dropdowns (risk,
+  confidence, priority levels); MoSCoW and sizes stay letters.
+- **Assignees column**: fixed scoping column before Size (avatar stack,
+  click to assign); Planning rows get the same chip after Duration.
+- **Stories on Scoping**: story rows share the grid — text columns (incl.
+  Description) and a new story Size edit in place; non-applicable fixed
+  cells gray out. Stories gain a size field.
+- **Right panel on Scoping** (persistent, same as Planning).
+- **Setup → Columns**: the full ordered column list — drag to reorder,
+  rename/remove text columns, add new ones; hidden built-ins noted.
+- **Snap fix**: snapDays is a mode (day/week/2-weeks); week snaps land on
+  multiples of the real slots-per-week, holidays ignored.
+- **Polish**: scoping header paints opaque (no rows showing through the
+  chip-column headers); panel section icons no longer rotate with the
+  chevron and Details/Checks got icons.
