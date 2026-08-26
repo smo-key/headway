@@ -225,3 +225,50 @@ final report.
 - Smoke tests: updated for the merged panel Fields section, "…" actions
   menu, story panel, scoping story rows, milestone rendering, settings
   markup changes.
+
+## 11. Batch 4 (2026-08-26, later)
+
+- **Toasts**: shadcn-style — surface background, border, shadow, icon
+  (check / alert), bottom-center of the screen; the "Loaded … (full tool
+  state)" toast is removed (opening a file needs no announcement).
+- **Default workstream**: `null` workstream is a real, renamable workstream
+  (`meta.defaultWsName`, default "General") with a customizable color
+  (`meta.defaultWsColor`, default blue). Bars/dots/chips use it; the
+  transparent "no workstream" outline treatment is gone. Editable at the
+  top of Setup → Workstreams.
+- **Scoping keyboard/tab**: title cell is full-height and in the same tab
+  ring as every chip and rich cell.
+- **Formatting toolbar**: the floating B/I/list bar follows its cell when
+  the scoping board scrolls.
+- **Work week**: `meta.workDays` — Sunday–Saturday checkboxes (up to 5
+  working days; the 5-slot index space is kept, trailing slots read as
+  off) plus `meta.weekStart` (first day of week, default Monday). Calendar
+  mapping goes through per-week weekday offsets; timelineStart snaps to
+  the chosen first day. Legacy `daysPerWeek` migrates to the first N
+  weekdays from Monday.
+- **Holiday quick-edit**: right-click an empty timeline slot on Planning/
+  Budgeting → add that date / that week as a holiday, remove the range
+  under the cursor, or jump to Setup → Timeline.
+- **Export PNG**: picks the destination via the OS save dialog (Tauri) or
+  the browser's save-file picker where available, then opens the exported
+  file (Tauri opener plugin; browser downloads can't auto-open).
+- **Expand fix**: Budgeting's frozen left columns/headers now hide in
+  Expand mode like Planning's (they previously overlapped the timeline).
+- **⌘-drag**: dragging a bar with ⌘ moves the whole transitive dependent
+  chain rigidly by the same delta (push and pull; locked/done items stay).
+- **Filter input**: standard input height, no "…", and a ⌘F keyboard-chip
+  (kbd component) as an in-input right suffix.
+- **Tooltips**: one styled tooltip component app-wide, fed by a delegated
+  handler that lifts `title` attributes into a positioned tooltip (native
+  browser tooltips no longer appear).
+- **Roles**: defaults are real role names (Software Engineer, Product
+  Designer, Product Manager, Data Scientist, QA Engineer); roles are
+  renamable from Setup (propagates to people, items, and the rate card);
+  capacity is fully decoupled from roles (no per-role availability filter,
+  demand, or validation — WIP focus units vs total fractional people).
+- **Risk column schemes** (researched: RAID/probability-impact risk logs,
+  planning-poker estimation confidence, MoSCoW prioritization, dependency
+  graph analysis): `meta.riskScheme` — `none` (default for new projects),
+  `risk` (manual L/M/H), `auto` (computed dependency risk, read-only),
+  `confidence` (H/M/L), `moscow` (M/S/C/W). Column label follows the
+  scheme (Risk / Confidence / Priority); configured in Setup → Sizing.
