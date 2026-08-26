@@ -149,6 +149,9 @@
   // the add-column menu. Legacy docs infer their list from actual content.
   RM.DEFAULT_SCOPE_COLS = ['description'];
   RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
+  // fixed (chip) scoping columns and the canonical full-order template
+  RM.SCOPE_FIXED_KEYS = ['size', 'risk', 'duration', 'start', 'workstream', 'epic'];
+  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'size', 'risk', 'duration', 'start', 'workstream'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -569,8 +572,14 @@
   // aligned to meta.sprintAnchor (default: timelineStart), and the sprint that
   // starts there is numbered meta.sprintAnchorNum (default 1). Weeks before
   // the anchor number down through S0, S-1, …
+  // sprints can be disabled (weeksPerSprint = 0): the timeline is plain
+  // weeks — internal sprint math then treats every week as its own bucket
+  RM.sprintsEnabled = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    return !m || m.weeksPerSprint !== 0;
+  };
   RM.sprintInfo = function (meta) {
-    var wps = meta.weeksPerSprint || 2;
+    var wps = meta.weeksPerSprint > 0 ? meta.weeksPerSprint : (meta.weeksPerSprint === 0 ? 1 : 2);
     var anchorWeek = 0;
     if (meta.sprintAnchor) {
       var d = RM.dateToDay(meta, RM.parseISO(meta.sprintAnchor));
@@ -629,7 +638,7 @@
     }
     RM.applyWorkWeek(m);
     m.numWeeks = m.numWeeks || (m.numSprints ? m.numSprints * (m.weeksPerSprint || 2) : 48);
-    m.weeksPerSprint = m.weeksPerSprint || 2;
+    m.weeksPerSprint = [0, 1, 2, 4].indexOf(+m.weeksPerSprint) !== -1 ? +m.weeksPerSprint : 2;
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
@@ -717,6 +726,20 @@
         m.scopeCols.splice(descAt === -1 ? 0 : descAt, 0, { key: 'description' });
       }
     }
+    // full column order across FIXED and text columns (user-reorderable).
+    // Default: Description and Epic lead, then the assessment/duration
+    // cluster, then Workstream and any remaining text columns.
+    (function () {
+      var valid = {};
+      RM.SCOPE_FIXED_KEYS.forEach(function (k) { valid[k] = true; });
+      m.scopeCols.forEach(function (c) { valid[c.key] = true; });
+      var out = [], seenK = {};
+      function take(k) { if (valid[k] && !seenK[k]) { seenK[k] = true; out.push(k); } }
+      (Array.isArray(m.scopeColOrder) ? m.scopeColOrder : []).forEach(take);
+      RM.SCOPE_DEFAULT_ORDER.forEach(take);
+      m.scopeCols.forEach(function (c) { take(c.key); });
+      m.scopeColOrder = out;
+    })();
     m.sizeDays = m.sizeDays || RM.clone(RM.DEFAULT_SIZE_DAYS);
     // migrate documents saved under the pre-2026-08 size metric
     var isLegacyMap = RM.SIZE_ORDER.every(function (s) { return m.sizeDays[s] === RM.LEGACY_SIZE_DAYS[s]; });
@@ -1028,18 +1051,28 @@
     if (val) it.custom[key] = val; else delete it.custom[key];
   };
   // add a custom column (or re-show a hidden built-in when key is given)
+  function orderAppend(m, key) {
+    if (Array.isArray(m.scopeColOrder) && m.scopeColOrder.indexOf(key) === -1) {
+      m.scopeColOrder.push(key);
+    }
+  }
   RM.addScopeCol = function (state, label, key) {
     var cols = state.meta.scopeCols;
     if (key && RM.SCOPE_BUILTIN_LABELS[key]) {
       if (!cols.some(function (c) { return c.key === key; })) cols.push({ key: key });
+      orderAppend(state.meta, key);
       return key;
     }
     var k = RM.uid('c');
     cols.push({ key: k, label: label || 'Column' });
+    orderAppend(state.meta, k);
     return k;
   };
   RM.removeScopeCol = function (state, key) {
     state.meta.scopeCols = state.meta.scopeCols.filter(function (c) { return c.key !== key; });
+    if (Array.isArray(state.meta.scopeColOrder)) {
+      state.meta.scopeColOrder = state.meta.scopeColOrder.filter(function (k) { return k !== key; });
+    }
     if (!RM.SCOPE_BUILTIN_LABELS[key]) {
       state.items.forEach(function (it) { if (it.custom) delete it.custom[key]; });
     }

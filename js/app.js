@@ -436,6 +436,7 @@
     ['size', 'Size', 56, 44],
     ['risk', 'Risk', 56, 44],
     ['duration', 'Duration', 74, 48],
+    ['start', 'Start', 88, 64],
     ['workstream', 'Workstream', 130, 80],
     ['epic', 'Epic', 150, 80]
   ];
@@ -462,7 +463,17 @@
     var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
     return mp[v] || v || '';
   }
-  function allScopeCols() { return scopeFixedCols().concat(scopeCols()); }
+  // all columns in the user's order (meta.scopeColOrder spans fixed + text)
+  function allScopeCols() {
+    var by = {};
+    scopeFixedCols().forEach(function (c) { by[c[0]] = c; });
+    scopeCols().forEach(function (c) { by[c[0]] = c; });
+    var out = [];
+    (state.meta.scopeColOrder || []).forEach(function (k) { if (by[k]) { out.push(by[k]); delete by[k]; } });
+    Object.keys(by).forEach(function (k) { out.push(by[k]); });
+    return out;
+  }
+  function isFixedColKey(k) { return RM.SCOPE_FIXED_KEYS.indexOf(k) !== -1; }
   function scopeCols() {
     return state.meta.scopeCols.map(function (c) {
       return [c.key, RM.scopeColLabel(c), SCOPE_DEFAULT_W[c.key] || 240];
@@ -738,15 +749,11 @@
 
   function renderScopeHeader() {
     var out = ['<div class="sc-hrow">'];
-    scopeFixedCols().forEach(function (c) {
-      out.push('<div class="sc-hcell sc-fixh" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
-        '<span class="sc-hlab">' + c[1] + '</span>' +
-        '<span class="sc-rz" data-rz="' + c[0] + '" title="Drag to resize column"></span></div>');
-    });
-    scopeCols().forEach(function (c) {
-      out.push('<div class="sc-hcell" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
-        '<span class="sc-hlab">' + esc(c[1]) + '</span>' +
-        '<button class="sc-hmenu" data-colmenu="' + c[0] + '" title="Column options"><i data-lucide="ellipsis"></i></button>' +
+    allScopeCols().forEach(function (c) {
+      var fixed = isFixedColKey(c[0]);
+      out.push('<div class="sc-hcell' + (fixed ? ' sc-fixh' : '') + '" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
+        '<span class="sc-hlab" title="Drag to reorder the column">' + esc(c[1]) + '</span>' +
+        (fixed ? '' : '<button class="sc-hmenu" data-colmenu="' + c[0] + '" title="Column options"><i data-lucide="ellipsis"></i></button>') +
         '<span class="sc-rz" data-rz="' + c[0] + '" title="Drag to resize column"></span></div>');
     });
     out.push('<div class="sc-hcell sc-hadd"><button class="sc-hbtn" data-coladd title="Add a column">' +
@@ -804,7 +811,7 @@
       // date is the primary label and is always shown; the sprint number is
       // secondary and only appears when there's room
       var dateTxt = cellW >= 64 ? RM.fmtShort(d) : (d.getUTCMonth() + 1) + '/' + d.getUTCDate();
-      var numTag = cellW >= 56 ? '<span class="sp-num">S' + num + '</span>' : '';
+      var numTag = cellW >= 56 && RM.sprintsEnabled(meta) ? '<span class="sp-num">S' + num + '</span>' : '';
       var hnS = 0;
       for (var wv = w0v; wv < w1v; wv++) hnS += RM.holidaysInWeek(meta, wv, hset);
       hs.push('<div class="sprint-cell" style="left:' + (w0v * weekPx) + 'px;width:' + cellW +
@@ -1128,9 +1135,7 @@
       var cells = ['<div class="sc-row">'];
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
-        size: it.milestone
-          ? '<span class="r-size" title="Milestone — no size">—</span>'
-          : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
+        size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
         risk: (function () {
           var sch = RM.riskSchemeOf(state);
           if (sch === 'auto') {
@@ -1148,8 +1153,8 @@
             (it.risk || (hintLevel === 'none' ? '' : hintLevel.charAt(0).toUpperCase())) + '</span>';
         })(),
         duration: it.milestone
-          ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
-          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit">' +
+          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — 0 duration. Enter a duration to turn it back into a feature">0w</span>'
+          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' +
             (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '') + '</span>',
         workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream — click to change">' +
           '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
@@ -1157,13 +1162,16 @@
             : '<i class="dws">' + esc(shorten(RM.defaultWsName(state), 18)) + '</i>') + '</span>',
         epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic — click to change">' +
           (epIco2 ? '<i data-lucide="' + epIco2 + '"></i>' : '') +
-          (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>'
+          (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>',
+        start: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="startd" title="Start date — click to edit; empty takes it off the timeline">' +
+          (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(meta, it.startDay))) : '') + '</span>'
       };
-      scopeFixedCols().forEach(function (c) {
-        cells.push('<div class="sc-cell sc-fix" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
-          fixedContent[c[0]] + '</div>');
-      });
-      scopeCols().forEach(function (c) {
+      allScopeCols().forEach(function (c) {
+        if (isFixedColKey(c[0])) {
+          cells.push('<div class="sc-cell sc-fix" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
+            fixedContent[c[0]] + '</div>');
+          return;
+        }
         // every scope column holds rich text — edit it in place as such
         var sv = RM.scopeValue(it, c[0]);
         cells.push('<div class="sc-cell" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
@@ -1181,7 +1189,7 @@
       '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
       (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>' +
       '<span class="r-num">' + it.num + '</span>' +
-      '<span class="r-dot" style="background:' + color + '"></span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
@@ -1194,13 +1202,13 @@
         (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
         esc(it.epic) + '</span>' : '') +
       '</div>' +
-      (view === 'scoping' ? '' : (it.milestone
-        ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
-        : (RM.sizingEnabled(state)
-            ? '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>'
-            : '') +
-          '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit">' + totalWeeks(it) + '</span>' +
-          '')) +
+      (view === 'scoping' ? '' :
+        (RM.sizingEnabled(state)
+          ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
+          : '') +
+        (it.milestone
+          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
+          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>')) +
       warnBadge(it) +
       '</div>' +
       '<div class="row-lane">' + laneInner + '</div>' +
@@ -2456,13 +2464,14 @@
     if (act) {
       switch (act.dataset.act) {
         case 'wk': {
-          if (act.querySelector('input') || it.milestone) return;
+          if (act.querySelector('input')) return;
           var wkSched = isScheduled(it);
           var wkInp = document.createElement('input');
           wkInp.type = 'number';
-          wkInp.min = '0.2';
+          wkInp.min = '0';
           wkInp.step = '0.2';
-          wkInp.value = wkSched
+          wkInp.value = it.milestone ? 0
+            : wkSched
             ? Math.round((RM.workInSpan(state.meta, it.startDay, it.durDays) / SPW()) * 10) / 10
             : (it.durDays != null ? Math.round(it.durDays / SPW() * 100) / 100 : '');
           wkInp.placeholder = '1';
@@ -2476,12 +2485,25 @@
           var wkFin = function (saveIt) {
             if (wkDone) return; wkDone = true;
             var wv = parseFloat(wkInp.value);
-            if (saveIt && !wkSched && String(wkInp.value).trim() === '') {
-              // clearing an unscheduled duration returns it to the default
-              commit('duration', function (s) { RM.itemById(s, itemId).durDays = null; });
+            if (saveIt && String(wkInp.value).trim() === '') {
+              // empty = off the timeline; the item keeps its kind
+              commit('duration', function (s) {
+                var t = RM.itemById(s, itemId);
+                t.startDay = null;
+                t.durDays = null;
+              });
+            } else if (saveIt && wv === 0) {
+              // 0 duration = a milestone pinned at its start date
+              commit('duration', function (s) {
+                var t = RM.itemById(s, itemId);
+                t.milestone = true;
+                t.durDays = t.startDay != null ? 0 : null;
+                t.riskDays = 0;
+              });
             } else if (saveIt && isFinite(wv) && wv > 0) {
               commit('duration', function (s) {
                 var t = RM.itemById(s, itemId);
+                t.milestone = false;
                 t.durDays = t.startDay != null
                   ? RM.stretchSpan(s.meta, t.startDay, Math.max(1, Math.round(wv * SPW())))
                   : Math.max(1, Math.round(wv * SPW()));
@@ -2493,6 +2515,50 @@
             ev.stopPropagation();
             if (ev.key === 'Enter') wkFin(true);
             if (ev.key === 'Escape') wkFin(false);
+          });
+          return;
+        }
+        case 'startd': {
+          if (act.querySelector('input')) return;
+          var sdInp = document.createElement('input');
+          sdInp.type = 'date';
+          sdInp.className = 'hc-edit';
+          sdInp.style.width = '116px';
+          sdInp.value = isScheduled(it) ? RM.fmtISO(RM.dayToDate(state.meta, it.startDay)) : '';
+          act.textContent = '';
+          act.appendChild(sdInp);
+          sdInp.focus();
+          var sdDone = false;
+          var sdFin = function (saveIt) {
+            if (sdDone) return; sdDone = true;
+            var v = sdInp.value;
+            if (!saveIt) { render(); return; }
+            if (!v) {
+              if (!isScheduled(it)) { render(); return; }
+              commit('start date', function (s) {
+                var t = RM.itemById(s, itemId);
+                t.startDay = null;
+                t.durDays = null;
+              });
+              return;
+            }
+            var day = RM.dateToDay(state.meta, RM.parseISO(v));
+            if (day == null) { render(); return; }
+            commit('start date', function (s) {
+              var t = RM.itemById(s, itemId);
+              t.startDay = Math.max(0, day);
+              if (t.milestone) t.durDays = 0;
+              else if (t.durDays == null) t.durDays = RM.stretchSpan(s.meta, t.startDay, RM.effortDays(s, t));
+              var need = Math.ceil((t.startDay + (t.durDays || 0) + (t.riskDays || 0)) / RM.slotsOf(s.meta));
+              if (need > s.meta.numWeeks) { s.meta.numWeeks = need; RM.syncEndDate(s.meta); }
+            });
+          };
+          sdInp.addEventListener('blur', function () { sdFin(true); });
+          sdInp.addEventListener('change', function () { sdFin(true); });
+          sdInp.addEventListener('keydown', function (ev) {
+            ev.stopPropagation();
+            if (ev.key === 'Enter') sdFin(true);
+            if (ev.key === 'Escape') sdFin(false);
           });
           return;
         }
@@ -3352,17 +3418,69 @@
     toast('#' + dependent.num + ' now depends on #' + depOn.num);
   }
 
-  // scoping column resize (widths remembered in the browser)
+  // scoping column resize (widths remembered in the browser); dragging the
+  // cell body reorders the column instead
   $('#hdrSprints').addEventListener('pointerdown', function (e) {
+    if (view !== 'scoping') return;
     var rz = e.target.closest('[data-rz]');
-    if (!rz) return;
-    var field = rz.dataset.rz;
-    var col = allScopeCols().filter(function (c) { return c[0] === field; })[0];
-    if (!col) return;
-    drag = { kind: 'scol', field: field, x0: e.clientX, y0: e.clientY, w0: scopeColWidth(col), moved: false };
+    if (rz) {
+      var field = rz.dataset.rz;
+      var col = allScopeCols().filter(function (c) { return c[0] === field; })[0];
+      if (!col) return;
+      drag = { kind: 'scol', field: field, x0: e.clientX, y0: e.clientY, w0: scopeColWidth(col), moved: false };
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.closest('.sc-hmenu,.sc-hadd,button,input')) return;
+    var hc = e.target.closest('.sc-hcell[data-col]');
+    if (!hc) return;
+    drag = { kind: 'scolmove', key: hc.dataset.col, x0: e.clientX, y0: e.clientY, moved: false, indicator: null };
     e.preventDefault();
     e.stopPropagation();
   });
+
+  function scolMoveMove(e) {
+    var cells = $$('#hdrSprints .sc-hcell[data-col]');
+    if (!cells.length) return;
+    var idx = cells.length;
+    for (var i = 0; i < cells.length; i++) {
+      var r = cells[i].getBoundingClientRect();
+      if (e.clientX < r.left + r.width / 2) { idx = i; break; }
+    }
+    drag.toIdx = idx;
+    if (!drag.indicator) {
+      drag.indicator = document.createElement('div');
+      drag.indicator.className = 'col-drop-indicator';
+      grid.appendChild(drag.indicator);
+    }
+    var g = grid.getBoundingClientRect();
+    var edge = idx < cells.length ? cells[idx].getBoundingClientRect().left
+      : cells[cells.length - 1].getBoundingClientRect().right;
+    drag.indicator.style.left = (edge - g.left) + 'px';
+    document.body.classList.add('dragging-x');
+  }
+
+  function scolMoveEnd(d) {
+    if (d.toIdx == null) return;
+    var keys = allScopeCols().map(function (c) { return c[0]; });
+    var from = keys.indexOf(d.key);
+    if (from === -1) return;
+    var to = d.toIdx > from ? d.toIdx - 1 : d.toIdx;
+    if (to === from) return;
+    commit('reorder columns', function (s) {
+      // reorder within the VISIBLE keys, then write back over the full order
+      var vis = keys.slice();
+      vis.splice(from, 1);
+      vis.splice(to, 0, d.key);
+      var visSet = {};
+      keys.forEach(function (k) { visSet[k] = true; });
+      var vi = 0;
+      s.meta.scopeColOrder = s.meta.scopeColOrder.map(function (k) {
+        return visSet[k] ? vis[vi++] : k;
+      });
+    });
+  }
 
   // scoping column menus: reorder / rename / remove, plus the trailing "+"
   $('#hdrSprints').addEventListener('click', function (e) {
@@ -3386,16 +3504,24 @@
     var mb = e.target.closest('[data-colmenu]');
     if (!mb) return;
     var key = mb.dataset.colmenu;
-    var cols = state.meta.scopeCols;
-    var idx = -1;
-    cols.forEach(function (c, i) { if (c.key === key) idx = i; });
+    var ordKeys = allScopeCols().map(function (c) { return c[0]; });
+    var idx = ordKeys.indexOf(key);
+    function shiftCol(dir) {
+      commit('move column', function (s) {
+        var visSet = {};
+        ordKeys.forEach(function (k) { visSet[k] = true; });
+        var vis = ordKeys.slice();
+        vis.splice(idx, 1);
+        vis.splice(idx + dir, 0, key);
+        var vi = 0;
+        s.meta.scopeColOrder = s.meta.scopeColOrder.map(function (k) {
+          return visSet[k] ? vis[vi++] : k;
+        });
+      });
+    }
     var items2 = [];
-    if (idx > 0) items2.push({ icon: 'arrow-left', label: 'Move left', fn: function () {
-      commit('move column', function (s) { RM.moveScopeCol(s, key, -1); });
-    } });
-    if (idx < cols.length - 1) items2.push({ icon: 'arrow-right', label: 'Move right', fn: function () {
-      commit('move column', function (s) { RM.moveScopeCol(s, key, 1); });
-    } });
+    if (idx > 0) items2.push({ icon: 'arrow-left', label: 'Move left', fn: function () { shiftCol(-1); } });
+    if (idx < ordKeys.length - 1) items2.push({ icon: 'arrow-right', label: 'Move right', fn: function () { shiftCol(1); } });
     items2.push({ icon: 'pencil', label: 'Rename…', fn: function () { scopeColModal(key); } });
     items2.push({ sep: true });
     items2.push({ icon: 'trash-2', label: 'Remove column', fn: function () {
@@ -3497,6 +3623,7 @@
     else if (drag.kind === 'phspan') phSpanDragMove(e, dx);
     else if (drag.kind === 'port') portDragMove(e);
     else if (drag.kind === 'scol') scolDragMove(e);
+    else if (drag.kind === 'scolmove') scolMoveMove(e);
     else if (drag.kind === 'rfill') rfillMove(e);
     else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
@@ -3562,6 +3689,7 @@
     else if (d.kind === 'phspan') phSpanDragEnd(d);
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
+    else if (d.kind === 'scolmove') scolMoveEnd(d);
     else if (d.kind === 'rfill') rfillEnd(d);
     else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
@@ -4953,11 +5081,17 @@
         '<div><label class="p-lab">End (last working day)</label><input type="date" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
         '</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Sprint numbering</h2>' +
-        '<div class="p-grid2">' +
-        '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
-        '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
-        '</div>' +
+        '<section class="su-card"><h2>Sprints</h2>' +
+        '<div><label class="p-lab">Sprint length</label>' +
+        '<div class="seg">' + [[0, 'Disabled'], [1, '1 week'], [2, '2 weeks'], [4, '4 weeks']].map(function (o) {
+          return '<button data-suwps="' + o[0] + '"' + (m.weeksPerSprint === o[0] ? ' class="on"' : '') + '>' + o[1] + '</button>';
+        }).join('') + '</div></div>' +
+        (RM.sprintsEnabled(m)
+          ? '<div class="p-grid2" style="margin-top:10px">' +
+            '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
+            '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
+            '</div>'
+          : '<div class="m-hint">No sprints — the header shows plain weeks.</div>') +
         '</section>' +
         '<section class="su-card"><h2>Holidays</h2>' +
         (holRows
@@ -5255,6 +5389,11 @@
       commit('add workstream', function (s2) {
         if (!s2.wsColors[wv]) s2.wsColors[wv] = RM.DEFAULT_WS_COLORS[wv] || RM.PALETTE.product;
       });
+      return;
+    }
+    if (t.dataset.suwps != null) {
+      var wpsV = parseInt(t.dataset.suwps, 10);
+      commit('sprint length', function (s2) { s2.meta.weeksPerSprint = wpsV; });
       return;
     }
     if (t.dataset.suwsedit) { wsEditModal(t.dataset.suwsedit); return; }
@@ -6451,9 +6590,10 @@
       return out;
     }
     function sprOpts(selNum) {
+      var withS = RM.sprintsEnabled(meta);
       return sprints.map(function (s) {
         return '<option value="' + s.num + '"' + (s.num === selNum ? ' selected' : '') +
-          '>S' + s.num + ' · ' + esc(s.date) + '</option>';
+          '>' + (withS ? 'S' + s.num + ' · ' : 'Week of ') + esc(s.date) + '</option>';
       }).join('');
     }
     function nameOpts(values, allLabel) {

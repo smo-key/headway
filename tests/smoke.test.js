@@ -605,13 +605,18 @@ click(doc.querySelector('#viewTabs [data-view="scoping"]'));
 ok(doc.body.dataset.view === 'scoping', 'view switches to scoping');
 ok(doc.querySelectorAll('#rows .sc-cell').length > 400, 'scoping cells rendered (' + doc.querySelectorAll('#rows .sc-cell').length + ')');
 ok(doc.querySelectorAll('#rows .bar').length === 0, 'no bars in scoping view');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 5, 'fixed lead columns: size/risk/weeks/workstream/epic');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 10, 'default columns are 5 fixed + 5 text (incl. Description)');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 6, 'fixed columns: size/risk/duration/start/workstream/epic');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 11, 'default columns are 6 fixed + 5 text (incl. Description)');
 ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description column shown by default');
-const descIdx = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).findIndex(c => c.dataset.col === 'description');
-const enIdx = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).findIndex(c => c.dataset.col === 'enables');
-ok(descIdx !== -1 && enIdx !== -1 && descIdx < enIdx, 'Description sits left of Enables');
-ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 10, 'column resize handles present');
+{
+  const hdrOrder = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(c => c.dataset.col);
+  ok(hdrOrder.indexOf('description') !== -1 && hdrOrder.indexOf('description') < hdrOrder.indexOf('enables'),
+    'Description sits left of Enables');
+  ok(hdrOrder.indexOf('description') === 0 && hdrOrder.indexOf('epic') === 1 && hdrOrder.indexOf('epic') < hdrOrder.indexOf('size'),
+    'default order leads with Description and Epic before Size');
+  ok(hdrOrder.indexOf('start') === hdrOrder.indexOf('duration') + 1, 'Start column follows Duration');
+}
+ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 11, 'column resize handles present');
 const cell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="notes"]');
 ok(cell.getAttribute('contenteditable') === 'true', 'scoping cells are rich editors');
 cell.innerHTML = 'noted in the grid';
@@ -651,13 +656,16 @@ if (ownerCell) {
 }
 click(doc.querySelector('#hdrSprints [data-colmenu="' + ownerCol.key + '"]'));
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Move left/.test(b.textContent)));
-ok(state().meta.scopeCols[state().meta.scopeCols.length - 2].key === ownerCol.key, 'column moved left');
+{
+  const ord = state().meta.scopeColOrder;
+  ok(ord.indexOf(ownerCol.key) === ord.length - 2, 'column moved left in the full order');
+}
 
 // scoping swaps the wks/headcount chips for a workstream dropdown chip
 ok(!!doc.querySelector('#rows .row.item .r-ws') && !doc.querySelector('#rows .row.item .r-hc'),
   'scoping shows workstream chips instead of wks/headcount');
 {
-  const wsChip = doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-ws');
+  const wsChip = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-act="ws"]');
   click(wsChip);
   const prodOpt = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^Product$/.test(b.textContent.trim()));
   ok(!!prodOpt, 'workstream chip opens the shared dropdown');

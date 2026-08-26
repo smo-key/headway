@@ -125,7 +125,8 @@
       var last = sprints[sprints.length - 1];
       if (last && last.num === num) last.w += weekPx;
       else sprints.push({
-        num: num, label: 'S' + num, x: LEFT_W + (wk - w0) * weekPx, w: weekPx,
+        num: num, label: RM.sprintsEnabled(meta) ? 'S' + num : '',
+        x: LEFT_W + (wk - w0) * weekPx, w: weekPx,
         date: RM.fmtShort(RM.dayToDate(meta, wk * RM.slotsOf(meta)))
       });
     }

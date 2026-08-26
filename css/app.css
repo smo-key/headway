@@ -436,6 +436,13 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   text-align: right; padding-right: 7px;
 }
 .r-dot { width: 8px; height: 8px; border-radius: 2.5px; flex: 0 0 8px; margin-right: 7px; }
+/* milestones carry a diamond, not a square */
+.r-dot.msdot { border-radius: 1px; transform: rotate(45deg) scale(.92); }
+/* insertion marker while dragging a scoping column header */
+.col-drop-indicator {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--blue); z-index: 30; pointer-events: none;
+}
 .r-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; }
 input.r-name {
   flex: 1; min-width: 0;
