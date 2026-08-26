@@ -861,13 +861,15 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .p-sec.c:first-of-type { margin-top: 10px; }
 .p-sechead {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; align-items: center; justify-content: flex-start; gap: 7px;
   width: 100%;
   border: 0; background: none;
   padding: 10px 0;
   cursor: pointer;
   text-align: left;
 }
+.p-sechead .p-secico { display: inline-flex; color: var(--ink-2); }
+.p-sechead .p-secico svg { width: 14px; height: 14px; }
 .p-sechead > svg {
   width: 13px; height: 13px; flex: 0 0 auto;
   color: var(--ink-3);
@@ -875,7 +877,7 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .p-sec.c.open > .p-sechead > svg { transform: rotate(90deg); }
 .p-seclab {
-  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  font-size: 13.5px; font-weight: 700; letter-spacing: .01em;
   color: var(--ink);
 }
 .p-sechead:hover > svg { color: var(--ink); }
@@ -1095,6 +1097,26 @@ table.roster .rm { width: 30px; }
 
 /* scoping chip: the default workstream shows as a quiet italic name */
 .sc-chip i.dws, .r-ws i.dws { color: var(--ink-3); font-style: italic; }
+
+/* profile avatars: deterministic color + initials */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .2px;
+  flex: 0 0 auto; user-select: none;
+}
+.avatar.sm { width: 18px; height: 18px; font-size: 8.5px; }
+.avatar.more { background: var(--hover); color: var(--ink-2); }
+.avstack { display: inline-flex; align-items: center; flex: 0 0 auto; margin-right: 2px; }
+.avstack .avatar { margin-left: -5px; box-shadow: 0 0 0 1.5px var(--surface); }
+.avstack .avatar:first-child { margin-left: 0; }
+.asg-chip .avatar { margin-right: 3px; }
+.bu-nm .avatar { margin-right: 6px; vertical-align: -5px; }
+
+/* resources rows read as columns: Name | Role | Workstream */
+.res-namecol { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 7px; }
+.res-namecol .res-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rleft .res-type.res-rolecol { width: 112px; flex: 0 0 112px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* shadcn-style toasts, bottom-center */
 #toasts {

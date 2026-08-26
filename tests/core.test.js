@@ -127,7 +127,7 @@ var sV = mkState([
 var v = RM.validate(sV);
 function codes(state, i) { return (v.byItem[state.items[i].id] || []).map(function (x) { return x.code; }); }
 ok(codes(sV, 1).indexOf('DEP_ORDER') !== -1, 'DEP_ORDER: starts before dep ends');
-ok(codes(sV, 2).indexOf('NO_SIZE') !== -1, 'NO_SIZE flagged');
+ok(codes(sV, 2).indexOf('NO_SIZE') === -1, 'no NO_SIZE nag — sizing is optional');
 ok(codes(sV, 3).indexOf('UNKNOWN_DEP') !== -1, 'UNKNOWN_DEP flagged');
 ok(v.global.some(function (g) { return g.code === 'OVER_CAP'; }), 'OVER_CAP: weekly WIP over what the team can focus on');
 ok(!v.global.some(function (g) { return /Data/.test(g.msg); }), 'capacity messages are role-agnostic now');
@@ -573,7 +573,7 @@ eq(RM.itemSpan(sMs.items[1]), 0, 'milestone span is zero');
 eq(RM.itemEnd(sMs.items[1]), 10, 'milestone end equals its day');
 var vMs = RM.validate(sMs);
 var msWarns = (vMs.byItem[sMs.items[1].id] || []).map(function (v) { return v.code; });
-eq(msWarns.indexOf('NO_SIZE'), -1, 'milestone needs no size');
+eq(msWarns.indexOf('NO_SIZE'), -1, 'no size warnings at all');
 var depWarns = (vMs.byItem[sMs.items[2].id] || []).map(function (v) { return v.code; });
 eq(depWarns.indexOf('DEP_ORDER'), -1, 'dependent may start on the milestone day');
 var msAuto = RM.autoSchedule(sMs);

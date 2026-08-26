@@ -211,6 +211,20 @@
   RM.colorForItem = function (state, it) {
     return RM.colorForWs(state, it.workstream);
   };
+  // profile avatars: initials + a deterministic color from the name
+  RM.initialsOf = function (name) {
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    var a = parts[0].charAt(0);
+    var b = parts.length > 1 ? parts[parts.length - 1].charAt(0) : (parts[0].charAt(1) || '');
+    return (a + b).toUpperCase();
+  };
+  RM.avatarColor = function (name) {
+    var h = 0;
+    var s = String(name || '');
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return 'hsl(' + (h % 360) + ', 52%, 42%)';
+  };
   RM.iconForEpic = function (state, epic) {
     return (state && state.epicIcons && epic && state.epicIcons[epic]) || null;
   };
@@ -869,6 +883,9 @@
           return out;
         })(),
         colorOverride: it.colorOverride || null,
+        // team-member ids working on this feature (validated against the
+        // roster once the team is normalized below)
+        assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
         done: !!it.done,
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
@@ -988,6 +1005,16 @@
     });
     state.team.forEach(function (mbr) {
       if (mbr.type && state.teamTypes.indexOf(mbr.type) === -1) state.teamTypes.push(mbr.type);
+    });
+    var teamIds = {};
+    state.team.forEach(function (mbr) { teamIds[mbr.id] = true; });
+    state.items.forEach(function (it) {
+      var seenA = {};
+      it.assignees = it.assignees.filter(function (id) {
+        if (!teamIds[id] || seenA[id]) return false;
+        seenA[id] = true;
+        return true;
+      });
     });
 
     // one-time day-space migration: documents saved before variable
@@ -1416,7 +1443,6 @@
       var scheduled = it.startDay != null && it.durDays != null;
       var phase = phaseById[it.phaseId];
       if (scheduled) {
-        if (!it.size && !it.milestone && RM.sizingEnabled(state)) add(it, 'warn', 'NO_SIZE', 'Scheduled without a size');
         if (it.startDay < 0 || it.startDay + RM.itemSpan(it) > horizon) {
           add(it, 'warn', 'OFF_TIMELINE', 'Bar extends outside the timeline');
         }

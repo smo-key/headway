@@ -411,6 +411,35 @@
     if (ed) { ed.focus(); document.execCommand(b.dataset.wzc); }
   });
 
+  // typing "- " or "1. " at the start of a line in any rich editor starts a
+  // bullet / numbered list (the marker itself is swallowed)
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== ' ') return;
+    var ed = e.target.closest && e.target.closest('[contenteditable="true"]');
+    if (!ed || ed.classList.contains('sc-name')) return;
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return;
+    var r = sel.getRangeAt(0);
+    var node = r.startContainer;
+    if (node.nodeType !== 3) return;
+    if (node.parentNode && node.parentNode.closest && node.parentNode.closest('li')) return;
+    var before = node.textContent.slice(0, r.startOffset);
+    var marker = before.replace(/\u00A0/g, ' ').trim();
+    if (before.trim() !== before) return; // must be flush at the line start
+    if (node.previousSibling) return;
+    var isUl = marker === '-' || marker === '*';
+    var isOl = /^\d+\.$/.test(marker);
+    if (!isUl && !isOl) return;
+    e.preventDefault();
+    node.textContent = node.textContent.slice(r.startOffset);
+    var nr = document.createRange();
+    nr.setStart(node, 0);
+    nr.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(nr);
+    document.execCommand(isUl ? 'insertUnorderedList' : 'insertOrderedList');
+  });
+
   // ------------------------------------------------------------ geometry
   function visibleSequence() {
     // ordered visible rows: bands and items (stories excluded)
@@ -462,6 +491,23 @@
   function riskValueLabel(v) {
     var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
     return mp[v] || v || '';
+  }
+  // profile avatar: deterministic color + initials
+  function avatarHtml(m, extraCls) {
+    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(m.name + ' — ' + m.type) +
+      '" style="background:' + RM.avatarColor(m.name) + '">' + esc(RM.initialsOf(m.name)) + '</span>';
+  }
+  function memberById(id) {
+    for (var i = 0; i < state.team.length; i++) if (state.team[i].id === id) return state.team[i];
+    return null;
+  }
+  // small overlapping stack for rows/cards (max 3 shown + counter)
+  function avatarStack(ids) {
+    var ms = (ids || []).map(memberById).filter(Boolean);
+    if (!ms.length) return '';
+    var out = ms.slice(0, 3).map(function (m) { return avatarHtml(m, 'sm'); }).join('');
+    if (ms.length > 3) out += '<span class="avatar sm more">+' + (ms.length - 3) + '</span>';
+    return '<span class="avstack">' + out + '</span>';
   }
   // all columns in the user's order (meta.scopeColOrder spans fixed + text)
   function allScopeCols() {
@@ -1209,6 +1255,7 @@
         (it.milestone
           ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
           : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>')) +
+      (view === 'scoping' ? '' : avatarStack(it.assignees)) +
       warnBadge(it) +
       '</div>' +
       '<div class="row-lane">' + laneInner + '</div>' +
@@ -1263,7 +1310,7 @@
         '<button class="band-add" data-act="phase-additem" title="Add a feature to this phase">+ feature</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         '</div>' +
-        '<div class="row-lane">' + (p.description ? '<span class="band-desc" title="' + esc(p.description) + '">' + esc(p.description) + '</span>' : '') + '</div>' +
+        '<div class="row-lane">' + (p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '') + '</div>' +
         '</div>');
       if (p.collapsed) return;
 
@@ -1581,10 +1628,17 @@
     }).join('');
 
     // collapsible section card: the body always renders (collapsed hides via CSS)
+    var SEC_ICONS = {
+      fields: 'text', schedule: 'calendar-range', people: 'users',
+      deps: 'git-merge', stories: 'list-todo', timeline: 'chart-gantt',
+      meta: 'tags', danger: 'trash-2'
+    };
     function sec(key, label, summary, body) {
       return '<div class="p-sec c' + (secOpen(key) ? ' open' : '') + '" data-sec="' + key + '">' +
         '<button class="p-sechead" data-sectoggle="' + key + '">' +
-        '<i data-lucide="chevron-right"></i><span class="p-seclab">' + label + '</span>' +
+        '<i data-lucide="chevron-right"></i>' +
+        (SEC_ICONS[key] ? '<i data-lucide="' + SEC_ICONS[key] + '" class="p-secico"></i>' : '') +
+        '<span class="p-seclab">' + label + '</span>' +
         '</button><div class="p-secbody">' + body + '</div></div>';
     }
 
@@ -1629,7 +1683,19 @@
         '</div>') +
 
       sec('people', 'People', '',
-        '<label class="p-lab">Role</label>' + typeDd) +
+        '<label class="p-lab">Role</label>' + typeDd +
+        '<label class="p-lab" style="margin-top:10px">Assignees</label>' +
+        '<div class="chips">' +
+        (it.assignees || []).map(function (aid) {
+          var mm = memberById(aid);
+          if (!mm) return '';
+          return '<span class="dep-chip asg-chip">' + avatarHtml(mm, 'sm') + ' ' + esc(mm.name) +
+            '<button class="x" data-asgrm="' + aid + '"><i data-lucide="x"></i></button></span>';
+        }).join('') +
+        '</div>' +
+        (state.team.length
+          ? ddButton('assign', '+ Assign\u2026', null, 'Assign people from the roster')
+          : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
 
       sec('deps', 'Dependencies', '',
         '<label class="p-lab">Depends on</label>' +
@@ -2097,6 +2163,22 @@
         openDropdown(dd, setEpicMenu(it.id, true));
         return;
       }
+      if (which === 'assign') {
+        var aItems = state.team.map(function (mm) {
+          var onA = (it.assignees || []).indexOf(mm.id) !== -1;
+          return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA, fn: function () {
+            commit('assignees', function (s) {
+              var t = RM.itemById(s, it.id);
+              t.assignees = t.assignees || [];
+              var at = t.assignees.indexOf(mm.id);
+              if (at === -1) t.assignees.push(mm.id);
+              else t.assignees.splice(at, 1);
+            });
+          } };
+        });
+        openDropdown(dd, aItems);
+        return;
+      }
       if (which === 'teamType') {
         var tItems = [{ label: 'Any role', checked: !it.teamType, fn: function () {
           commit('team type', function (s) { RM.itemById(s, it.id).teamType = ''; });
@@ -2109,6 +2191,15 @@
         openDropdown(dd, tItems);
         return;
       }
+    }
+    var asgrm = e.target.closest('[data-asgrm]');
+    if (asgrm) {
+      var rmId = asgrm.dataset.asgrm;
+      commit('assignees', function (s) {
+        var t = RM.itemById(s, it.id);
+        t.assignees = (t.assignees || []).filter(function (x) { return x !== rmId; });
+      });
+      return;
     }
     if (!btn) return;
     var f = btn.dataset.f;
@@ -3082,6 +3173,8 @@
 
   function justPlaced(key) { return placedKey === key && Date.now() - placedAt < 500; }
   rowsEl.addEventListener('dblclick', function (e) {
+    // double-click in a text field selects a word — never steal its focus
+    if (e.target.closest('input,textarea,[contenteditable="true"]')) return;
     var stRowEl = e.target.closest('.row.story[data-story]');
     if (stRowEl) {
       if (view === 'planning' && e.target.closest('.row-lane') && !e.target.closest('[data-stbar]') &&
@@ -3327,7 +3420,7 @@
         sh ? (sh.dataset.act === 'sh-l' ? 'resize-l' : 'resize-r') : 'move', stBarEl);
       return;
     }
-    if (leftEl && !e.target.closest('input,button,textarea,select')) {
+    if (leftEl && !e.target.closest('input,button,textarea,select,[contenteditable="true"]')) {
       // any part of the left pane drags the row (chips still click if not moved)
       startRowDrag(e, leftEl.closest('.row.item').dataset.id);
       return;
@@ -4334,12 +4427,13 @@
     var isNew = !phase;
     var itemCount = phase ? RM.itemsInPhase(state, phase.id).length : 0;
     openModal(
-      '<div class="modal" style="width:460px">' +
+      '<div class="modal" style="width:520px">' +
       '<div class="m-head"><h2>' + (isNew ? 'New phase' : 'Edit phase') + '</h2>' +
       '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body">' +
       '<div class="m-sec"><label>Name</label><input id="phName" style="width:100%" value="' + esc(phase ? phase.name : '') + '" placeholder="MVP: Measurement"></div>' +
-      '<div class="m-sec"><label>Description</label><input id="phDesc" style="width:100%" value="' + esc(phase ? phase.description : '') + '"></div>' +
+      '<div class="m-sec"><label>Description</label><div id="phDescEd">' +
+      wysHtml('phdesc', phase ? phase.description : '', 'What this phase delivers\u2026') + '</div></div>' +
       '<div class="m-sec"><label class="p-check"><input type="checkbox" id="phBucket"' + (phase && phase.bucket ? ' checked' : '') + '> Backlog bucket (items parked here aren’t auto-scheduled)</label></div>' +
       '<div class="m-sec"><label>Dates</label><div class="p-grid2">' +
       '<div><label class="p-lab">Start</label><input type="date" id="phStart" style="width:100%" value="' +
@@ -4362,7 +4456,7 @@
         $('[data-m=x2]', host).onclick = closeModal;
         $('#phSave', host).onclick = function () {
           var name = $('#phName', host).value.trim() || 'Phase';
-          var desc = $('#phDesc', host).value.trim();
+          var desc = sanitizeHtml($('#phDescEd .wz-ed', host).innerHTML);
           var bucket = $('#phBucket', host).checked;
           function pinDay(val, isEnd) {
             if (!val) return null;
@@ -4500,7 +4594,7 @@
       html.push('<div class="row brole" data-mid="' + m.id + '">' +
         '<div class="row-left">' +
         '<span class="r-dot" style="background:#' + wsHex + '"></span>' +
-        '<span class="bu-nm">' + esc(m.name) + '</span>' +
+        '<span class="bu-nm">' + avatarHtml(m, 'sm') + esc(m.name) + '</span>' +
         '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-bact="type" title="Role — sets the default rate from the rate card">' + esc(shorten(m.type || '', 13)) + '</span>' +
         '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-bact="ws" title="Workstream — click to change">' +
         (m.workstream ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(m.workstream, 14)) : '') + '</span>' +
@@ -5591,8 +5685,9 @@
         '<div class="rrow" data-mid="' + m.id + '">' +
         '<div class="rleft">' +
         '<span class="r-grip rr-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
-        '<span class="res-name" data-rname="' + m.id + '" title="Role — click to rename">' + esc(m.name) + '</span>' +
-        '<button class="res-type" data-rtype="' + m.id + '" title="Role">' + esc(m.type) + '</button>' +
+        '<span class="res-namecol">' + avatarHtml(m, 'sm') +
+        '<span class="res-name" data-rname="' + m.id + '" title="Name — click to rename">' + esc(m.name) + '</span></span>' +
+        '<button class="res-type res-rolecol" data-rtype="' + m.id + '" title="Role">' + esc(m.type) + '</button>' +
         '<button class="res-type res-wschip" data-rws="' + m.id + '" title="Workstream (optional)">' +
         (m.workstream ? esc(shorten(m.workstream, 12)) : '—') + '</button>' +
         (state.meta.capacityEnabled
