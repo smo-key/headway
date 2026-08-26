@@ -259,9 +259,20 @@ ok(RM.isBlackoutWeek(sMigW.meta, 1), 'migrated week is fully blacked out');
 var sHol = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p' }], items: [] });
 ok(sHol.meta.holidays.indexOf('2026-09-07') !== -1 && sHol.meta.holidays.indexOf('2026-12-25') !== -1,
   '2026 US holidays loaded into a fresh document');
-sHol.meta.holidays = sHol.meta.holidays.filter(function (x) { return x !== '2026-09-07'; });
-ok(RM.normalizeState(sHol).meta.holidays.indexOf('2026-09-07') === -1,
+RM.clipHolidayRanges(sHol.meta, '2026-09-07', '2026-09-07');
+ok(sHol.meta.holidays.indexOf('2026-09-07') === -1 &&
+  RM.normalizeState(sHol).meta.holidays.indexOf('2026-09-07') === -1,
   'a deleted holiday stays deleted (merge is one-time)');
+// named ranges: migration groups weekend-bridged observances and names them
+var thx = sHol.meta.holidayRanges.find(function (r) { return r.start === '2026-11-25'; });
+ok(!!thx && thx.end === '2026-11-27' && thx.name === 'Thanksgiving',
+  'flat dates migrate into a named Thanksgiving range');
+RM.addHolidayRange(sHol.meta, 'Offsite', '2026-08-05', '2026-08-06');
+ok(sHol.meta.holidays.indexOf('2026-08-05') !== -1 && sHol.meta.holidays.indexOf('2026-08-06') !== -1,
+  'added range expands into the flat date list');
+var offIdx = sHol.meta.holidayRanges.findIndex(function (r) { return r.name === 'Offsite'; });
+RM.removeHolidayRange(sHol.meta, offIdx);
+ok(sHol.meta.holidays.indexOf('2026-08-05') === -1, 'removing a range removes its dates');
 // self-dependency flagged, not silent
 var sSelf = mkState([{ num: 1, feature: 'ouroboros', deps: [1] }]);
 ok((RM.validate(sSelf).byItem[sSelf.items[0].id] || []).some(function (x) { return x.code === 'SELF_DEP'; }),

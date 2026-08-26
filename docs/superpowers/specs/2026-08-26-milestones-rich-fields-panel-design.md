@@ -127,6 +127,43 @@ final report.
 - Remove the start-page blurb "Every project lives in an .xlsx file on disk —
   edits auto-save to the open file."
 
+## 9. Second batch (added mid-session)
+
+- **Transparent groupings**: workstream/epic band rows lose their fills so
+  the sprint grid lines show through; they scroll with the rows instead of
+  sticking (a stuck transparent band would collide with rows beneath it).
+- **Persistent right panel**: a Planning-view fixture — always present,
+  resizable, collapsible via a header button (an edge "peek" handle brings
+  it back). With nothing selected it says "No item selected". It no longer
+  renders on Scoping/Budget/Setup. Esc deselects; the open/collapsed state
+  persists with the other UI prefs.
+- **macOS chrome**: brand/title inset grows 86→96px past the traffic
+  lights; the lights move down (y 22→26 in tauri.macos.conf.json and the
+  Rust re-apply constant).
+- **Sizing approaches** (researched: Scrum story points/Fibonacci, t-shirt
+  buckets, simple 1–5 scales, Kanban no-estimates): `meta.sizeScheme` +
+  ordered `meta.sizeOrder` with `meta.sizeDays` per label. Presets: T-shirt,
+  Story points (Fibonacci), Points 1–5, No sizing; editing labels/days/rows
+  flips to Custom. Items keep label strings; every option maps to working
+  days so scheduling is scheme-agnostic. "No sizing" hides size chips,
+  columns, and the NO_SIZE check.
+- **Workstreams optional**: `meta.workstreamsEnabled` switch in Setup.
+  While on, an item without a workstream renders as a transparent bar with
+  a light outline (left-pane dot matches) and its Scoping chip stays empty.
+  While off: no Workstream column/field/grouping, items keep the neutral
+  default color.
+- **"Weeks" → "Duration"** everywhere user-facing.
+- **No placeholder dots** in empty Scoping cells/chips.
+- **Duration without a schedule**: an unscheduled item accepts an explicit
+  duration (panel field + Duration cell); placement uses, in order: preset
+  duration → size estimate → 1 week. Empty by default.
+- **Holidays as named ranges**: `meta.holidayRanges` [{name, start, end}]
+  shown as a table in Setup → Timeline with a name + date-range add row;
+  `meta.holidays` stays the derived flat list all calendar math reads.
+  Legacy docs migrate by merging consecutive/weekend-bridged dates and
+  naming known US observances; the capacity-header week toggle adds/carves
+  ranges.
+
 ## Testing
 
 - Core tests: milestone span/schedule/validation, scope-column defaults and

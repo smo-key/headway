@@ -13,6 +13,83 @@
   RM.DEFAULT_SIZE_DAYS = { XS: 2, S: 5, M: 10, L: 20, XL: 40 };
   RM.LEGACY_SIZE_DAYS = { XS: 2, S: 3, M: 5, L: 10, XL: 20 };
   RM.SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL'];
+
+  // Sizing approaches (meta.sizeScheme). Every option maps to working days so
+  // scheduling works the same under any approach; 'none' turns sizing off
+  // (Kanban / #NoEstimates style — duration is set directly, if at all).
+  // Editing options in Setup flips the scheme to 'custom'.
+  RM.SIZE_SCHEMES = {
+    tshirt: {
+      name: 'T-shirt sizes',
+      hint: 'XS–XL relative buckets — quick gut-feel estimates',
+      sizes: ['XS', 'S', 'M', 'L', 'XL'],
+      days: { XS: 2, S: 5, M: 10, L: 20, XL: 40 }
+    },
+    fibonacci: {
+      name: 'Story points',
+      hint: 'Fibonacci scale (Scrum) — uncertainty grows with size',
+      sizes: ['1', '2', '3', '5', '8', '13'],
+      days: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 }
+    },
+    points5: {
+      name: 'Points 1–5',
+      hint: 'Simple five-step scale',
+      sizes: ['1', '2', '3', '4', '5'],
+      days: { 1: 2, 2: 5, 3: 10, 4: 20, 5: 40 }
+    },
+    none: {
+      name: 'No sizing',
+      hint: 'Kanban / no-estimates — set durations directly when needed',
+      sizes: [],
+      days: {}
+    },
+    custom: {
+      name: 'Custom',
+      hint: 'Your own options and day values',
+      sizes: null, // whatever meta.sizeOrder holds
+      days: {}
+    }
+  };
+  RM.SIZE_SCHEME_ORDER = ['tshirt', 'fibonacci', 'points5', 'none'];
+  RM.sizeOrderOf = function (state) {
+    var m = state.meta || state;
+    return m.sizeOrder || RM.SIZE_ORDER;
+  };
+  RM.sizingEnabled = function (state) {
+    var m = state.meta || state;
+    return m.sizeScheme !== 'none' && RM.sizeOrderOf(state).length > 0;
+  };
+  RM.setSizeScheme = function (state, scheme) {
+    var def = RM.SIZE_SCHEMES[scheme];
+    if (!def || scheme === 'custom') return;
+    var m = state.meta;
+    m.sizeScheme = scheme;
+    m.sizeOrder = def.sizes.slice();
+    m.sizeDays = RM.clone(def.days);
+  };
+  RM.renameSizeOption = function (state, oldLabel, newLabel) {
+    var m = state.meta;
+    if (!newLabel || oldLabel === newLabel || m.sizeOrder.indexOf(newLabel) !== -1) return;
+    m.sizeOrder = m.sizeOrder.map(function (l) { return l === oldLabel ? newLabel : l; });
+    m.sizeDays[newLabel] = m.sizeDays[oldLabel];
+    delete m.sizeDays[oldLabel];
+    state.items.forEach(function (it) { if (it.size === oldLabel) it.size = newLabel; });
+    m.sizeScheme = 'custom';
+  };
+  RM.addSizeOption = function (state, label, days) {
+    var m = state.meta;
+    if (!label || m.sizeOrder.indexOf(label) !== -1) return;
+    m.sizeOrder.push(label);
+    m.sizeDays[label] = isFinite(+days) && +days > 0 ? +days : 5;
+    m.sizeScheme = 'custom';
+  };
+  RM.removeSizeOption = function (state, label) {
+    var m = state.meta;
+    m.sizeOrder = m.sizeOrder.filter(function (l) { return l !== label; });
+    delete m.sizeDays[label];
+    state.items.forEach(function (it) { if (it.size === label) it.size = null; });
+    m.sizeScheme = 'custom';
+  };
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
   RM.DEFAULT_TEAM_TYPES = ['Development', 'Design', 'Product', 'Data', 'QA'];
   RM.DEFAULT_WORK_TYPE = 'Development';
@@ -198,6 +275,82 @@
     return n;
   };
 
+  // ---- named holiday ranges (meta.holidayRanges: [{ name, start, end }],
+  // end inclusive; a single day is a one-day range). meta.holidays stays the
+  // derived flat date list every calendar function reads — call
+  // syncHolidayDates after any range edit.
+  RM.US_HOLIDAY_NAMES = {
+    '2026-01-01': 'New Year’s', '2026-01-19': 'MLK Day', '2026-02-16': 'Presidents’ Day',
+    '2026-05-22': 'Memorial Day', '2026-05-25': 'Memorial Day', '2026-06-19': 'Juneteenth',
+    '2026-07-03': 'Independence Day', '2026-09-04': 'Labor Day', '2026-09-07': 'Labor Day',
+    '2026-11-25': 'Thanksgiving', '2026-12-24': 'Christmas', '2027-01-01': 'New Year’s'
+  };
+  function addDaysIso(iso, n) {
+    var d = RM.parseISO(iso);
+    d.setUTCDate(d.getUTCDate() + n);
+    return RM.fmtISO(d);
+  }
+  // do two dates belong to one observance? adjacent, or separated only by a
+  // weekend (e.g. Fri + Mon around Memorial Day weekend)
+  function holidayBridged(endIso, nextIso) {
+    var gap = Math.round((RM.parseISO(nextIso) - RM.parseISO(endIso)) / 86400000);
+    if (gap === 1) return true;
+    if (gap > 3) return false;
+    for (var i = 1; i < gap; i++) {
+      var dow = RM.parseISO(addDaysIso(endIso, i)).getUTCDay();
+      if (dow !== 0 && dow !== 6) return false;
+    }
+    return true;
+  }
+  RM.rangesFromDates = function (dates) {
+    var out = [];
+    (dates || []).slice().sort().forEach(function (iso) {
+      var last = out[out.length - 1];
+      if (last && holidayBridged(last.end, iso)) {
+        last.end = iso;
+        if (!last.name) last.name = RM.US_HOLIDAY_NAMES[iso] || '';
+        return;
+      }
+      out.push({ name: RM.US_HOLIDAY_NAMES[iso] || '', start: iso, end: iso });
+    });
+    return out;
+  };
+  RM.syncHolidayDates = function (m) {
+    var out = [], seen = {};
+    (m.holidayRanges || []).forEach(function (r) {
+      var iso = r.start, guard = 0;
+      while (iso <= r.end && guard++ < 400) {
+        if (!seen[iso]) { seen[iso] = true; out.push(iso); }
+        iso = addDaysIso(iso, 1);
+      }
+    });
+    m.holidays = out.sort();
+  };
+  RM.addHolidayRange = function (m, name, start, end) {
+    m.holidayRanges.push({
+      name: name || '',
+      start: start,
+      end: end && end >= start ? end : start
+    });
+    m.holidayRanges.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+    RM.syncHolidayDates(m);
+  };
+  RM.removeHolidayRange = function (m, idx) {
+    m.holidayRanges.splice(idx, 1);
+    RM.syncHolidayDates(m);
+  };
+  // carve [start, end] out of every range (used by the header week toggle)
+  RM.clipHolidayRanges = function (m, start, end) {
+    var out = [];
+    (m.holidayRanges || []).forEach(function (r) {
+      if (r.end < start || r.start > end) { out.push(r); return; }
+      if (r.start < start) out.push({ name: r.name, start: r.start, end: addDaysIso(start, -1) });
+      if (r.end > end) out.push({ name: r.name, start: addDaysIso(end, 1), end: r.end });
+    });
+    m.holidayRanges = out;
+    RM.syncHolidayDates(m);
+  };
+
   // Smallest calendar span (in working-day slots) whose non-holiday days >= workDays.
   RM.stretchSpan = function (meta, startDay, workDays) {
     if (workDays <= 0) return Math.max(0, workDays);
@@ -260,11 +413,11 @@
     return size && map[size] != null ? map[size] : null;
   };
 
-  // Nearest t-shirt size for a working-day count (ties resolve to the smaller size).
+  // Nearest size option for a working-day count (ties resolve to the smaller size).
   RM.sizeForDays = function (state, days) {
     var map = (state.meta && state.meta.sizeDays) || RM.DEFAULT_SIZE_DAYS;
     var best = null, bestDiff = Infinity;
-    RM.SIZE_ORDER.forEach(function (s) {
+    RM.sizeOrderOf(state).forEach(function (s) {
       if (map[s] == null) return;
       var diff = Math.abs(map[s] - days);
       if (diff < bestDiff) { bestDiff = diff; best = s; }
@@ -316,6 +469,21 @@
       m.holidays.sort();
       m.holidaysV2026 = true;
     }
+    // named holiday ranges; docs saved before ranges existed migrate their
+    // flat date list (consecutive/weekend-bridged dates merge, known US
+    // observances get their names)
+    if (!Array.isArray(m.holidayRanges)) {
+      m.holidayRanges = RM.rangesFromDates(m.holidays);
+    }
+    m.holidayRanges = m.holidayRanges
+      .map(function (r) {
+        if (!r || typeof r.start !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(r.start)) return null;
+        var rEnd = typeof r.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.end) && r.end >= r.start ? r.end : r.start;
+        return { name: typeof r.name === 'string' ? r.name : '', start: r.start, end: rEnd };
+      })
+      .filter(Boolean)
+      .sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+    RM.syncHolidayDates(m);
     m.sprintAnchor = m.sprintAnchor || m.timelineStart;
     m.sprintAnchorNum = m.sprintAnchorNum != null && isFinite(m.sprintAnchorNum) ? m.sprintAnchorNum : 1;
     // scoping columns: ordered list of { key, label? }; built-in keys fall
@@ -356,6 +524,26 @@
     // migrate documents saved under the pre-2026-08 size metric
     var isLegacyMap = RM.SIZE_ORDER.every(function (s) { return m.sizeDays[s] === RM.LEGACY_SIZE_DAYS[s]; });
     if (isLegacyMap) m.sizeDays = RM.clone(RM.DEFAULT_SIZE_DAYS);
+    // sizing approach: preset scheme, or 'custom' once edited; 'none' = off
+    m.sizeScheme = RM.SIZE_SCHEMES[m.sizeScheme] ? m.sizeScheme : 'tshirt';
+    if (Array.isArray(m.sizeOrder)) {
+      var seenSz = {};
+      m.sizeOrder = m.sizeOrder.map(String).filter(function (l) {
+        if (!l || seenSz[l]) return false;
+        seenSz[l] = true;
+        return true;
+      });
+    } else {
+      m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER).slice();
+    }
+    var schemeDays = RM.SIZE_SCHEMES[m.sizeScheme].days || {};
+    m.sizeOrder.forEach(function (l) {
+      if (!isFinite(+m.sizeDays[l]) || +m.sizeDays[l] <= 0) {
+        m.sizeDays[l] = schemeDays[l] || 5;
+      }
+    });
+    // workstream feature switch — ON unless the project turned it off
+    m.workstreamsEnabled = m.workstreamsEnabled !== false;
     delete m.sprintDates;
 
     state.phases = (state.phases || []).map(function (p) {
@@ -936,7 +1124,7 @@
       var scheduled = it.startDay != null && it.durDays != null;
       var phase = phaseById[it.phaseId];
       if (scheduled) {
-        if (!it.size && !it.milestone) add(it, 'warn', 'NO_SIZE', 'Scheduled without a t-shirt size');
+        if (!it.size && !it.milestone && RM.sizingEnabled(state)) add(it, 'warn', 'NO_SIZE', 'Scheduled without a size');
         if (it.startDay < 0 || it.startDay + RM.itemSpan(it) > horizon) {
           add(it, 'warn', 'OFF_TIMELINE', 'Bar extends outside the timeline');
         }

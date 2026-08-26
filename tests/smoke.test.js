@@ -205,10 +205,12 @@ ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" ch
   };
   ok(/position:\s*sticky/.test(decl('.row.band')) && /top:\s*var\(--hdr-h\)/.test(decl('.row.band')),
     'phase bands are sticky below the header');
-  ok(/position:\s*sticky/.test(decl('.row.eband')) && /var\(--band-h\)/.test(decl('.row.eband')),
-    'epic/workstream bands are sticky below the phase band');
-  ok(/\.row\.eband\.sub\s*{[^}]*top:/.test(css),
-    'nested epic bands stack below workstream bands');
+  // workstream/epic group rows are transparent (grid lines show through)
+  // and scroll with the rows instead of sticking
+  ok(!/position:\s*sticky/.test(decl('.row.eband')),
+    'epic/workstream bands scroll with the rows (not sticky)');
+  ok(/\.row\.eband \.row-lane\s*{[^}]*background:\s*transparent/.test(css),
+    'epic/workstream band lanes are transparent');
 }
 
 // ---------------------------------------------------------------- chips
@@ -359,8 +361,26 @@ ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline s
     'end date drives numWeeks (' + state().meta.numWeeks + ' from ' + startIso + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
-ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.holidays.length,
-  'holidays listed as removable chips (Timeline tab)');
+ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.holidayRanges.length &&
+  state().meta.holidayRanges.length > 0,
+  'holidays listed as a removable named-range table (Timeline tab)');
+{
+  // add a named range and remove it again
+  const before = state().meta.holidayRanges.length;
+  doc.querySelector('#suHolName').value = 'Offsite';
+  doc.querySelector('#suHolStart').value = '2026-10-07';
+  doc.querySelector('#suHolEnd').value = '2026-10-08';
+  click(doc.querySelector('#suHolAddBtn'));
+  ok(state().meta.holidayRanges.length === before + 1 &&
+    state().meta.holidays.indexOf('2026-10-07') !== -1 &&
+    state().meta.holidays.indexOf('2026-10-08') !== -1,
+    'adding a named range expands into holiday dates');
+  const idx = state().meta.holidayRanges.findIndex(r => r.name === 'Offsite');
+  click(doc.querySelector('#setupView [data-suholrm="' + idx + '"]'));
+  ok(state().meta.holidayRanges.length === before &&
+    state().meta.holidays.indexOf('2026-10-07') === -1,
+    'removing the range removes its dates');
+}
 suTab('team');
 {
   const inp = doc.querySelector('#suTypeAdd');
@@ -1046,7 +1066,8 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   const fresh = s3.items[anchorIdx - 1];
   ok(fresh && fresh.feature === '' && fresh.startDay == null, 'new item sits immediately above the anchor');
   ok(fresh.holdPos === true, 'inserted item carries holdPos until a date is set');
-  ok(doc.querySelector('#panel').hidden, 'insert does not open the edit panel');
+  ok(!doc.querySelector('#panel .p-name'), 'insert does not open an item in the edit panel');
+  ok(!!doc.querySelector('#panel .p-empty'), 'persistent panel shows its no-selection state');
   const focused = doc.activeElement;
   ok(focused && focused.classList.contains('r-name') &&
     focused.closest('.row.item').dataset.id === fresh.id,
@@ -1130,6 +1151,134 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     'scoping description commits rich text');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   window.__headway.getState && doc.querySelector('#panel [data-f=close]') && click(doc.querySelector('#panel [data-f=close]'));
+}
+
+// ---------------------------------------------------------------- persistent panel
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel .p-empty'),
+    'panel persists on Planning with a no-selection state');
+  click(doc.querySelector('#panel [data-f="collapse"]'));
+  ok(doc.querySelector('#panel').hidden && !doc.querySelector('#panelPeek').hidden,
+    'collapsing hides the panel and shows the peek handle');
+  click(doc.querySelector('#panelPeek'));
+  ok(!doc.querySelector('#panel').hidden, 'the peek handle reopens the panel');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  ok(doc.querySelector('#panel').hidden, 'the panel does not render on Scoping');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- duration preset off-timeline
+{
+  // give an unscheduled item an explicit duration, then place it — the
+  // preset must win over the size estimate
+  const unsched = state().items.find(i => i.startDay == null && !i.milestone);
+  if (unsched) {
+    click(doc.querySelector('#rows .row.item[data-id="' + unsched.id + '"] .r-num'));
+    const durInp = doc.querySelector('#panel [data-f="durWeeks"]');
+    ok(!!durInp && durInp.value === '', 'unscheduled items offer an empty Duration field');
+    durInp.value = '3';
+    durInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().items.find(i => i.id === unsched.id).durDays === 15,
+      'duration can be set while off the timeline');
+    click(doc.querySelector('#panel [data-f="schedule-now"]'));
+    const placed = state().items.find(i => i.id === unsched.id);
+    ok(placed.startDay != null && placed.durDays === 15, 'placing respects the preset duration');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  } else ok(true, '(no unscheduled item in seed)');
+}
+
+// ---------------------------------------------------------------- milestones (UI)
+{
+  const anyRow = doc.querySelector('#rows .row.item');
+  const msId = anyRow.dataset.id;
+  anyRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 240, clientY: 240 }));
+  const convBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Convert to milestone/.test(b.textContent));
+  ok(!!convBtn, 'row context menu offers Convert to milestone');
+  click(convBtn);
+  const msIt = state().items.find(i => i.id === msId);
+  ok(msIt.milestone === true && (msIt.startDay == null || msIt.durDays === 0),
+    'converting makes a zero-duration milestone');
+  if (msIt.startDay != null) {
+    ok(!!doc.querySelector('#rows .bar.ms[data-bar="' + msId + '"] .ms-diamond'),
+      'milestones render as diamonds on the timeline');
+  }
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === msId).milestone === false, 'undo restores the feature');
+}
+
+// ---------------------------------------------------------------- sizing approaches
+{
+  click(doc.querySelector('#viewTabs [data-view="setup"]'));
+  suTab('sizing');
+  ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
+  click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
+  ok(state().meta.sizeScheme === 'fibonacci' &&
+    state().meta.sizeOrder.join(',') === '1,2,3,5,8,13',
+    'Story points preset applies its scale');
+  ok(doc.querySelectorAll('#setupView [data-susz]').length === 6, 'option table lists the six point values');
+  // rename an option — items follow, scheme flips to custom
+  const lblInp = doc.querySelector('#setupView [data-suszlabel="13"]');
+  lblInp.value = '21';
+  lblInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.sizeScheme === 'custom' && state().meta.sizeOrder.indexOf('21') !== -1,
+    'editing options flips the approach to Custom');
+  click(doc.querySelector('#setupView [data-suscheme="none"]'));
+  ok(state().meta.sizeScheme === 'none' && state().meta.sizeOrder.length === 0, 'No sizing empties the scale');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!doc.querySelector('#rows .row.item .r-size'), 'no size chips while sizing is off');
+  ok(doc.body.classList.contains('no-size'), 'body carries the no-size flag');
+  click(doc.querySelector('#viewTabs [data-view="setup"]'));
+  click(doc.querySelector('#setupView [data-suscheme="tshirt"]'));
+  ok(state().meta.sizeOrder.join(',') === 'XS,S,M,L,XL', 'T-shirt preset restores the classic scale');
+}
+
+// ---------------------------------------------------------------- workstream feature toggle
+{
+  suTab('workstreams');
+  const wsChk = doc.querySelector('#suWsEnable');
+  ok(!!wsChk && wsChk.checked, 'Workstreams tab offers the feature switch (on by default)');
+  wsChk.checked = false;
+  wsChk.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.workstreamsEnabled === false, 'workstreams can be disabled per project');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  ok(!doc.querySelector('#hdrSprints [data-col="workstream"]'), 'Scoping hides the Workstream column when off');
+  click(doc.querySelector('#viewTabs [data-view="setup"]'));
+  suTab('workstreams');
+  const wsChk2 = doc.querySelector('#suWsEnable');
+  wsChk2.checked = true;
+  wsChk2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.workstreamsEnabled === true, 'workstreams re-enable');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- empty workstream = outline bar
+{
+  const sched = state().items.find(i => i.startDay != null && i.workstream && !i.milestone);
+  if (sched) {
+    click(doc.querySelector('#rows .row.item[data-id="' + sched.id + '"] .r-num'));
+    const wsInp = doc.querySelector('#panel [data-f="workstream"]');
+    wsInp.value = '';
+    wsInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(!!doc.querySelector('#rows .bar.nows[data-bar="' + sched.id + '"]'),
+      'a bar with no workstream renders as a neutral outline');
+    ok(!!doc.querySelector('#rows .row.item[data-id="' + sched.id + '"] .r-dot.nodot'),
+      'its left-pane dot goes transparent with a light border');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  } else ok(true, '(no scheduled workstreamed item in seed)');
+}
+
+// ---------------------------------------------------------------- scoping: no placeholder dots
+{
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const empties = Array.from(doc.querySelectorAll('#rows .sc-fix .r-ws, #rows .sc-fix .r-size'))
+    .filter(el => el.textContent.trim() === '·');
+  ok(empties.length === 0, 'empty scoping chips show no placeholder dots');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // ---------------------------------------------------------------- png export UI

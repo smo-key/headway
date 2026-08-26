@@ -57,6 +57,7 @@
   var leftWBudget = 696;     // frozen left-pane width, budgeting view
   var repMode = 'workstream'; // reports grouping: workstream | phase | phase-ws
   var panelW = 372;          // right edit-panel width (resizable)
+  var panelOpen = true;      // right panel is persistent on Planning; collapsible
   var leftWPlan = 538;       // frozen left-pane width, planning view
   var leftWScope = 538;      // …and scoping view (independently resizable)
   var groupWs = false;       // sub-group rows by workstream inside each phase
@@ -104,7 +105,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen };
   }
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
@@ -133,6 +134,7 @@
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
+    panelOpen = ui.panelOpen !== false; // panel is persistent by default
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -375,11 +377,19 @@
   var SCOPE_FIXED = [
     ['size', 'Size', 56, 44],
     ['risk', 'Risk', 56, 44],
-    ['duration', 'Weeks', 62, 48],
+    ['duration', 'Duration', 74, 48],
     ['workstream', 'Workstream', 130, 80],
     ['epic', 'Epic', 150, 80]
   ];
-  function allScopeCols() { return SCOPE_FIXED.concat(scopeCols()); }
+  // fixed columns follow the project's feature switches
+  function scopeFixedCols() {
+    return SCOPE_FIXED.filter(function (c) {
+      if (c[0] === 'size') return RM.sizingEnabled(state);
+      if (c[0] === 'workstream') return state.meta.workstreamsEnabled;
+      return true;
+    });
+  }
+  function allScopeCols() { return scopeFixedCols().concat(scopeCols()); }
   function scopeCols() {
     return state.meta.scopeCols.map(function (c) {
       return [c.key, RM.scopeColLabel(c), SCOPE_DEFAULT_W[c.key] || 240];
@@ -416,6 +426,7 @@
     document.body.classList.toggle('no-cap', !showCap || !state.meta.capacityEnabled);
     document.body.classList.toggle('present', presentMode);
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
+    document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
     document.documentElement.style.setProperty('--left-w',
       (presentMode && view === 'planning' ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
@@ -533,7 +544,7 @@
 
   function renderScopeHeader() {
     var out = ['<div class="sc-hrow">'];
-    SCOPE_FIXED.forEach(function (c) {
+    scopeFixedCols().forEach(function (c) {
       out.push('<div class="sc-hcell sc-fixh" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
         '<span class="sc-hlab">' + c[1] + '</span>' +
         '<span class="sc-rz" data-rz="' + c[0] + '" title="Drag to resize column"></span></div>');
@@ -778,20 +789,13 @@
     var iso = RM.fmtISO(RM.weekStartDate(state.meta, w));
     var isFull = RM.holidaysInWeek(state.meta, w) === 5;
     commit('toggle holiday', function (s) {
+      var mon = RM.fmtISO(RM.dayToDate(s.meta, w * 5));
+      var fri = RM.fmtISO(RM.dayToDate(s.meta, w * 5 + 4));
       if (isFull) {
-        // clear every holiday date falling in this week
-        s.meta.holidays = s.meta.holidays.filter(function (h) {
-          var d = RM.dateToDay(s.meta, RM.parseISO(h));
-          return d == null || Math.floor(d / 5) !== w;
-        });
+        // carve this week out of every holiday range
+        RM.clipHolidayRanges(s.meta, mon, fri);
       } else {
-        var seen = {};
-        s.meta.holidays.forEach(function (h) { seen[h] = true; });
-        for (var i = 0; i < 5; i++) {
-          var dIso = RM.fmtISO(RM.dayToDate(s.meta, w * 5 + i));
-          if (dIso && !seen[dIso]) s.meta.holidays.push(dIso);
-        }
-        s.meta.holidays.sort();
+        RM.addHolidayRange(s.meta, '', mon, fri);
       }
     });
     toast(isFull ? 'Week of ' + iso + ' is a working week again' : 'Week of ' + iso + ' marked as a holiday week');
@@ -883,12 +887,14 @@
       '<span class="port p-out" data-port="out" title="Drag to another bar: it depends on this"></span>';
     var doneCk = it.done
       ? '<span class="b-done" title="Done"><i data-lucide="circle-check"></i></span>' : '';
+    // no workstream (while the feature is on): neutral outline instead of color
+    var noWs = state.meta.workstreamsEnabled && !it.workstream && !it.colorOverride;
     if (isScheduled(it) && it.milestone) {
       // milestone: a diamond pinned to its fixed date, label at its right
       var msTip = it.feature + '  ·  ' + RM.fmtShort(RM.dayToDate(meta, it.startDay)) + '  ·  milestone' +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       laneInner =
-        '<div class="bar ms' + (selectedId === it.id && !selStory ? ' selected' : '') +
+        '<div class="bar ms' + (noWs ? ' nows' : '') + (selectedId === it.id && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -916,7 +922,7 @@
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
       laneInner =
-        '<div class="bar' + (selectedId === it.id ? ' selected' : '') +
+        '<div class="bar' + (noWs ? ' nows' : '') + (selectedId === it.id ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -936,22 +942,21 @@
       var fixedContent = {
         size: it.milestone
           ? '<span class="r-size" title="Milestone — no size">—</span>'
-          : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="T-shirt size — click to change">' + (it.size || '·') + '</span>',
+          : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
         risk: '<span class="r-risk rk-' + rk.level + (it.risk ? ' has-risk' : '') + '" tabindex="0" role="button" data-act="risk" title="' + esc(riskTitle) + '">' +
-          (it.risk || (rk.level === 'none' ? '·' : rk.level.charAt(0).toUpperCase())) + '</span>',
+          (it.risk || (rk.level === 'none' ? '' : rk.level.charAt(0).toUpperCase())) + '</span>',
         duration: it.milestone
           ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
-          : (isScheduled(it)
-            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Weeks — click to edit">' + totalWeeks(it) + '</span>'
-            : '<span class="r-wk" title="Estimated weeks from size">' + totalWeeks(it) + '</span>'),
+          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit">' +
+            (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '') + '</span>',
         workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream — click to change">' +
-          '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
-          (it.workstream ? esc(shorten(it.workstream, 18)) : '·') + '</span>',
+          (it.workstream ? '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+            esc(shorten(it.workstream, 18)) : '') + '</span>',
         epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic — click to change">' +
           (epIco2 ? '<i data-lucide="' + epIco2 + '"></i>' : '') +
-          (it.epic ? esc(shorten(it.epic, 20)) : '·') + '</span>'
+          (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>'
       };
-      SCOPE_FIXED.forEach(function (c) {
+      scopeFixedCols().forEach(function (c) {
         cells.push('<div class="sc-cell sc-fix" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
           fixedContent[c[0]] + '</div>');
       });
@@ -973,7 +978,7 @@
       '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
       (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>' +
       '<span class="r-num">' + it.num + '</span>' +
-      '<span class="r-dot" style="background:' + color + '"></span>' +
+      (noWs ? '<span class="r-dot nodot"></span>' : '<span class="r-dot" style="background:' + color + '"></span>') +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
@@ -984,10 +989,10 @@
       '</div>' +
       (view === 'scoping' ? '' : (it.milestone
         ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
-        : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="T-shirt size — click to change">' + (it.size || '·') + '</span>' +
-          (isScheduled(it)
-            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Weeks — click to edit">' + totalWeeks(it) + '</span>'
-            : '<span class="r-wk" title="Estimated weeks from size">' + totalWeeks(it) + '</span>') +
+        : (RM.sizingEnabled(state)
+            ? '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>'
+            : '') +
+          '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit">' + totalWeeks(it) + '</span>' +
           (state.meta.capacityEnabled
             ? '<span class="r-hc' + (it.headcount > 1 ? ' multi' : '') + '" tabindex="0" role="button" data-act="hc" title="Headcount — click to edit">×' + it.headcount + '</span>'
             : ''))) +
@@ -1076,7 +1081,7 @@
           g.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
         });
       }
-      if (groupWs) {
+      if (groupWs && state.meta.workstreamsEnabled) {
         var wg = partition(items, 'workstream', true);
         wg.keys.forEach(function (key) {
           html.push(
@@ -1111,9 +1116,11 @@
   // count WORKING days only — a bar stretched across a holiday still reads as
   // its clean size (e.g. 8w, not 8.2w)
   function totalWeeks(it) {
+    // an explicitly-set duration wins even off the timeline; else the size
     var days = isScheduled(it)
       ? RM.workInSpan(state.meta, it.startDay, RM.itemSpan(it))
-      : RM.effortDays(state, it) + RM.riskEffortDays(state, it);
+      : (it.durDays != null ? it.durDays
+        : RM.effortDays(state, it) + RM.riskEffortDays(state, it));
     if (!days) return '·';
     return fmtDays(days);
   }
@@ -1226,8 +1233,29 @@
 
   function renderPanel() {
     var panel = $('#panel');
+    var peek = $('#panelPeek');
+    // the panel is a planning-view fixture: persistent, collapsible
+    if (view !== 'planning' || presentMode) {
+      panel.hidden = true; panel.innerHTML = '';
+      if (peek) peek.hidden = true;
+      return;
+    }
+    if (!panelOpen) {
+      panel.hidden = true; panel.innerHTML = '';
+      if (peek) peek.hidden = false;
+      return;
+    }
+    if (peek) peek.hidden = true;
     var it = selectedId ? RM.itemById(state, selectedId) : null;
-    if (!it) { panel.hidden = true; panel.innerHTML = ''; return; }
+    if (!it) {
+      panel.hidden = false;
+      panel.innerHTML =
+        '<div id="panelRz" title="Drag to resize"></div>' +
+        '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+        '<div class="p-empty">No item selected<span>Click a row on the timeline to edit it here.</span></div>';
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
     if (selStory) {
       var stSel = storyById(it, selStory);
       if (!stSel) { selStory = null; } else {
@@ -1248,9 +1276,9 @@
       (it.epic ? esc(it.epic) : '<i>— none —</i>'), null, 'Epic');
     var typeDd = ddButton('teamType', it.teamType ? esc(it.teamType) : 'Any role', null, 'Which role works this item');
 
-    var sizeBtns = RM.SIZE_ORDER.map(function (s) {
-      return '<button data-f="size" data-v="' + s + '"' + (it.size === s ? ' class="on"' : '') +
-        ' title="' + fmtDays(RM.sizeDays(state, s)) + '">' + s + '</button>';
+    var sizeBtns = RM.sizeOrderOf(state).map(function (s) {
+      return '<button data-f="size" data-v="' + esc(s) + '"' + (it.size === s ? ' class="on"' : '') +
+        ' title="' + fmtDays(RM.sizeDays(state, s)) + '">' + esc(s) + '</button>';
     }).join('');
     var riskBtns = ['<button data-f="riskSize" data-v=""' + (!it.risk ? ' class="on"' : '') + ' title="No risk">None</button>']
       .concat(RM.RISK_ORDER.map(function (s) {
@@ -1277,7 +1305,7 @@
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Start</label>' +
         '<input type="date" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
-        '<div><label class="p-lab">Weeks</label>' +
+        '<div><label class="p-lab">Duration (weeks)</label>' +
         '<input type="number" data-f="durWeeks" min="0.2" step="0.2" value="' + (it.durDays / 5) + '" style="width:100%"></div>' +
         '</div>' +
         '<div class="p-row" style="margin-top:8px">' +
@@ -1286,6 +1314,10 @@
         '</div>';
     } else {
       scheduleInfo =
+        '<div><label class="p-lab">Duration (weeks)</label>' +
+        '<input type="number" data-f="durWeeks" min="0.2" step="0.2" value="' +
+        (it.durDays != null ? it.durDays / 5 : '') + '" placeholder="1" style="width:100%"' +
+        ' title="Used when the item lands on the timeline (empty = 1 week, or the size)"></div>' +
         '<div class="p-row" style="margin-top:8px">' +
         '<button data-f="schedule-now" class="primary">Place on timeline</button>' +
         '<button data-f="snap">Snap earliest</button>' +
@@ -1344,7 +1376,7 @@
       '" title="Item # — an invalid or taken number picks the next available one"></span>' +
       (it.milestone ? '<span class="p-mschip" title="Milestone — fixed date">◆ Milestone</span>' : '') +
       '<button class="p-more" data-f="more" title="Duplicate, convert, delete…"><i data-lucide="ellipsis"></i></button>' +
-      '<button class="p-close" data-f="close" title="Close (Esc)"><i data-lucide="x"></i></button></div>' +
+      '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
       sec('fields', 'Fields', '', fieldEds) +
@@ -1352,13 +1384,15 @@
       sec('details', 'Details', '',
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Phase</label>' + phaseDd + '</div>' +
-        '<div><label class="p-lab">Workstream</label>' +
-        '<input data-f="workstream" list="wsList" value="' + esc(it.workstream) + '" placeholder="Product / Data / Process" style="width:100%"></div>' +
+        (state.meta.workstreamsEnabled
+          ? '<div><label class="p-lab">Workstream</label>' +
+            '<input data-f="workstream" list="wsList" value="' + esc(it.workstream) + '" placeholder="Product / Data / Process" style="width:100%"></div>'
+          : '<div></div>') +
         '</div>' +
         '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>') +
 
-      sec('schedule', it.milestone ? 'Schedule' : 'Size &amp; schedule', '',
-        (it.milestone ? '' :
+      sec('schedule', it.milestone || !RM.sizingEnabled(state) ? 'Schedule' : 'Size &amp; schedule', '',
+        (it.milestone || !RM.sizingEnabled(state) ? '' :
           '<label class="p-lab">Size</label>' +
           '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
           '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>') +
@@ -1432,7 +1466,7 @@
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
       '<button class="p-more" data-stf="more" title="Delete…"><i data-lucide="ellipsis"></i></button>' +
-      '<button class="p-close" data-f="close" title="Close (Esc)"><i data-lucide="x"></i></button></div>' +
+      '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
       '<label class="p-check fixed" style="margin:6px 0 2px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
 
@@ -1695,7 +1729,21 @@
   function shorten(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
   // panel events (delegated)
+  $('#panelPeek').addEventListener('click', function () {
+    panelOpen = true;
+    saveLocal();
+    renderPanel();
+  });
+
   $('#panel').addEventListener('click', function (e) {
+    // collapse works from every panel state (empty state included)
+    var clps = e.target.closest('[data-f="collapse"]');
+    if (clps) {
+      panelOpen = false;
+      saveLocal();
+      renderPanel();
+      return;
+    }
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
     var secBtn = e.target.closest('[data-sectoggle]');
@@ -1852,7 +1900,8 @@
         var t = RM.itemById(s, it.id);
         var today = RM.dateToDay(s.meta, new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
         t.startDay = Math.max(0, Math.min(today, RM.numDays(s.meta) - 5));
-        t.durDays = t.milestone ? 0 : RM.stretchSpan(s.meta, t.startDay, RM.effortDays(s, t));
+        t.durDays = t.milestone ? 0
+          : (t.durDays != null ? t.durDays : RM.stretchSpan(s.meta, t.startDay, RM.effortDays(s, t)));
         t.riskDays = t.milestone ? 0 : RM.stretchSpan(s.meta, t.startDay + t.durDays, RM.riskEffortDays(s, t));
       });
       return;
@@ -2007,6 +2056,14 @@
       return;
     }
     if (f === 'durWeeks') {
+      if (!isScheduled(it) && String(val).trim() === '') {
+        // clearing an unscheduled preset returns it to the default
+        commit('duration', function (s) {
+          var t = RM.itemById(s, it.id);
+          if (t.startDay == null) t.durDays = null;
+        });
+        return;
+      }
       var wv = Math.max(0.2, parseFloat(val) || 1);
       commit('duration', function (s) {
         RM.itemById(s, it.id).durDays = Math.max(1, Math.round(wv * 5));
@@ -2149,12 +2206,16 @@
     if (act) {
       switch (act.dataset.act) {
         case 'wk': {
-          if (act.querySelector('input') || !isScheduled(it)) return;
+          if (act.querySelector('input') || it.milestone) return;
+          var wkSched = isScheduled(it);
           var wkInp = document.createElement('input');
           wkInp.type = 'number';
           wkInp.min = '0.2';
           wkInp.step = '0.2';
-          wkInp.value = Math.round((RM.workInSpan(state.meta, it.startDay, it.durDays) / 5) * 10) / 10;
+          wkInp.value = wkSched
+            ? Math.round((RM.workInSpan(state.meta, it.startDay, it.durDays) / 5) * 10) / 10
+            : (it.durDays != null ? it.durDays / 5 : '');
+          wkInp.placeholder = '1';
           wkInp.className = 'hc-edit';
           wkInp.style.width = '30px';
           act.textContent = '';
@@ -2165,10 +2226,15 @@
           var wkFin = function (saveIt) {
             if (wkDone) return; wkDone = true;
             var wv = parseFloat(wkInp.value);
-            if (saveIt && isFinite(wv) && wv > 0) {
+            if (saveIt && !wkSched && String(wkInp.value).trim() === '') {
+              // clearing an unscheduled duration returns it to the default
+              commit('duration', function (s) { RM.itemById(s, itemId).durDays = null; });
+            } else if (saveIt && isFinite(wv) && wv > 0) {
               commit('duration', function (s) {
                 var t = RM.itemById(s, itemId);
-                t.durDays = RM.stretchSpan(s.meta, t.startDay, Math.max(1, Math.round(wv * 5)));
+                t.durDays = t.startDay != null
+                  ? RM.stretchSpan(s.meta, t.startDay, Math.max(1, Math.round(wv * 5)))
+                  : Math.max(1, Math.round(wv * 5));
               });
             } else render();
           };
@@ -2214,8 +2280,8 @@
         case 'size': {
           openDropdown(act, [{ label: '<i>no size</i>', checked: !it.size, fn: function () {
             setItemSize(itemId, null);
-          } }].concat(RM.SIZE_ORDER.map(function (sz) {
-            return { label: sz + ' <small>' + sizeHuman(sz) + '</small>', checked: it.size === sz, fn: function () {
+          } }].concat(RM.sizeOrderOf(state).map(function (sz) {
+            return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: it.size === sz, fn: function () {
               setItemSize(itemId, sz);
             } };
           })));
@@ -2362,7 +2428,8 @@
       return;
     }
     var day = Math.max(0, snapTo(laneDayAt(e.clientX)));
-    var dur = it.milestone ? 1 : RM.stretchSpan(state.meta, day, RM.effortDays(state, it) || 5);
+    var dur = it.milestone ? 1
+      : (it.durDays != null ? it.durDays : RM.stretchSpan(state.meta, day, RM.effortDays(state, it) || 5));
     if (!placePrev || placePrev.parentNode !== lane) {
       clearPlacePreview();
       placePrev = document.createElement('div');
@@ -2643,7 +2710,10 @@
     commit('place item', function (s2) {
       var t2 = RM.itemById(s2, itemId);
       t2.startDay = pDay;
-      t2.durDays = t2.milestone ? 0 : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5);
+      // a preset duration wins; else the size estimate; else one week
+      t2.durDays = t2.milestone ? 0
+        : (t2.durDays != null ? t2.durDays
+          : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5));
       if (autoOrder) RM.sortItemsByStart(s2);
     });
     select(itemId);
@@ -3307,7 +3377,8 @@
   function ghostDragMove(e) {
     var it = RM.itemById(state, drag.itemId);
     var day = Math.max(0, snapTo(laneDayAt(e.clientX)));
-    var dur = it.milestone ? 1 : RM.stretchSpan(state.meta, day, RM.effortDays(state, it));
+    var dur = it.milestone ? 1
+      : (it.durDays != null ? it.durDays : RM.stretchSpan(state.meta, day, RM.effortDays(state, it)));
     if (!drag.preview) {
       var rowEl = rowsEl.querySelector('.row[data-id="' + it.id + '"] .row-lane');
       drag.preview = document.createElement('div');
@@ -3658,10 +3729,10 @@
         toast('Capacity row ' + (showCap ? 'shown' : 'hidden'));
       } } : null,
       { sep: true },
-      { icon: 'layers', label: 'Group by workstream', checked: groupWs, fn: function () {
+      state.meta.workstreamsEnabled ? { icon: 'layers', label: 'Group by workstream', checked: groupWs, fn: function () {
         groupWs = !groupWs;
         saveLocal(); render();
-      } },
+      } } : null,
       { icon: 'layers', label: 'Group by epic', checked: groupEpic, fn: function () {
         groupEpic = !groupEpic;
         saveLocal(); render();
@@ -4220,13 +4291,43 @@
     var m = state.meta;
     var host = $('#setupView');
 
-    var sizeInputs = RM.SIZE_ORDER.map(function (s2) {
-      return '<div><label>' + s2 + '</label><input type="number" min="1" data-susz="' + s2 + '" value="' + m.sizeDays[s2] + '"></div>';
+    // sizing approach picker + a fully editable option table (label → days);
+    // editing options flips the scheme to Custom
+    var schemeRows = RM.SIZE_SCHEME_ORDER.map(function (k) {
+      var sch = RM.SIZE_SCHEMES[k];
+      return '<button class="su-scheme' + (m.sizeScheme === k ? ' on' : '') + '" data-suscheme="' + k + '">' +
+        '<span class="su-scheme-check"><i data-lucide="' + (m.sizeScheme === k ? 'circle-check' : 'circle') + '"></i></span>' +
+        '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
+        '</button>';
+    }).join('') + (m.sizeScheme === 'custom'
+      ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
+        '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
+      : '');
+    var sizeOptRows = RM.sizeOrderOf(state).map(function (s2) {
+      return '<tr>' +
+        '<td><input data-suszlabel="' + esc(s2) + '" value="' + esc(s2) + '" aria-label="Option label"></td>' +
+        '<td><input type="number" min="1" data-susz="' + esc(s2) + '" value="' + m.sizeDays[s2] + '" aria-label="Working days"></td>' +
+        '<td class="hol-x"><button data-suszrm="' + esc(s2) + '" title="Remove option"><i data-lucide="x"></i></button></td>' +
+        '</tr>';
     }).join('');
+    var sizingCards = RM.sizingEnabled(state)
+      ? '<section class="su-card"><h2>Size options</h2>' +
+        '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
+        '<tbody>' + sizeOptRows + '</tbody></table>' +
+        '<button id="suSzAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add option</button>' +
+        '<div class="m-hint">Working days drive scheduling and the duration estimate; the risk rating stays a separate L/M/H flag.</div>' +
+        '</section>'
+      : '<section class="su-card"><h2>Size options</h2>' +
+        '<div class="m-hint">Sizing is off — set durations directly on items when you need them.</div>' +
+        '</section>';
 
-    var holChips = (m.holidays || []).map(function (iso) {
-      return '<span class="type-chip bw-chip">' + esc(iso) +
-        '<button data-suholrm="' + esc(iso) + '" title="Remove"><i data-lucide="x"></i></button></span>';
+    var holRows = (m.holidayRanges || []).map(function (r, i) {
+      var dates = r.start === r.end ? r.start : r.start + ' → ' + r.end;
+      return '<tr>' +
+        '<td>' + (r.name ? esc(r.name) : '<i class="hol-unnamed">—</i>') + '</td>' +
+        '<td class="hol-dates">' + esc(dates) + '</td>' +
+        '<td class="hol-x"><button data-suholrm="' + i + '" title="Remove"><i data-lucide="x"></i></button></td>' +
+        '</tr>';
     }).join('');
 
     function grip() {
@@ -4283,8 +4384,16 @@
         '</div>' +
         '</section>' +
         '<section class="su-card"><h2>Holidays</h2>' +
-        '<div class="su-chips">' + (holChips || '<span class="m-hint">none</span>') + '</div>' +
-        '<div class="p-row" style="margin-top:8px"><input type="date" id="suHolAdd" class="fixed"><button id="suHolAddBtn" class="fixed">Add day</button></div>' +
+        (holRows
+          ? '<table class="hol-table"><thead><tr><th>Name</th><th>Dates</th><th></th></tr></thead><tbody>' + holRows + '</tbody></table>'
+          : '<div class="m-hint">none</div>') +
+        '<div class="hol-add">' +
+        '<input id="suHolName" placeholder="Name (optional)">' +
+        '<input type="date" id="suHolStart" aria-label="First day">' +
+        '<input type="date" id="suHolEnd" aria-label="Last day (optional)" title="Last day — leave empty for a single day">' +
+        '<button id="suHolAddBtn" class="fixed">Add</button>' +
+        '</div>' +
+        '<div class="m-hint">Single days or ranges (e.g. Christmas Eve through New Year’s). Non-working days stretch bars that span them.</div>' +
         '</section>',
       phases:
         '<section class="su-card"><h2>Phases</h2>' +
@@ -4293,8 +4402,11 @@
         '</section>',
       workstreams:
         '<section class="su-card"><h2>Workstreams</h2>' +
-        '<div class="su-rows" data-sulist="ws">' + (wsRows || '<div class="m-hint">none yet</div>') + '</div>' +
-        '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>' +
+        '<label class="p-check" title="Color-codes items and enables workstream grouping"><input type="checkbox" id="suWsEnable"' + (m.workstreamsEnabled ? ' checked' : '') + '> Use workstreams in this project</label>' +
+        (m.workstreamsEnabled
+          ? '<div class="su-rows" style="margin-top:10px" data-sulist="ws">' + (wsRows || '<div class="m-hint">none yet</div>') + '</div>' +
+            '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>'
+          : '<div class="m-hint">Workstreams are off — items keep a neutral color and the Scoping column is hidden.</div>') +
         '</section>',
       team:
         '<section class="su-card"><h2>Team types</h2>' +
@@ -4306,10 +4418,9 @@
         '<div class="m-hint">People and their weekly hours live in the Resources panel under the timeline.</div>' +
         '</section>',
       sizing:
-        '<section class="su-card"><h2>Sizing rules</h2>' +
-        '<div class="size-grid">' + sizeInputs + '</div>' +
-        '<div class="m-hint">Working days per T-shirt size; the risk buffer uses the same scale.</div>' +
-        '</section>',
+        '<section class="su-card"><h2>Approach</h2>' +
+        '<div class="su-schemes">' + schemeRows + '</div>' +
+        '</section>' + sizingCards,
       appearance:
         '<section class="su-card"><h2>Appearance</h2>' + personalFieldsHtml('appearance') +
         '<div class="m-hint">System follows your OS.</div>' +
@@ -4381,6 +4492,24 @@
       toast('Capacity planning ' + (on ? 'enabled' : 'disabled'));
       return;
     }
+    if (t.id === 'suWsEnable') {
+      var wsOn = t.checked;
+      commit('workstream feature', function (s2) { s2.meta.workstreamsEnabled = wsOn; });
+      toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
+      return;
+    }
+    if (t.dataset.suszlabel != null) {
+      var oldLbl = t.dataset.suszlabel;
+      var newLbl = t.value.trim();
+      if (!newLbl || newLbl === oldLbl) { render(); return; }
+      if (RM.sizeOrderOf(state).indexOf(newLbl) !== -1) {
+        toast('“' + newLbl + '” already exists', 'err');
+        render();
+        return;
+      }
+      commit('rename size', function (s2) { RM.renameSizeOption(s2, oldLbl, newLbl); });
+      return;
+    }
     if (t.id === 'suStart') {
       var d = RM.parseISO(t.value || state.meta.timelineStart);
       if (!isFinite(d.getTime())) { render(); return; }
@@ -4416,8 +4545,11 @@
     }
     if (t.dataset.susz) {
       var sz = t.dataset.susz;
-      var v = Math.max(1, parseInt(t.value, 10) || RM.DEFAULT_SIZE_DAYS[sz]);
-      commit('size days', function (s2) { s2.meta.sizeDays[sz] = v; });
+      var v = Math.max(1, parseInt(t.value, 10) || state.meta.sizeDays[sz] || 5);
+      commit('size days', function (s2) {
+        s2.meta.sizeDays[sz] = v;
+        s2.meta.sizeScheme = 'custom';
+      });
       return;
     }
   });
@@ -4426,23 +4558,39 @@
     var t = e.target.closest('button');
     if (!t) return;
     if (t.id === 'suHolAddBtn') {
-      var v = $('#suHolAdd').value;
-      if (!v) return;
-      var d = RM.parseISO(v);
-      if (!isFinite(d.getTime())) return;
-      if (((d.getUTCDay() + 6) % 7) > 4) { toast('That date falls on a weekend — no working day to blank', 'err'); return; }
-      var iso = RM.fmtISO(d);
+      var hName = $('#suHolName').value.trim();
+      var hStart = $('#suHolStart').value;
+      var hEnd = $('#suHolEnd').value || hStart;
+      if (!hStart) return;
+      if (hEnd < hStart) { var swp = hStart; hStart = hEnd; hEnd = swp; }
       commit('holiday add', function (s2) {
-        if (s2.meta.holidays.indexOf(iso) === -1) s2.meta.holidays.push(iso);
-        s2.meta.holidays.sort();
+        RM.addHolidayRange(s2.meta, hName, hStart, hEnd);
       });
       return;
     }
     var holrm = t.dataset.suholrm;
-    if (holrm) {
-      commit('holiday rm', function (s2) {
-        s2.meta.holidays = s2.meta.holidays.filter(function (x) { return x !== holrm; });
+    if (holrm != null) {
+      var holIdx = parseInt(holrm, 10);
+      commit('holiday rm', function (s2) { RM.removeHolidayRange(s2.meta, holIdx); });
+      return;
+    }
+    if (t.dataset.suscheme) {
+      var schemeKey = t.dataset.suscheme;
+      if (schemeKey === state.meta.sizeScheme) return;
+      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey); });
+      return;
+    }
+    if (t.id === 'suSzAdd') {
+      commit('add size', function (s2) {
+        var lbl = 'New', n2 = 2;
+        while (s2.meta.sizeOrder.indexOf(lbl) !== -1) lbl = 'New ' + n2++;
+        RM.addSizeOption(s2, lbl, 5);
       });
+      return;
+    }
+    if (t.dataset.suszrm) {
+      var rmLbl = t.dataset.suszrm;
+      commit('remove size', function (s2) { RM.removeSizeOption(s2, rmLbl); });
       return;
     }
     if (t.id === 'suWsAddBtn') {
@@ -5175,7 +5323,7 @@
       chk('autoOrder', 'Auto-order rows by start', autoOrder) +
       '</div>' +
       '<div class="m-sec"><label>Grouping</label>' +
-      chk('groupWs', 'Group by workstream', groupWs) +
+      (state && state.meta.workstreamsEnabled ? chk('groupWs', 'Group by workstream', groupWs) : '') +
       chk('groupEpic', 'Group by epic', groupEpic) +
       '</div>' +
       (desktop

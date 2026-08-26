@@ -1120,15 +1120,16 @@ body.panning, body.panning * { cursor: grabbing !important; }
 
 /* epic group bands (group-by-epic mode) — sticky under the pinned phase band;
    nested (.sub) epics stack one band lower, under their workstream band */
-.row.eband { height: 26px; position: sticky; top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h))); z-index: 13; }
-.row.eband.sub { top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h)) + var(--eband-real-h, 26px)); z-index: 12; }
+/* workstream/epic group rows are transparent — the sprint grid lines show
+   through their lanes (so they scroll with the rows instead of sticking) */
+.row.eband { height: 26px; }
 .row.eband .row-left {
-  background: var(--group-a);
+  background: transparent;
   border-bottom: 1px solid var(--line-2);
   padding-left: 40px;
 }
-.row.eband .row-lane { background: var(--group-b); border-bottom-color: var(--line); }
-.row.eband.wsband .row-left { background: var(--group-c); padding-left: 30px; }
+.row.eband .row-lane { background: transparent; border-bottom-color: var(--line); }
+.row.eband.wsband .row-left { background: transparent; padding-left: 30px; }
 .row.eband.wsband .eb-name { color: var(--ink); }
 .row.eband.sub .row-left { padding-left: 52px; }
 .eb-name { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); }
@@ -1398,7 +1399,7 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 /* rich scoping cell mirrors the textarea look */
 .sc-rich { overflow-y: auto; white-space: normal; }
 .sc-rich ul, .sc-rich ol { margin: 2px 0; padding-left: 18px; }
-.sc-rich:empty::before { content: '·'; color: var(--ink-3); }
+/* empty scoping cells stay visually empty (no placeholder dot) */
 .row.btotal .row-left { border-top: 2px solid var(--line-2); }
 
 /* reports drawer table */
@@ -1551,7 +1552,7 @@ body.present #repPanel { display: none !important; }
 /* ---------------------------------------------------- desktop window chrome
    js/desktop.js adds chrome-mac / chrome-win under Tauri; inert in a browser.
    The header is the titlebar: empty space drags, double-click zooms/maximizes. */
-body.chrome-mac #topbar { padding-left: 86px; } /* clear the overlay traffic lights */
+body.chrome-mac #topbar { padding-left: 96px; } /* clear the overlay traffic lights */
 /* native fullscreen hides the traffic lights — the title area shifts back left */
 body.chrome-mac.fullscreen #topbar { padding-left: 14px; }
 body.chrome-mac.fullscreen #startBar { padding-left: 0; }
@@ -1622,7 +1623,7 @@ body.start #topbar, body.start #main { display: none; }
   height: 46px; flex: 0 0 auto;
   display: flex; justify-content: flex-end; align-items: stretch;
 }
-body.chrome-mac #startBar { padding-left: 86px; }
+body.chrome-mac #startBar { padding-left: 96px; }
 #startBar .win-caption { margin: 0; }
 #startBody { flex: 1; overflow-y: auto; display: flex; justify-content: center; }
 .sp-inner { width: min(640px, 92vw); padding: 5vh 12px 64px; }
@@ -1806,3 +1807,94 @@ body.chrome-mac #startBar { padding-left: 86px; }
   border-color: var(--blue);
   box-shadow: 0 0 0 3px rgba(0, 87, 184, .18);
 }
+
+/* ------------------------------------------------- batch-2 components */
+/* no-workstream items: neutral outline instead of a workstream color */
+.bar.nows {
+  background: transparent;
+  border: 1px solid var(--line-3);
+  color: var(--ink);
+  box-shadow: none;
+}
+.bar.nows .b-label { text-shadow: none; }
+.bar.nows .b-hc { background: var(--hover); color: var(--ink-2); }
+.bar.nows .b-h:hover { background: rgba(var(--ink-rgb), .08); }
+.bar.nows.ms { border: 0; }
+.bar.nows .ms-diamond {
+  background: transparent;
+  border: 1.5px solid var(--line-3);
+  box-shadow: none;
+}
+.r-dot.nodot {
+  background: transparent !important;
+  border: 1px solid var(--line-3);
+  box-sizing: border-box;
+}
+
+/* sizing feature off: hide the size corner label */
+body.no-size .sz-lab { visibility: hidden; }
+
+/* persistent right panel: empty state + collapsed peek handle */
+.p-empty {
+  margin-top: 34px;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: 13px; font-weight: 600;
+}
+.p-empty span {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12px; font-weight: 400;
+}
+#panelPeek {
+  position: absolute; right: 0; top: 50%;
+  transform: translateY(-50%);
+  z-index: 25;
+  border: 1px solid var(--line-2); border-right: 0;
+  border-radius: 8px 0 0 8px;
+  background: var(--surface);
+  padding: 10px 6px 10px 8px;
+  color: var(--ink-3);
+}
+#panelPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
+body[data-view="scoping"] #panelPeek, body[data-view="budget"] #panelPeek,
+body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
+
+/* settings tables (holidays, size options) */
+.hol-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hol-table th {
+  text-align: left; font-size: 11px; font-weight: 650; color: var(--ink-3);
+  padding: 2px 8px 6px 0; border-bottom: 1px solid var(--line);
+}
+.hol-table td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); }
+.hol-table tr:last-child td { border-bottom: 0; }
+.hol-table .hol-dates { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+.hol-table .hol-x { width: 30px; text-align: right; }
+.hol-table .hol-x button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink-3); }
+.hol-table .hol-x button:hover { color: var(--err); background: var(--err-bg); box-shadow: none; }
+.hol-unnamed { color: var(--ink-3); }
+.hol-add { display: flex; gap: 8px; margin-top: 10px; }
+.hol-add input[type="date"] { flex: 0 0 auto; }
+.hol-add #suHolName { flex: 1; min-width: 0; }
+
+/* sizing approach picker (radio-card list) */
+.su-schemes { display: flex; flex-direction: column; gap: 6px; }
+.su-scheme {
+  display: flex; align-items: flex-start; gap: 10px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface);
+  padding: 9px 12px;
+  text-align: left; justify-content: flex-start;
+  cursor: pointer;
+}
+.su-scheme:hover { border-color: var(--line-3); box-shadow: none; }
+.su-scheme.on { border-color: var(--blue); background: var(--blue-soft); box-shadow: none; }
+.su-scheme.static { cursor: default; }
+.su-scheme-check { display: inline-flex; margin-top: 1px; color: var(--ink-3); }
+.su-scheme.on .su-scheme-check { color: var(--blue); }
+.su-scheme-check svg { width: 15px; height: 15px; }
+.su-scheme-main { display: flex; flex-direction: column; gap: 1px; }
+.su-scheme-main b { font-size: 13px; font-weight: 650; }
+.su-scheme-main span { font-size: 11.5px; color: var(--ink-3); }
+.hol-table input { width: 100%; min-height: 28px; }
