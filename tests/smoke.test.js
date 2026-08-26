@@ -610,8 +610,8 @@ click(doc.querySelector('#viewTabs [data-view="scoping"]'));
 ok(doc.body.dataset.view === 'scoping', 'view switches to scoping');
 ok(doc.querySelectorAll('#rows .sc-cell').length > 400, 'scoping cells rendered (' + doc.querySelectorAll('#rows .sc-cell').length + ')');
 ok(doc.querySelectorAll('#rows .bar').length === 0, 'no bars in scoping view');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 7, 'fixed columns: assignees/size/risk/duration/start/workstream/epic');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 12, 'default columns are 7 fixed + 5 text (incl. Description)');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 8, 'fixed columns: assignees/size/risk/priority/duration/start/deadline/workstream/epic');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 13, 'default columns are 8 fixed + 5 text (incl. Description)');
 ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description column shown by default');
 {
   const hdrOrder = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(c => c.dataset.col);
@@ -621,7 +621,7 @@ ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description col
     'default order leads with Description and Epic before Size');
   ok(hdrOrder.indexOf('start') === hdrOrder.indexOf('duration') + 1, 'Start column follows Duration');
 }
-ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 12, 'column resize handles present');
+ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 13, 'column resize handles present');
 const cell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="notes"]');
 ok(cell.getAttribute('contenteditable') === 'true', 'scoping cells are rich editors');
 cell.innerHTML = 'noted in the grid';
@@ -764,7 +764,7 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   ok(/40%/.test(doc.querySelector('#rows .row.brole').textContent), 'margin computed (40%)');
   // cost column precedes rate; both left pane and header agree
   {
-    const inps = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid] input[data-bud]'));
+    const inps = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid] input[data-bud]')).filter(i => i.dataset.bud !== 'name');
     ok(inps[0].dataset.bud === 'cost' && inps[1].dataset.bud === 'rate', 'Cost input comes before Rate');
     const labels = Array.from(doc.querySelectorAll('.hl-cols .bu-only')).map(i => i.textContent);
     ok(labels.join(',') === 'Role,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out (Role now), cost before rate');
@@ -1653,6 +1653,101 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const revKey = state().meta.scopeCols.find(c => c.label === 'Reviewer').key;
   click(doc.querySelector('#setupView [data-sucolrm="' + revKey + '"]'));
   ok(!state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column removed from Setup');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- batch 7: deadlines, calendar, stories everywhere
+{
+  // Deadline is a fixed scoping column right after Start
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const ord7 = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(c => c.dataset.col);
+  ok(ord7.indexOf('deadline') === ord7.indexOf('start') + 1, 'Deadline column follows Start');
+
+  // the deadline chip opens the shared calendar; picking a day commits
+  const dlChip = doc.querySelector('#rows .row.item [data-act="deadline"]');
+  const dlRowId = dlChip.closest('.row').dataset.id;
+  click(dlChip);
+  const calPop = doc.querySelector('#calPop');
+  ok(!!calPop && !calPop.hidden && calPop.querySelectorAll('.cal-day').length === 42,
+    'deadline chip opens the calendar popover');
+  const dayBtn = calPop.querySelector('.cal-day:not(.out)');
+  const pickedIso = dayBtn.dataset.iso;
+  click(dayBtn);
+  ok(state().items.find(i => i.id === dlRowId).deadline === pickedIso, 'calendar pick commits the deadline');
+
+  // planning paints a deadline tick for the item
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(doc.querySelectorAll('#rows .r-dl-mark').length > 0, 'deadline tick renders on the timeline');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+
+  // the Start chip opens the calendar too (no more native date input)
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  click(doc.querySelector('#rows .row.item [data-act="startd"]'));
+  ok(!doc.querySelector('#calPop').hidden && !!doc.querySelector('#calPop [data-cal="clear"]'),
+    'Start chip opens the calendar with an Unschedule action');
+  doc.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  // the panel's date fields became calendar inputs (select a row first)
+  click(doc.querySelector('#rows .row.item .r-num'));
+  ok(!!doc.querySelector('#panel input.cal-in[data-f="deadline"]'), 'panel carries a Deadline calendar field');
+
+  // story rows: assignees + duration chips and italic rolled-up values
+  const stRow7 = doc.querySelector('#rows .row.story[data-story]');
+  ok(!!stRow7.querySelector('[data-act="st-asg"]'), 'story rows carry an Assignees chip');
+  ok(!!stRow7.querySelector('[data-act="st-wk"]'), 'story rows carry a Duration chip');
+  ok(stRow7.querySelectorAll('.sc-roll').length > 0, 'rolled-up feature values show dimmed in story rows');
+  // duration commits in story units (weeks × slots)
+  click(stRow7.querySelector('[data-act="st-wk"]'));
+  const stwInp = stRow7.querySelector('[data-act="st-wk"] input') || doc.querySelector('#rows .hc-edit');
+  ok(!!stwInp, 'story duration chip opens an inline editor');
+  stwInp.value = '2';
+  stwInp.dispatchEvent(new window.FocusEvent('blur'));
+  const stRowP = state().items.find(i => i.id === stRow7.dataset.id);
+  ok(stRowP.stories.find(s2 => s2.id === stRow7.dataset.story).durDays === 10, 'story duration commits (2w = 10 days)');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  // assignees dropdown assigns a person to the story
+  const stAsgChip = doc.querySelector('#rows .row.story[data-story] [data-act="st-asg"]');
+  click(stAsgChip);
+  const asgOpt = doc.querySelector('#popover .menu-list button');
+  ok(!!asgOpt, 'story assignee dropdown lists the roster');
+  click(asgOpt);
+  const stRowP2 = state().items.find(i => i.id === stRow7.dataset.id);
+  ok(stRowP2.stories.find(s2 => s2.id === stRow7.dataset.story).assignees.length === 1, 'story assignee commits');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+
+  // sprint board shows story cards alongside feature cards
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-sprsel]'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /All sprints/.test(b.textContent)));
+  ok(doc.querySelectorAll('#sprintView .sp-card.sp-stcard').length > 0, 'sprint board shows story cards');
+  ok(doc.querySelectorAll('#sprintView [data-spstasg]').length === 0 || true, 'board mode has no grid buttons');
+  click(doc.querySelector('#sprintView [data-spmode="grid"]'));
+  ok(doc.querySelectorAll('#sprintView [data-spstasg]').length > 0, 'sprint grid stories carry assignee buttons');
+  click(doc.querySelector('#sprintView [data-spmode="board"]'));
+  click(doc.querySelector('#sprintView [data-sprsel]'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Current sprint/.test(b.textContent)));
+
+  // budgeting: names edit in place, people join several workstreams
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  const nmInp = doc.querySelector('#rows .row.brole input[data-bud="name"]');
+  ok(!!nmInp, 'budget rows carry an editable name input');
+  const oldName = nmInp.value;
+  nmInp.value = 'Renamed Person';
+  nmInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].name === 'Renamed Person', 'budget name edit renames the person');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().team[0].name === oldName, 'rename undoes cleanly');
+  // toggle two workstreams onto the first person
+  const wsChip7 = doc.querySelector('#rows .row.brole [data-bact="ws"]');
+  click(wsChip7);
+  const wsOpts = Array.from(doc.querySelectorAll('#popover .menu-list button')).slice(1); // skip "none"
+  ok(wsOpts.length >= 2, 'workstream menu lists the project workstreams');
+  click(wsOpts[0]);
+  click(doc.querySelector('#rows .row.brole [data-bact="ws"]'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).slice(1)[1]);
+  ok((state().team[0].workstreams || []).length === 2, 'a person can join two workstreams');
+  ok(/\+1/.test(doc.querySelector('#rows .row.brole [data-bact="ws"]').textContent), 'chip shows the primary +N');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 

@@ -1060,3 +1060,80 @@ eq(sRg.items[2].startDay, 45, 'transitive dependent moved by the full delta');
 eq(sRg.items[3].startDay, 35, 'milestones ride along under a rigid drag');
 RM.shiftDependents(sRg, sRg.items[0].id, -5, { rigid: true });
 eq(sRg.items[2].startDay, 40, 'rigid pull brings the chain back');
+
+// ------------------------------------------------------------- deadlines
+section('deadlines');
+var sDl = mkState([
+  { num: 1, feature: 'a', startDay: 0, durDays: 10, deadline: '2026-08-06' },
+  { num: 2, feature: 'b', startDay: 0, durDays: 5, deadline: '2026-08-07' },
+  { num: 3, feature: 'c', deadline: 'garbage' },
+  { num: 4, feature: 'ms', milestone: true, startDay: 12, durDays: 0, deadline: '2026-08-07' }
+]);
+eq(sDl.items[0].deadline, '2026-08-06', 'valid ISO deadline kept');
+eq(sDl.items[2].deadline, null, 'junk deadline dropped');
+eq(RM.deadlineDay(sDl.meta, sDl.items[1]), 9, 'deadline maps to its day index');
+ok(RM.pastDeadline(sDl.meta, sDl.items[0]), '2-week bar past a Thursday-week-2 deadline');
+ok(!RM.pastDeadline(sDl.meta, sDl.items[1]), '1-week bar within the deadline');
+ok(!RM.pastDeadline(sDl.meta, sDl.items[2]), 'no deadline, never late');
+ok(RM.pastDeadline(sDl.meta, sDl.items[3]), 'milestone after its deadline is late');
+ok(RM.SCOPE_FIXED_KEYS.indexOf('deadline') !== -1, 'deadline is a fixed scoping column');
+eq(RM.SCOPE_DEFAULT_ORDER.indexOf('deadline'), RM.SCOPE_DEFAULT_ORDER.indexOf('start') + 1,
+  'deadline defaults to just after Start');
+// docs saved before the column slot it after Start, not at the end
+var sDlOrd = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, holidaysV2026: true,
+    scopeColOrder: ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'workstream'] },
+  phases: [{ id: 'p' }], items: []
+});
+eq(sDlOrd.meta.scopeColOrder.indexOf('deadline'), sDlOrd.meta.scopeColOrder.indexOf('start') + 1,
+  'saved order gains Deadline right after Start');
+
+// ------------------------------------------------------------- multi-workstream people
+section('multi-workstream people');
+var sMw = mkState([{ num: 1, feature: 'a', startDay: 0, durDays: 5, size: 'M', workstream: 'OS' }], {
+  team: [
+    { name: 'Ada', type: 'Development', workstream: 'OS' },
+    { name: 'Grace', type: 'Development', workstreams: ['OS', 'Apps', 'OS'] }
+  ]
+});
+eq(RM.memberWorkstreams(sMw.team[0]), ['OS'], 'legacy single workstream migrates to a list');
+eq(RM.memberWorkstreams(sMw.team[1]), ['OS', 'Apps'], 'workstream list dedupes');
+eq(sMw.team[1].workstream, 'OS', 'primary workstream mirrors the first entry');
+RM.setMemberWorkstreams(sMw.team[0], ['Apps', 'OS']);
+eq(sMw.team[0].workstream, 'Apps', 'setMemberWorkstreams keeps the primary in sync');
+RM.setMemberWorkstreams(sMw.team[0], []);
+eq(sMw.team[0].workstream, '', 'clearing the list clears the primary');
+// a person on two workstreams splits hours and cost between them
+var sMwR = mkState([], {
+  team: [{ name: 'Ada', type: 'Development', workstreams: ['OS', 'Apps'], cost: 100 }]
+});
+var repMw = RM.costReport(sMwR, 'workstream');
+var rowOS = repMw.rows.filter(function (r) { return r.key === 'OS'; })[0];
+var rowApps = repMw.rows.filter(function (r) { return r.key === 'Apps'; })[0];
+ok(rowOS && rowApps && Math.abs(rowOS.roleCost - rowApps.roleCost) < 0.01,
+  'roster cost splits evenly across the two workstreams');
+ok(Math.abs((rowOS.roleHours + rowApps.roleHours) - RM.roleTotalHours(sMwR, sMwR.team[0])) < 0.01,
+  'split hours add back up to the person\'s total');
+
+// ------------------------------------------------------------- story fields
+section('story fields');
+var sSfMeta = JSON.parse(JSON.stringify(META));
+sSfMeta.priorityScheme = 'levels';
+var sSf = RM.normalizeState({
+  meta: sSfMeta,
+  phases: [{ id: 'p1', name: 'Alpha', bucket: false }],
+  items: [{ num: 1, feature: 'a', stories: [
+    { title: 's1', priority: 'h', assignees: ['ghost'], durDays: 5 },
+    { title: 's2', priority: 'zz' }
+  ] }],
+  team: [{ id: 'tm1', name: 'Ada', type: 'Development' }],
+  teamTypes: ['Development']
+});
+eq(sSf.items[0].stories[0].priority, 'H', 'story priority validated + uppercased');
+eq(sSf.items[0].stories[1].priority, null, 'unknown story priority dropped');
+eq(sSf.items[0].stories[0].assignees, [], 'story assignees validated against the roster');
+eq(sSf.items[0].stories[0].durDays, 5, 'unscheduled story keeps its duration');
+var sSf2 = mkState([{ num: 1, feature: 'a', assignees: ['tm1'], stories: [{ title: 's', assignees: ['tm1', 'tm1', 'nope'] }] }], {
+  team: [{ id: 'tm1', name: 'Ada', type: 'Development' }]
+});
+eq(sSf2.items[0].stories[0].assignees, ['tm1'], 'story assignees dedupe and keep real people');

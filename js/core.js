@@ -249,8 +249,8 @@
   RM.DEFAULT_SCOPE_COLS = ['description'];
   RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
   // fixed (chip) scoping columns and the canonical full-order template
-  RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'workstream', 'epic'];
-  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'workstream'];
+  RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
+  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -848,7 +848,14 @@
       m.scopeCols.forEach(function (c) { valid[c.key] = true; });
       var out = [], seenK = {};
       function take(k) { if (valid[k] && !seenK[k]) { seenK[k] = true; out.push(k); } }
-      (Array.isArray(m.scopeColOrder) ? m.scopeColOrder : []).forEach(take);
+      // documents saved before the Deadline column slot it after Start,
+      // matching the default order, instead of tacking it on at the end
+      var savedOrder = Array.isArray(m.scopeColOrder) ? m.scopeColOrder.slice() : [];
+      if (savedOrder.length && savedOrder.indexOf('deadline') === -1) {
+        var atStart = savedOrder.indexOf('start');
+        savedOrder.splice(atStart === -1 ? savedOrder.length : atStart + 1, 0, 'deadline');
+      }
+      savedOrder.forEach(take);
       RM.SCOPE_DEFAULT_ORDER.forEach(take);
       m.scopeCols.forEach(function (c) { take(c.key); });
       m.scopeColOrder = out;
@@ -987,6 +994,8 @@
         })(),
         priority: it.priority && prioOrder.indexOf(String(it.priority).toUpperCase()) !== -1
           ? String(it.priority).toUpperCase() : null,
+        // hard deadline: a calendar date (ISO), so it survives work-week edits
+        deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(it.deadline || '')) ? String(it.deadline) : null,
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
         // role is descriptive metadata (capacity is role-agnostic)
         teamType: it.teamType != null && it.teamType !== '' ? it.teamType : firstType,
@@ -1023,6 +1032,9 @@
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
             status: s.status && m.statuses.story.indexOf(s.status) !== -1 ? s.status : null,
             size: s.size || null,
+            priority: s.priority && prioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
+              ? String(s.priority).toUpperCase() : null,
+            assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
             // rich-text (sanitized HTML) story body + acceptance criteria
             description: typeof s.description === 'string' ? s.description : '',
             ac: typeof s.ac === 'string' ? s.ac : '',
@@ -1038,7 +1050,10 @@
               return out;
             })(),
             startDay: sched ? Math.max(0, Math.round(s.startDay)) : null,
-            durDays: sched ? Math.round(s.durDays) : null
+            // an unscheduled story may still carry a duration (used when it
+            // lands on the timeline, shown in the scoping grid)
+            durDays: sched ? Math.round(s.durDays)
+              : (s.durDays != null && isFinite(s.durDays) && s.durDays > 0 ? Math.round(s.durDays) : null)
           };
         })
       };
@@ -1075,7 +1090,7 @@
     // any referenced-but-unlisted workstreams in first-appearance order
     var wsRef = {}, wsRefList = [];
     state.items.map(function (x) { return x.workstream; })
-      .concat((state.team || []).map(function (x) { return x.workstream || ''; }))
+      .concat((state.team || []).reduce(function (a, x) { return a.concat(RM.memberWorkstreams(x)); }, []))
       .concat(Object.keys(state.wsColors))
       .forEach(function (w) { if (w && !wsRef[w]) { wsRef[w] = true; wsRefList.push(w); } });
     var wsOrder = [];
@@ -1114,11 +1129,20 @@
       (mbr.offWeeks || []).forEach(function (iso) {
         if (typeof iso === 'string' && iso && wh[iso] == null) wh[iso] = 0;
       });
+      // people can belong to several workstreams; `workstream` (the first)
+      // stays for older readers and single-value call sites
+      var wss = [];
+      (Array.isArray(mbr.workstreams) ? mbr.workstreams
+        : mbr.workstream ? [mbr.workstream] : []).forEach(function (w) {
+        w = String(w || '').trim();
+        if (w && wss.indexOf(w) === -1) wss.push(w);
+      });
       return {
         id: mbr.id || RM.uid('t'),
         name: mbr.name || 'Member',
         type: mbr.type || state.teamTypes[0],
-        workstream: mbr.workstream || '', // optional workstream assignment
+        workstream: wss[0] || '',
+        workstreams: wss,
         // capacity at 40 h — a 0.5 role contributes half a head even full-time;
         // 0 (or blank) is allowed and contributes nothing
         capacity: mbr.capacity != null && mbr.capacity !== '' && isFinite(+mbr.capacity) && +mbr.capacity >= 0
@@ -1138,13 +1162,17 @@
     });
     var teamIds = {};
     state.team.forEach(function (mbr) { teamIds[mbr.id] = true; });
-    state.items.forEach(function (it) {
+    function cleanAssignees(obj) {
       var seenA = {};
-      it.assignees = it.assignees.filter(function (id) {
+      obj.assignees = obj.assignees.filter(function (id) {
         if (!teamIds[id] || seenA[id]) return false;
         seenA[id] = true;
         return true;
       });
+    }
+    state.items.forEach(function (it) {
+      cleanAssignees(it);
+      it.stories.forEach(cleanAssignees);
     });
 
     // one-time day-space migration: documents saved before variable
@@ -2049,6 +2077,34 @@
     return rc && isFinite(+rc.cost) && +rc.cost > 0 ? +rc.cost : 0;
   };
 
+  // People can sit on several workstreams; the primary (first) drives colors.
+  RM.memberWorkstreams = function (m) {
+    return Array.isArray(m.workstreams) ? m.workstreams : (m.workstream ? [m.workstream] : []);
+  };
+  RM.setMemberWorkstreams = function (m, list) {
+    var out = [];
+    (list || []).forEach(function (w) {
+      w = String(w || '').trim();
+      if (w && out.indexOf(w) === -1) out.push(w);
+    });
+    m.workstreams = out;
+    m.workstream = out[0] || '';
+  };
+
+  // Hard deadline as a day index (deadlines live as calendar dates); null if unset.
+  RM.deadlineDay = function (meta, it) {
+    if (!it || !it.deadline) return null;
+    return RM.dateToDay(meta, RM.parseISO(it.deadline));
+  };
+  // Does the item's scheduled span run past its deadline?
+  RM.pastDeadline = function (meta, it) {
+    var dl = RM.deadlineDay(meta, it);
+    if (dl == null || it.startDay == null) return false;
+    var lastDay = it.milestone ? it.startDay
+      : it.startDay + Math.max(1, (it.durDays || 1) + (it.riskDays || 0)) - 1;
+    return lastDay > dl;
+  };
+
   // Margin: share of the bill rate kept after hourly cost, in %; null if no rate.
   RM.roleMargin = function (state, m) {
     var rate = RM.memberRate(state, m);
@@ -2136,10 +2192,16 @@
     });
     if (mode === 'workstream') {
       state.team.forEach(function (m) {
-        var b = bucket(m.workstream || RM.defaultWsName(state));
-        var h = RM.roleTotalHours(state, m);
-        b.roleHours = (b.roleHours || 0) + h;
-        b.roleCost = (b.roleCost || 0) + h * RM.memberCost(state, m);
+        // a person on several workstreams splits their hours/cost evenly
+        var wss = RM.memberWorkstreams(m);
+        if (!wss.length) wss = [RM.defaultWsName(state)];
+        var h = RM.roleTotalHours(state, m) / wss.length;
+        var c = h * RM.memberCost(state, m);
+        wss.forEach(function (w) {
+          var b = bucket(w);
+          b.roleHours = (b.roleHours || 0) + h;
+          b.roleCost = (b.roleCost || 0) + c;
+        });
       });
     }
     var out = order.map(function (k) { return rows[k]; });

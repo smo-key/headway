@@ -325,3 +325,49 @@ final report.
 - **Polish**: scoping header paints opaque (no rows showing through the
   chip-column headers); panel section icons no longer rotate with the
   chevron and Details/Checks got icons.
+
+## 14. Batch 7 (2026-08-26, late night)
+
+- **Option-drag = day precision**: holding ⌥ while dragging/resizing a bar, story bar,
+  ghost preview, or phase span bypasses the snap grid entirely (`su = e.altKey ? 1 :
+  snapUnit()`); release lands on any day.
+- **Deadlines**: `it.deadline` is an ISO calendar date (survives work-week remaps;
+  validated in normalize). `RM.deadlineDay(meta, it)` maps it into day space;
+  `RM.pastDeadline` flags a scheduled span that runs past it. Planning paints a
+  vertical tick on the deadline day plus a connector from the bar's right edge —
+  both dashed red when late. Scoping gains a fixed **Deadline** column right after
+  Start (saved docs migrate their `scopeColOrder` by splicing after `start`); the
+  panel's Schedule section carries a Deadline field for every schedule variant.
+- **Shared calendar**: `openCalendar(anchor, iso, onPick, opts)` renders a month-grid
+  popover in its own `#calPop` layer (z 120 — floats above popovers and modals;
+  the popover's outside-close exempts it). Honors the project's first day of week,
+  dims non-working weekdays, marks today/selection, Today + optional Clear actions.
+  Every date field is now a readonly `.cal-in` input (ISO value) that opens it on
+  click/Enter and commits via a bubbling change event: panel item/story starts,
+  deadline, phase dialog, cost dates, setup timeline start/end/sprint anchor,
+  holiday range, and role engagement windows. The scoping Start/Deadline chips
+  open it directly.
+- **Assignee stacks**: `avatarStack(ids, max)` — beyond `max` bubbles the last
+  becomes “+N”. Planning's `.r-asg` chip uses max 2 (first person + “+N”) and is
+  sized 40px wide (header col 44px).
+- **Budgeting**: week-cell hours render through `fmtH` (1 decimal); person names
+  are `data-bud="name"` inputs (rename in place, tab-navigable); the COSTS band
+  indents 24px to align with names.
+- **Multi-workstream people**: `m.workstreams` (deduped array; `m.workstream`
+  mirrors the first for old readers/colors) with `RM.memberWorkstreams` /
+  `RM.setMemberWorkstreams`. The budgeting chip toggles membership per menu click
+  and reads “First +N”. Rename/delete workstream updates the arrays;
+  `RM.costReport('workstream')` splits a person's hours/cost evenly across their
+  workstreams.
+- **Stories everywhere**: stories carry `assignees` (roster-validated), `priority`
+  (scheme-validated), and keep `durDays` even when unscheduled. Scoping story rows
+  are double-height (`min-height: 2×story-h`, editor min 46px, autoGrow min 46)
+  with editable Assignees/Priority/Duration/Size chips and, when the story has its
+  own start, a Start chip; rolled-up feature values (workstream, epic, start,
+  deadline, risk) show dimmed + italic (`.sc-roll`). The sprint board shows story
+  cards (dashed, STORY tag, parent ref) — story statuses map onto the feature
+  columns by name, else by position (`storyColFor` / `storyStatusForCol`), and
+  dragging a story card sets the mapped story status. The sprint grid's story rows
+  gained assignee and size buttons.
+- **Fix**: `.filter-ico` sizes the element itself (lucide replaces the `<i>` with
+  an `<svg>` carrying the class, so descendant selectors missed it).

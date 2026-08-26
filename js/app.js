@@ -324,7 +324,9 @@
   }
   function closePopover() { popEl.hidden = true; popEl.innerHTML = ''; }
   document.addEventListener('pointerdown', function (e) {
-    if (!popEl.hidden && !popEl.contains(e.target)) closePopover();
+    // the calendar layer floats over popover forms — clicking it must not
+    // tear the form underneath down
+    if (!popEl.hidden && !popEl.contains(e.target) && !(e.target.closest && e.target.closest('#calPop'))) closePopover();
   }, true);
 
   var modalHost = $('#modalHost');
@@ -354,6 +356,101 @@
         $('[data-m=ok]', host).onclick = function () { closeModal(); onOk(); };
       });
   }
+
+  // ------------------------------------------------------------ calendar
+  // one popover calendar for every date the app edits. openCalendar anchors
+  // to a control; readonly inputs with class .cal-in (ISO value) open it on
+  // click/Enter and get their value set plus a bubbling change event.
+  var CAL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+  var CAL_DOW = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  // the calendar gets its own layer so it can float over popover forms
+  // (cost dates, engagement windows) without tearing them down
+  var calPop = document.createElement('div');
+  calPop.id = 'calPop';
+  calPop.hidden = true;
+  document.body.appendChild(calPop);
+  function closeCal() { calPop.hidden = true; calPop.innerHTML = ''; }
+  document.addEventListener('pointerdown', function (e) {
+    if (!calPop.hidden && !calPop.contains(e.target)) closeCal();
+  }, true);
+  function openCalendar(anchor, iso, onPick, opts) {
+    opts = opts || {};
+    var r = anchor.getBoundingClientRect();
+    var sel = iso && /^\d{4}-\d{2}-\d{2}$/.test(String(iso)) ? String(iso).slice(0, 10) : '';
+    var now = new Date();
+    var todayIso = RM.fmtISO(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
+    var base = RM.parseISO(sel || todayIso);
+    var vy = base.getUTCFullYear(), vm = base.getUTCMonth();
+    var ws = RM.weekStartOf(state.meta);
+    var workSet = {};
+    RM.workDaysOf(state.meta).forEach(function (d) { workSet[d] = true; });
+    function calHtml() {
+      var first = new Date(Date.UTC(vy, vm, 1));
+      var back = ((first.getUTCDay() - ws) + 7) % 7;
+      var cur = new Date(Date.UTC(vy, vm, 1 - back));
+      var cells = '';
+      for (var i = 0; i < 42; i++) {
+        var ciso = RM.fmtISO(cur);
+        cells += '<button class="cal-day' + (cur.getUTCMonth() === vm ? '' : ' out') +
+          (ciso === todayIso ? ' today' : '') + (sel && ciso === sel ? ' sel' : '') +
+          (workSet[cur.getUTCDay()] ? '' : ' off') +
+          '" data-iso="' + ciso + '">' + cur.getUTCDate() + '</button>';
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      var dows = '';
+      for (var d2 = 0; d2 < 7; d2++) dows += '<span class="cal-dow">' + CAL_DOW[(ws + d2) % 7] + '</span>';
+      return '<div class="cal">' +
+        '<div class="cal-head">' +
+        '<button class="cal-nav" data-cal="prev" title="Previous month"><i data-lucide="chevron-left"></i></button>' +
+        '<span class="cal-title">' + CAL_MONTHS[vm] + ' ' + vy + '</span>' +
+        '<button class="cal-nav" data-cal="next" title="Next month"><i data-lucide="chevron-right"></i></button>' +
+        '</div>' +
+        '<div class="cal-grid">' + dows + cells + '</div>' +
+        '<div class="cal-foot">' +
+        '<button class="cal-lnk" data-cal="today">Today</button>' +
+        (opts.allowClear ? '<button class="cal-lnk cal-clear" data-cal="clear">' + esc(opts.clearLabel || 'Clear') + '</button>' : '') +
+        '</div></div>';
+    }
+    calPop = resetNode(calPop);
+    calPop.innerHTML = calHtml();
+    calPop.hidden = false;
+    var cw = calPop.offsetWidth, ch = calPop.offsetHeight;
+    calPop.style.left = Math.min(r.left, window.innerWidth - cw - 12) + 'px';
+    calPop.style.top = Math.min(r.bottom + 4, window.innerHeight - ch - 12) + 'px';
+    if (window.lucide) lucide.createIcons();
+    calPop.addEventListener('click', function (ev) {
+      var day = ev.target.closest('.cal-day');
+      if (day) { closeCal(); onPick(day.dataset.iso); return; }
+      var nav = ev.target.closest('[data-cal]');
+      if (!nav) return;
+      if (nav.dataset.cal === 'prev' || nav.dataset.cal === 'next') {
+        vm += nav.dataset.cal === 'next' ? 1 : -1;
+        if (vm < 0) { vm = 11; vy -= 1; }
+        if (vm > 11) { vm = 0; vy += 1; }
+        calPop.innerHTML = calHtml();
+        if (window.lucide) lucide.createIcons();
+        return;
+      }
+      if (nav.dataset.cal === 'today') { closeCal(); onPick(todayIso); }
+      else if (nav.dataset.cal === 'clear') { closeCal(); onPick(''); }
+    });
+  }
+  function calInputOpen(inp) {
+    openCalendar(inp, inp.value, function (iso) {
+      inp.value = iso;
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }, { allowClear: inp.dataset.calClear != null, clearLabel: inp.dataset.calClear || 'Clear' });
+  }
+  document.addEventListener('click', function (e) {
+    var inp = e.target.closest && e.target.closest('input.cal-in');
+    if (inp) calInputOpen(inp);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'ArrowDown') return;
+    var inp = e.target.closest && e.target.closest('input.cal-in');
+    if (inp && document.activeElement === inp) { e.preventDefault(); calInputOpen(inp); }
+  });
 
   // ------------------------------------------------------------ rich text
   // minimal DOM-based whitelist sanitizer for stored WYSIWYG HTML
@@ -472,6 +569,7 @@
     ['priority', 'Priority', 62, 44],
     ['duration', 'Duration', 74, 48],
     ['start', 'Start', 88, 64],
+    ['deadline', 'Deadline', 88, 64],
     ['workstream', 'Workstream', 130, 80],
     ['epic', 'Epic', 150, 80]
   ];
@@ -521,12 +619,15 @@
     for (var i = 0; i < state.team.length; i++) if (state.team[i].id === id) return state.team[i];
     return null;
   }
-  // small overlapping stack for rows/cards (max 3 shown + counter)
-  function avatarStack(ids) {
+  // small overlapping stack for rows/cards: at most `max` bubbles — when the
+  // roster doesn't fit, the last bubble becomes a +N counter
+  function avatarStack(ids, max) {
     var ms = (ids || []).map(memberById).filter(Boolean);
     if (!ms.length) return '';
-    var out = ms.slice(0, 3).map(function (m) { return avatarHtml(m, 'sm'); }).join('');
-    if (ms.length > 3) out += '<span class="avatar sm more">+' + (ms.length - 3) + '</span>';
+    max = max || 3;
+    var shown = ms.length > max ? max - 1 : ms.length;
+    var out = ms.slice(0, shown).map(function (m) { return avatarHtml(m, 'sm'); }).join('');
+    if (ms.length > shown) out += '<span class="avatar sm more">+' + (ms.length - shown) + '</span>';
     return '<span class="avstack">' + out + '</span>';
   }
   // all columns in the user's order (meta.scopeColOrder spans fixed + text)
@@ -849,6 +950,40 @@
     });
   }
 
+  // stories ride along: their own schedule decides sprint membership when
+  // set, otherwise they follow their feature
+  function storiesInSprint(num, items) {
+    var meta = state.meta;
+    var r = RM.sprintRange(meta, num);
+    var inIds = {};
+    items.forEach(function (it) { inIds[it.id] = true; });
+    var out = [];
+    state.items.forEach(function (it) {
+      if (!matchesFilter(it)) return;
+      (it.stories || []).forEach(function (st) {
+        var own = st.startDay != null && st.durDays != null;
+        if (own ? RM.itemInWeeks(meta, st, r.w0, r.w1) : inIds[it.id]) out.push({ it: it, st: st });
+      });
+    });
+    return out;
+  }
+  // feature and story statuses are separate lists; the board's columns are
+  // the feature ones, so story statuses map across by name, else position
+  function mapStatusAcross(val, fromList, toList) {
+    var byName = toList.indexOf(val);
+    if (byName !== -1) return toList[byName];
+    var i = fromList.indexOf(val);
+    if (i <= 0) return toList[0];
+    if (i >= fromList.length - 1) return toList[toList.length - 1];
+    return toList[Math.max(1, Math.min(toList.length - 2, i))];
+  }
+  function storyColFor(stStatus) {
+    return mapStatusAcross(stStatus, RM.statusesOf(state, 'story'), RM.statusesOf(state, 'feature'));
+  }
+  function storyStatusForCol(colName) {
+    return mapStatusAcross(colName, RM.statusesOf(state, 'feature'), RM.statusesOf(state, 'story'));
+  }
+
   function spStatusChip(kind, cur, act, id) {
     var list = RM.statusesOf(state, kind);
     var idx = list.indexOf(cur);
@@ -878,15 +1013,30 @@
       '</div>';
   }
 
+  function spStoryCardHtml(it, st) {
+    return '<div class="sp-card sp-stcard" data-spcardst="' + st.id + '" data-pid="' + it.id + '" tabindex="0">' +
+      '<div class="sp-card-top">' +
+      '<span class="sp-sttag">story</span>' +
+      '<span class="sp-card-dates" title="' + esc(it.feature) + '">#' + it.num + ' · ' + esc(shorten(it.feature, 20)) + '</span>' +
+      avatarStack(st.assignees) +
+      '</div>' +
+      '<div class="sp-card-title">' + esc(st.title || '(untitled)') + '</div>' +
+      (st.size ? '<div class="sp-card-meta"><span class="r-size">' + esc(st.size) + '</span></div>' : '') +
+      '</div>';
+  }
+
   function spGroupHtml(num, items) {
     var out = [];
     var label = sprintSel === 'all' ? '<div class="sp-ghd">' + esc(sprintLabel(num)) + '</div>' : '';
+    var stories = storiesInSprint(num, items);
     if (sprintMode === 'board') {
       var cols = RM.statusesOf(state, 'feature').map(function (st) {
         var mine = items.filter(function (it) { return RM.statusOf(state, it, 'feature') === st; });
+        var mineSt = stories.filter(function (p) { return storyColFor(RM.statusOf(state, p.st, 'story')) === st; });
         return '<div class="sp-col" data-spcol="' + esc(st) + '">' +
-          '<div class="sp-colhd">' + esc(st) + '<span class="band-count">' + mine.length + '</span></div>' +
-          '<div class="sp-colbody">' + mine.map(spCardHtml).join('') + '</div>' +
+          '<div class="sp-colhd">' + esc(st) + '<span class="band-count">' + (mine.length + mineSt.length) + '</span></div>' +
+          '<div class="sp-colbody">' + mine.map(spCardHtml).join('') +
+          mineSt.map(function (p) { return spStoryCardHtml(p.it, p.st); }).join('') + '</div>' +
           '</div>';
       }).join('');
       out.push(label + '<div class="sp-board">' + cols + '</div>');
@@ -909,8 +1059,11 @@
             '<td class="sp-c-num"></td>' +
             '<td class="sp-c-title sp-ind"><input class="sp-title" data-spsttitle="' + st.id + '" value="' + esc(st.title) + '"></td>' +
             '<td>' + spStatusChip('story', RM.statusOf(state, st, 'story'), 'spststatus', st.id) + '</td>' +
-            '<td></td><td></td>' +
-            '<td class="sp-c-dur">' + (st.startDay != null && st.durDays != null ? totalWeeks(st) : '') + '</td>' +
+            '<td class="sp-c-asg"><button class="sp-asgbtn" data-spstasg="' + st.id + '" title="Story assignees">' +
+            (avatarStack(st.assignees) || '<i data-lucide="user-plus"></i>') + '</button></td>' +
+            '<td>' + (RM.sizingEnabled(state)
+              ? '<button class="sp-szbtn" data-spstsize="' + st.id + '" title="Story size">' + (st.size ? esc(st.size) : '—') + '</button>' : '') + '</td>' +
+            '<td class="sp-c-dur">' + (st.durDays != null ? totalWeeks(st) : '') + '</td>' +
             '</tr>');
         });
       });
@@ -1037,6 +1190,51 @@
         })));
       return;
     }
+    var stAsgBtn = e.target.closest('[data-spstasg]');
+    if (stAsgBtn) {
+      var rowA = stAsgBtn.closest('[data-id]');
+      var pidA = rowA && rowA.dataset.id;
+      var stIdA = stAsgBtn.dataset.spstasg;
+      var stA = pidA && storyById(RM.itemById(state, pidA) || {}, stIdA);
+      if (!stA) return;
+      if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
+      openDropdown(stAsgBtn, state.team.map(function (mm) {
+        var onA2 = (stA.assignees || []).indexOf(mm.id) !== -1;
+        return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA2, fn: function () {
+          commit('story assignees', function (s) {
+            var t = storyById(RM.itemById(s, pidA) || {}, stIdA);
+            if (!t) return;
+            t.assignees = t.assignees || [];
+            var at2 = t.assignees.indexOf(mm.id);
+            if (at2 === -1) t.assignees.push(mm.id);
+            else t.assignees.splice(at2, 1);
+          });
+        } };
+      }));
+      return;
+    }
+    var stSzBtn = e.target.closest('[data-spstsize]');
+    if (stSzBtn) {
+      var rowZ = stSzBtn.closest('[data-id]');
+      var pidZ = rowZ && rowZ.dataset.id;
+      var stIdZ = stSzBtn.dataset.spstsize;
+      var stZ = pidZ && storyById(RM.itemById(state, pidZ) || {}, stIdZ);
+      if (!stZ) return;
+      openDropdown(stSzBtn, [{ label: '<i>no size</i>', checked: !stZ.size, fn: function () {
+        commit('story size', function (s) {
+          var t = storyById(RM.itemById(s, pidZ) || {}, stIdZ);
+          if (t) t.size = null;
+        });
+      } }].concat(RM.sizeOrderOf(state).map(function (sz) {
+        return { label: esc(sz), checked: stZ.size === sz, fn: function () {
+          commit('story size', function (s) {
+            var t = storyById(RM.itemById(s, pidZ) || {}, stIdZ);
+            if (t) t.size = sz;
+          });
+        } };
+      })));
+      return;
+    }
   });
   $('#sprintView').addEventListener('change', function (e) {
     var t = e.target;
@@ -1055,19 +1253,23 @@
       });
     }
   });
-  // kanban: drag a card between status columns
+  // kanban: drag a card (feature or story) between status columns
   $('#sprintView').addEventListener('pointerdown', function (e) {
     if (e.button !== 0) return;
     var card = e.target.closest('.sp-card');
     if (!card || e.target.closest('button,input')) return;
-    drag = { kind: 'spcard', itemId: card.dataset.spcard, x0: e.clientX, y0: e.clientY, moved: false, ghost: null };
+    drag = { kind: 'spcard', itemId: card.dataset.spcard || card.dataset.pid, stId: card.dataset.spcardst || null,
+      x0: e.clientX, y0: e.clientY, moved: false, ghost: null };
   });
   function spCardDragMove(e) {
     if (!drag.ghost) {
-      var src = $('#sprintView .sp-card[data-spcard="' + drag.itemId + '"]');
+      var src = $('#sprintView .sp-card[' + (drag.stId
+        ? 'data-spcardst="' + drag.stId + '"' : 'data-spcard="' + drag.itemId + '"') + ']');
       drag.ghost = document.createElement('div');
       drag.ghost.className = 'sp-card sp-card-ghost';
-      drag.ghost.textContent = (RM.itemById(state, drag.itemId) || {}).feature || '';
+      drag.ghost.textContent = drag.stId
+        ? (storyById(RM.itemById(state, drag.itemId) || {}, drag.stId) || {}).title || ''
+        : (RM.itemById(state, drag.itemId) || {}).feature || '';
       document.body.appendChild(drag.ghost);
       if (src) src.classList.add('sp-dragging');
     }
@@ -1083,6 +1285,14 @@
     $$('#sprintView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
     if (!d.overCol) { render(); return; }
     var target = d.overCol;
+    if (d.stId) {
+      var stTarget = storyStatusForCol(target);
+      commit('status', function (s) {
+        var t = storyById(RM.itemById(s, d.itemId) || {}, d.stId);
+        if (t) RM.setStatus(s, t, 'story', stTarget);
+      });
+      return;
+    }
     commit('status', function (s) {
       var t = RM.itemById(s, d.itemId);
       if (t) RM.setStatus(s, t, 'feature', target);
@@ -1094,6 +1304,32 @@
     if (!card || e.target.closest('input')) return;
     e.preventDefault();
     e.stopPropagation();
+    var ctxStId = card.dataset.spcardst || card.dataset.spst;
+    if (ctxStId) {
+      // story card / row: story statuses + open the story panel
+      var ctxPid = card.dataset.pid || card.dataset.id;
+      var ctxIt = RM.itemById(state, ctxPid);
+      var ctxSt = ctxIt && storyById(ctxIt, ctxStId);
+      if (!ctxSt) return;
+      var stItems = RM.statusesOf(state, 'story').map(function (stName) {
+        return { label: esc(stName), checked: RM.statusOf(state, ctxSt, 'story') === stName, fn: function () {
+          commit('status', function (s) {
+            var t = storyById(RM.itemById(s, ctxPid) || {}, ctxStId);
+            if (t) RM.setStatus(s, t, 'story', stName);
+          });
+        } };
+      });
+      stItems.push({ sep: true });
+      stItems.push({ icon: 'chart-gantt', label: 'Show in Planning', fn: function () {
+        view = 'planning';
+        expanded[ctxPid] = true;
+        selectStory(ctxPid, ctxStId);
+        saveLocal();
+        render();
+      } });
+      openContextMenu(e.clientX, e.clientY, stItems);
+      return;
+    }
     var cid = card.dataset.spcard || card.dataset.id;
     var itC = RM.itemById(state, cid);
     if (!itC) return;
@@ -1278,14 +1514,15 @@
 
   function phSpanDragMove(e, dx) {
     var dd = daysFromDx(dx);
+    var sn = e.altKey ? function (d) { return d; } : snapTo;
     var lo = drag.lo0, hi = drag.hi0;
     if (drag.mode === 'move') {
-      lo = Math.max(0, snapTo(drag.lo0 + dd));
+      lo = Math.max(0, sn(drag.lo0 + dd));
       hi = lo + (drag.hi0 - drag.lo0);
     } else if (drag.mode === 'resize-l') {
-      lo = Math.max(0, Math.min(snapTo(drag.lo0 + dd), hi - 1));
+      lo = Math.max(0, Math.min(sn(drag.lo0 + dd), hi - 1));
     } else {
-      hi = Math.max(lo + 1, snapTo(drag.hi0 + dd));
+      hi = Math.max(lo + 1, sn(drag.hi0 + dd));
     }
     document.body.classList.add('dragging-x');
     drag.el.style.left = (lo * dayPx()) + 'px';
@@ -1495,6 +1732,29 @@
         ports +
         '</div>';
     }
+    // hard deadline paint: a vertical tick on the deadline day plus a
+    // connector from the bar's end — dashed red once the bar runs past it
+    var dlHtml = '';
+    if (view !== 'scoping' && it.deadline) {
+      var dlDay = RM.deadlineDay(meta, it);
+      if (dlDay != null) {
+        var dlLate = RM.pastDeadline(meta, it);
+        var dlX = (dlDay + 1) * dayPx();
+        var dlTip = 'Deadline ' + RM.fmtShortYear(RM.parseISO(it.deadline)) +
+          (dlLate ? ' — the item runs past it' : '');
+        dlHtml = '<span class="r-dl-mark' + (dlLate ? ' late' : '') + '" style="left:' + dlX +
+          'px" title="' + esc(dlTip) + '"></span>';
+        if (isScheduled(it)) {
+          var dlEndX = it.milestone ? (it.startDay + 0.5) * dayPx()
+            : (it.startDay + Math.max(1, it.durDays + (it.riskDays || 0))) * dayPx();
+          var dlx0 = Math.min(dlEndX, dlX), dlx1 = Math.max(dlEndX, dlX);
+          if (dlx1 - dlx0 > 1) {
+            dlHtml += '<span class="r-dl-line' + (dlLate ? ' late' : '') + '" style="left:' + dlx0 +
+              'px;width:' + (dlx1 - dlx0) + 'px" title="' + esc(dlTip) + '"></span>';
+          }
+        }
+      }
+    }
     // unscheduled: the lane stays empty — hovering it previews the landing
     // slot (1 week unless sized), clicking places the item there
     if (view === 'scoping') {
@@ -1531,6 +1791,13 @@
           (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>',
         start: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="startd" title="Start date — click to edit; empty takes it off the timeline">' +
           (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(meta, it.startDay))) : '') + '</span>',
+        deadline: (function () {
+          var lateC = RM.pastDeadline(meta, it);
+          return '<span class="r-ws sc-chip dl-chip' + (lateC ? ' late' : '') +
+            '" tabindex="0" role="button" data-act="deadline" title="' +
+            esc('Hard deadline — click to edit' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
+            (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
+        })(),
         priority: '<span class="r-risk pri' + (it.priority ? ' has-risk' : '') +
           '" tabindex="0" role="button" data-act="priority" title="' +
           esc('Priority — click to change' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '')) + '">' +
@@ -1582,10 +1849,10 @@
           ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
           : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>') +
         '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
-        (avatarStack(it.assignees) || '<i data-lucide="user-plus"></i>') + '</span>') +
+        (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>') +
       warnBadge(it) +
       '</div>' +
-      '<div class="row-lane">' + laneInner + '</div>' +
+      '<div class="row-lane">' + laneInner + dlHtml + '</div>' +
       '</div>');
 
     if (expanded[it.id]) {
@@ -1600,8 +1867,9 @@
           '<button class="st-del" data-act="st-del" title="Delete story"><i data-lucide="x"></i></button>' +
           '</div>' +
           (view === 'scoping'
-            // scoping: stories share the grid — text columns and Size edit
-            // in place, the rest reads as not-applicable
+            // scoping: stories share the grid — text columns, Size, Assignees,
+            // Priority and Duration edit in place; the rest rolls up from the
+            // feature and reads dimmed + italic
             ? '<div class="row-lane"><div class="sc-row">' + allScopeCols().map(function (c) {
                 var key = c[0];
                 var w = scopeColWidth(c);
@@ -1610,13 +1878,41 @@
                   return '<div class="sc-cell" data-col="' + key + '" style="width:' + w + 'px">' +
                     '<div class="sc-edit sc-rich" contenteditable="true" data-stscope="' + key + '">' + richDisplay(sval) + '</div></div>';
                 }
-                if (key === 'size' && RM.sizingEnabled(state)) {
-                  return '<div class="sc-cell sc-fix" data-col="size" style="width:' + w + 'px">' +
-                    '<span class="r-size" tabindex="0" role="button" data-act="st-size" title="Story size — click to change">' +
-                    (st.size ? esc(st.size) : '') + '</span></div>';
+                function stFix(inner) {
+                  return '<div class="sc-cell sc-fix" data-col="' + key + '" style="width:' + w + 'px">' + inner + '</div>';
                 }
+                if (key === 'size' && RM.sizingEnabled(state)) {
+                  return stFix('<span class="r-size" tabindex="0" role="button" data-act="st-size" title="Story size — click to change">' +
+                    (st.size ? esc(st.size) : '') + '</span>');
+                }
+                if (key === 'assignees') {
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
+                    (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
+                }
+                if (key === 'priority' && RM.priorityEnabled(state)) {
+                  return stFix('<span class="r-risk pri' + (st.priority ? ' has-risk' : '') +
+                    '" tabindex="0" role="button" data-act="st-pri" title="' +
+                    esc('Story priority — click to change' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority) : '')) + '">' +
+                    (st.priority ? (RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : '') + '</span>');
+                }
+                if (key === 'duration') {
+                  return stFix('<span class="r-wk editable" tabindex="0" role="button" data-act="st-wk" title="Story duration — click to edit; empty clears it">' +
+                    (st.durDays != null ? totalWeeks(st) : '') + '</span>');
+                }
+                if (key === 'start' && st.startDay != null) {
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start — click to edit">' +
+                    esc(RM.fmtShort(RM.dayToDate(state.meta, st.startDay))) + '</span>');
+                }
+                // rolled up from the feature — shown dimmed and italic
+                var roll = key === 'workstream' ? esc(it.workstream || RM.defaultWsName(state))
+                  : key === 'epic' ? esc(it.epic || '')
+                  : key === 'start' ? (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(state.meta, it.startDay))) : '')
+                  : key === 'deadline' ? (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '')
+                  : key === 'risk' ? (it.risk ? levelGlyph(it.risk) : '')
+                  : '';
                 return '<div class="sc-cell sc-fix sc-na" data-col="' + key + '" style="width:' + w +
-                  'px" title="Rolls up from the feature — not set per story"></div>';
+                  'px" title="Rolls up from the feature — not set per story">' +
+                  (roll ? '<span class="sc-roll">' + roll + '</span>' : '') + '</div>';
               }).join('') + '</div></div></div>'
             : '<div class="row-lane"' + (!stSched && view === 'planning' ? ' title="Double-click to add a timeline"' : '') + '>' +
               (stSched
@@ -1909,7 +2205,7 @@
     if (it.milestone) {
       scheduleInfo = isScheduled(it)
         ? '<div><label class="p-lab">Fixed date</label>' +
-          '<input type="date" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
+          '<input type="text" readonly class="cal-in" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
           '<div class="p-row" style="margin-top:8px">' +
           '<button data-f="snap" title="Earliest date after dependencies">Snap earliest</button>' +
           '<button data-f="unschedule">Unschedule</button>' +
@@ -1922,7 +2218,7 @@
       scheduleInfo =
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Start</label>' +
-        '<input type="date" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
+        '<input type="text" readonly class="cal-in" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">Duration (weeks)</label>' +
         '<input type="number" data-f="durWeeks" min="0.2" step="0.2" value="' + (Math.round(it.durDays / SPW() * 100) / 100) + '" style="width:100%"></div>' +
         '</div>' +
@@ -1941,6 +2237,11 @@
         '<button data-f="snap">Snap earliest</button>' +
         '</div>';
     }
+    // hard deadline rides with every schedule variant
+    scheduleInfo += '<div style="margin-top:8px"><label class="p-lab">Deadline' +
+      (RM.pastDeadline(meta, it) ? ' <span class="p-dl-late">— runs past it</span>' : '') + '</label>' +
+      '<input type="text" readonly class="cal-in" data-f="deadline" data-cal-clear="Remove deadline" value="' +
+      (it.deadline || '') + '" placeholder="None" style="width:100%"></div>';
 
     // assessment block follows the project's scheme: hidden when off,
     // read-only when auto-computed
@@ -2097,7 +2398,7 @@
       timeline =
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Start</label>' +
-        '<input type="date" data-stf="startDate" value="' + RM.fmtISO(RM.dayToDate(state.meta, st.startDay)) + '" style="width:100%"></div>' +
+        '<input type="text" readonly class="cal-in" data-stf="startDate" value="' + RM.fmtISO(RM.dayToDate(state.meta, st.startDay)) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">Weeks</label>' +
         '<input type="number" data-stf="durWeeks" min="0.2" step="0.2" value="' + (Math.round(st.durDays / SPW() * 100) / 100) + '" style="width:100%"></div>' +
         '</div>' +
@@ -2209,7 +2510,7 @@
     var st = sArg || state;
     var seen = {}, ref = [];
     st.items.map(function (x) { return x.workstream; })
-      .concat(st.team.map(function (x) { return x.workstream; }))
+      .concat(st.team.reduce(function (a, x) { return a.concat(RM.memberWorkstreams(x)); }, []))
       .concat(Object.keys(st.wsColors))
       .forEach(function (w) { if (w && !seen[w]) { seen[w] = true; ref.push(w); } });
     var out = [];
@@ -2360,7 +2661,9 @@
             'Delete', function () {
               commit('delete workstream', function (s) {
                 s.items.forEach(function (x) { if (x.workstream === wsName) x.workstream = ''; });
-                s.team.forEach(function (m) { if (m.workstream === wsName) m.workstream = ''; });
+                s.team.forEach(function (m) {
+                  RM.setMemberWorkstreams(m, RM.memberWorkstreams(m).filter(function (w) { return w !== wsName; }));
+                });
                 delete s.wsColors[wsName];
               });
             }, true);
@@ -2372,7 +2675,9 @@
             var name2 = newName || wsName;
             if (name2 !== wsName) {
               s.items.forEach(function (x) { if (x.workstream === wsName) x.workstream = name2; });
-              s.team.forEach(function (m) { if (m.workstream === wsName) m.workstream = name2; });
+              s.team.forEach(function (m) {
+                RM.setMemberWorkstreams(m, RM.memberWorkstreams(m).map(function (w) { return w === wsName ? name2 : w; }));
+              });
               if (s.wsColors[wsName] != null) { s.wsColors[name2] = s.wsColors[wsName]; delete s.wsColors[wsName]; }
             }
             // store the choice EXPLICITLY — deleting the entry would let the
@@ -2756,6 +3061,11 @@
     }
     if (f === 'locked') { commit('lock', function (s) { RM.itemById(s, it.id).locked = !!val; }); return; }
     if (f === 'done') { commit('done', function (s) { RM.itemById(s, it.id).done = !!val; }); return; }
+    if (f === 'deadline') {
+      var dlv = /^\d{4}-\d{2}-\d{2}$/.test(String(val)) ? String(val) : null;
+      commit('deadline', function (s) { RM.itemById(s, it.id).deadline = dlv; });
+      return;
+    }
     if (f === 'startDate') {
       if (!val) { render(); return; } // cleared/partial date: leave the item untouched
       var d2 = RM.parseISO(val);
@@ -2923,6 +3233,84 @@
             });
           } };
         })));
+      } else if (act.dataset.act === 'st-asg') {
+        if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
+        openDropdown(act, state.team.map(function (mm) {
+          var onSA = ((storyById(it, stId) || {}).assignees || []).indexOf(mm.id) !== -1;
+          return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onSA, fn: function () {
+            commit('story assignees', function (s) {
+              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+              if (!st2) return;
+              st2.assignees = st2.assignees || [];
+              var atA = st2.assignees.indexOf(mm.id);
+              if (atA === -1) st2.assignees.push(mm.id);
+              else st2.assignees.splice(atA, 1);
+            });
+          } };
+        }));
+      } else if (act.dataset.act === 'st-pri') {
+        var stPri = (storyById(it, stId) || {}).priority;
+        openDropdown(act, [{ label: '<i>None</i>', checked: !stPri, fn: function () {
+          commit('story priority', function (s) {
+            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+            if (st2) st2.priority = null;
+          });
+        } }].concat(RM.priorityOrderOf(state).map(function (pv) {
+          return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
+            label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
+            checked: stPri === pv, fn: function () {
+            commit('story priority', function (s) {
+              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+              if (st2) st2.priority = pv;
+            });
+          } };
+        })));
+      } else if (act.dataset.act === 'st-wk') {
+        if (act.querySelector('input')) return;
+        var stObjW = storyById(it, stId);
+        var stwInp = document.createElement('input');
+        stwInp.type = 'number';
+        stwInp.min = '0.2';
+        stwInp.step = '0.2';
+        stwInp.value = stObjW && stObjW.durDays != null ? Math.round(stObjW.durDays / SPW() * 100) / 100 : '';
+        stwInp.className = 'hc-edit';
+        stwInp.style.width = '30px';
+        act.textContent = '';
+        act.appendChild(stwInp);
+        stwInp.focus();
+        stwInp.select();
+        var stwDone = false;
+        var stwFin = function (saveIt) {
+          if (stwDone) return; stwDone = true;
+          var v = stwInp.value;
+          if (!saveIt) { render(); return; }
+          commit('story duration', function (s) {
+            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+            if (!st2) return;
+            if (String(v).trim() === '') { st2.durDays = null; st2.startDay = null; }
+            else st2.durDays = Math.max(1, Math.round(Math.max(0.2, parseFloat(v) || 1) * SPW()));
+          });
+        };
+        stwInp.addEventListener('blur', function () { stwFin(true); });
+        stwInp.addEventListener('keydown', function (ev) {
+          ev.stopPropagation();
+          if (ev.key === 'Enter') stwFin(true);
+          if (ev.key === 'Escape') stwFin(false);
+        });
+      } else if (act.dataset.act === 'st-startd') {
+        var stObjD = storyById(it, stId);
+        openCalendar(act, stObjD && stObjD.startDay != null ? RM.fmtISO(RM.dayToDate(state.meta, stObjD.startDay)) : '',
+          function (iso) {
+            commit('story start', function (s) {
+              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+              if (!st2) return;
+              if (!iso) { st2.startDay = null; return; }
+              var sd2 = RM.dateToDay(s.meta, RM.parseISO(iso));
+              if (sd2 == null) return;
+              st2.startDay = Math.max(0, sd2);
+              if (st2.durDays == null) st2.durDays = SPW();
+            });
+          }, { allowClear: true, clearLabel: 'Unschedule' });
       }
       return;
     }
@@ -2990,22 +3378,9 @@
           return;
         }
         case 'startd': {
-          if (act.querySelector('input')) return;
-          var sdInp = document.createElement('input');
-          sdInp.type = 'date';
-          sdInp.className = 'hc-edit';
-          sdInp.style.width = '116px';
-          sdInp.value = isScheduled(it) ? RM.fmtISO(RM.dayToDate(state.meta, it.startDay)) : '';
-          act.textContent = '';
-          act.appendChild(sdInp);
-          sdInp.focus();
-          var sdDone = false;
-          var sdFin = function (saveIt) {
-            if (sdDone) return; sdDone = true;
-            var v = sdInp.value;
-            if (!saveIt) { render(); return; }
-            if (!v) {
-              if (!isScheduled(it)) { render(); return; }
+          openCalendar(act, isScheduled(it) ? RM.fmtISO(RM.dayToDate(state.meta, it.startDay)) : '', function (iso) {
+            if (!iso) {
+              if (!isScheduled(it)) return;
               commit('start date', function (s) {
                 var t = RM.itemById(s, itemId);
                 t.startDay = null;
@@ -3013,8 +3388,8 @@
               });
               return;
             }
-            var day = RM.dateToDay(state.meta, RM.parseISO(v));
-            if (day == null) { render(); return; }
+            var day = RM.dateToDay(state.meta, RM.parseISO(iso));
+            if (day == null) return;
             commit('start date', function (s) {
               var t = RM.itemById(s, itemId);
               t.startDay = Math.max(0, day);
@@ -3023,14 +3398,15 @@
               var need = Math.ceil((t.startDay + (t.durDays || 0) + (t.riskDays || 0)) / RM.slotsOf(s.meta));
               if (need > s.meta.numWeeks) { s.meta.numWeeks = need; RM.syncEndDate(s.meta); }
             });
-          };
-          sdInp.addEventListener('blur', function () { sdFin(true); });
-          sdInp.addEventListener('change', function () { sdFin(true); });
-          sdInp.addEventListener('keydown', function (ev) {
-            ev.stopPropagation();
-            if (ev.key === 'Enter') sdFin(true);
-            if (ev.key === 'Escape') sdFin(false);
-          });
+          }, { allowClear: true, clearLabel: 'Unschedule' });
+          return;
+        }
+        case 'deadline': {
+          openCalendar(act, it.deadline || '', function (iso) {
+            commit('deadline', function (s) {
+              RM.itemById(s, itemId).deadline = iso || null;
+            });
+          }, { allowClear: true, clearLabel: 'Remove deadline' });
           return;
         }
         case 'priority': {
@@ -3638,7 +4014,8 @@
   // stretched to the row's tallest cell so there is no dead whitespace
   function autoGrowRow(scRow) {
     var tas = $$('.sc-edit', scRow);
-    var max = 66;
+    // story rows are half-height features (2× the plain story row)
+    var max = scRow.closest('.row.story') ? 46 : 66;
     tas.forEach(function (t) {
       t.style.height = 'auto';
       max = Math.max(max, t.scrollHeight);
@@ -4241,13 +4618,15 @@
   function barDragMove(e, dx) {
     var it = RM.itemById(state, drag.itemId);
     var dd = daysFromDx(dx);
+    var su = e.altKey ? 1 : snapUnit(); // ⌥ ignores the snap grid: any day
+    var sn = function (d) { return Math.round(d / su) * su; };
     var ns = drag.start0, nd = drag.dur0, nr = drag.risk0;
-    if (drag.mode === 'move') ns = Math.max(0, snapTo(drag.start0 + dd));
-    else if (drag.mode === 'resize-r') nd = Math.max(snapUnit(), snapTo(drag.dur0 + dd));
+    if (drag.mode === 'move') ns = Math.max(0, sn(drag.start0 + dd));
+    else if (drag.mode === 'resize-r') nd = Math.max(su, sn(drag.dur0 + dd));
     else if (drag.mode === 'resize-l') {
-      ns = Math.max(0, Math.min(snapTo(drag.start0 + dd), drag.start0 + drag.dur0 - snapUnit()));
+      ns = Math.max(0, Math.min(sn(drag.start0 + dd), drag.start0 + drag.dur0 - su));
       nd = drag.dur0 + (drag.start0 - ns);
-      if (nd < 1) nd = Math.max(1, snapUnit());
+      if (nd < 1) nd = Math.max(1, su);
     }
     drag.el.classList.add('dragging');
     document.body.classList.add('dragging-x');
@@ -4329,13 +4708,15 @@
 
   function stBarDragMove(e, dx) {
     var dd = daysFromDx(dx);
+    var su = e.altKey ? 1 : snapUnit();
+    var sn = function (d) { return Math.round(d / su) * su; };
     var ns = drag.start0, nd = drag.dur0;
-    if (drag.mode === 'move') ns = Math.max(0, snapTo(drag.start0 + dd));
-    else if (drag.mode === 'resize-r') nd = Math.max(snapUnit(), snapTo(drag.dur0 + dd));
+    if (drag.mode === 'move') ns = Math.max(0, sn(drag.start0 + dd));
+    else if (drag.mode === 'resize-r') nd = Math.max(su, sn(drag.dur0 + dd));
     else if (drag.mode === 'resize-l') {
-      ns = Math.max(0, Math.min(snapTo(drag.start0 + dd), drag.start0 + drag.dur0 - snapUnit()));
+      ns = Math.max(0, Math.min(sn(drag.start0 + dd), drag.start0 + drag.dur0 - su));
       nd = drag.dur0 + (drag.start0 - ns);
-      if (nd < 1) nd = Math.max(1, snapUnit());
+      if (nd < 1) nd = Math.max(1, su);
     }
     drag.el.classList.add('dragging');
     document.body.classList.add('dragging-x');
@@ -4366,7 +4747,7 @@
 
   function ghostDragMove(e) {
     var it = RM.itemById(state, drag.itemId);
-    var day = Math.max(0, snapTo(laneDayAt(e.clientX)));
+    var day = Math.max(0, e.altKey ? laneDayAt(e.clientX) : snapTo(laneDayAt(e.clientX)));
     var dur = it.milestone ? 1
       : (it.durDays != null ? it.durDays : RM.stretchSpan(state.meta, day, RM.effortDays(state, it)));
     if (!drag.preview) {
@@ -4881,9 +5262,9 @@
       wysHtml('phdesc', phase ? phase.description : '', 'What this phase delivers\u2026') + '</div></div>' +
       '<div class="m-sec"><label class="p-check"><input type="checkbox" id="phBucket"' + (phase && phase.bucket ? ' checked' : '') + '> Backlog bucket (items parked here aren’t auto-scheduled)</label></div>' +
       '<div class="m-sec"><label>Dates</label><div class="p-grid2">' +
-      '<div><label class="p-lab">Start</label><input type="date" id="phStart" style="width:100%" value="' +
+      '<div><label class="p-lab">Start</label><input type="text" readonly class="cal-in" data-cal-clear="Auto" id="phStart" style="width:100%" value="' +
         (phase && phase.startDay != null ? esc(RM.fmtISO(RM.dayToDate(state.meta, phase.startDay))) : '') + '"></div>' +
-      '<div><label class="p-lab">End</label><input type="date" id="phEnd" style="width:100%" value="' +
+      '<div><label class="p-lab">End</label><input type="text" readonly class="cal-in" data-cal-clear="Auto" id="phEnd" style="width:100%" value="' +
         (phase && phase.endDay != null ? esc(RM.fmtISO(RM.dayToDate(state.meta, Math.max(0, phase.endDay - 1)))) : '') + '"></div>' +
       '</div><div class="m-hint">Blank = automatic (derived from the phase’s items). A set date pins that side; the header span drags/resizes too.</div></div>' +
       (isNew ? '' :
@@ -5003,6 +5384,8 @@
     if (!isFinite(n)) return '—';
     return '$' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
+  // budgeting hours read to one decimal place
+  function fmtH(n) { return Math.round(n * 10) / 10; }
 
   // budgeting rows render into the shared board: frozen left pane columns
   // (name · type · workstream · rate · cost · margin · total) + week cells
@@ -5013,7 +5396,8 @@
     var sumTotal = 0;
     var fullWeek = RM.weekHoursOf(meta);
     state.team.forEach(function (m) {
-      var wsHex = RM.colorForWs(state, m.workstream);
+      var mws = RM.memberWorkstreams(m);
+      var wsHex = RM.colorForWs(state, mws[0] || '');
       var cr = parseInt(wsHex.slice(0, 2), 16), cg = parseInt(wsHex.slice(2, 4), 16), cb = parseInt(wsHex.slice(4, 6), 16);
       var hours = RM.roleTotalHours(state, m);
       var effRate = RM.memberRate(state, m);
@@ -5033,16 +5417,19 @@
           '" style="left:' + (w * weekPx) + 'px;width:' + weekPx +
           'px;background:rgba(' + cr + ',' + cg + ',' + cb + ',' + (a * 0.30).toFixed(3) + ')">' +
           (weekPx >= 20
-            ? '<span>' + (wh.planned || '') + '</span>' + (clipped ? '<span class="bu-sub">(' + wh.actual + ')</span>' : '')
+            ? '<span>' + (fmtH(wh.planned) || '') + '</span>' + (clipped ? '<span class="bu-sub">(' + fmtH(wh.actual) + ')</span>' : '')
             : '') + '</div>');
       }
       html.push('<div class="row brole" data-mid="' + m.id + '">' +
         '<div class="row-left">' +
         '<span class="r-dot" style="background:#' + wsHex + '"></span>' +
-        '<span class="bu-nm">' + avatarHtml(m, 'sm') + esc(m.name) + '</span>' +
+        '<span class="bu-nm">' + avatarHtml(m, 'sm') +
+        '<input class="bu-in bu-nm-in" data-bud="name" value="' + esc(m.name) + '" title="Name — click to edit"></span>' +
         '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-bact="type" title="Role — sets the default rate from the rate card">' + esc(shorten(m.type || '', 13)) + '</span>' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-bact="ws" title="Workstream — click to change">' +
-        (m.workstream ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(m.workstream, 14)) : '') + '</span>' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-bact="ws" title="' +
+        esc('Workstreams — click to change' + (mws.length > 1 ? '\n' + mws.join(', ') : '')) + '">' +
+        (mws.length ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(mws[0], 12)) +
+          (mws.length > 1 ? '<small class="bu-wsmore">+' + (mws.length - 1) + '</small>' : '') : '') + '</span>' +
         '<input class="bu-in bu-col' + (!m.cost && effCost ? ' inherited' : '') + '" style="width:' + BU_COLS.cost +
         'px" type="number" min="0" data-bud="cost" value="' + (m.cost || '') + '" placeholder="' + (rc && rc.cost ? rc.cost : 0) +
         '" title="Cost (hourly) — empty inherits the role’s rate card">' +
@@ -5206,8 +5593,16 @@
     var f = e.target.dataset.bud;
     var rowEl2 = e.target.closest('[data-mid]');
     if (!f || !rowEl2) return;
-    var v = Math.max(0, parseFloat(e.target.value) || 0);
     var roleId = rowEl2.dataset.mid;
+    if (f === 'name') {
+      var nm = e.target.value.trim();
+      if (!nm) { render(); return; }
+      commit('rename person', function (s) {
+        s.team.forEach(function (m) { if (m.id === roleId) m.name = nm; });
+      });
+      return;
+    }
+    var v = Math.max(0, parseFloat(e.target.value) || 0);
     commit('role ' + f, function (s) {
       s.team.forEach(function (m) { if (m.id === roleId) m[f] = v; });
     });
@@ -5258,17 +5653,27 @@
         } };
       }));
     } else {
-      var wsItems = [{ label: '<i>— none —</i>', checked: !m.workstream, fn: function () {
+      // people can sit on several workstreams — each click toggles membership
+      var curWs = RM.memberWorkstreams(m);
+      var wsItems = [{ label: '<i>— none —</i>', checked: !curWs.length, fn: function () {
         commit('role workstream', function (s) {
-          s.team.forEach(function (x) { if (x.id === roleId) x.workstream = ''; });
+          s.team.forEach(function (x) { if (x.id === roleId) RM.setMemberWorkstreams(x, []); });
         });
       } }];
       allWorkstreams().forEach(function (wv) {
+        var onWs = curWs.indexOf(wv) !== -1;
         wsItems.push({
-          label: esc(wv), dot: '#' + RM.colorForWs(state, wv), checked: m.workstream === wv,
+          label: esc(wv), dot: '#' + RM.colorForWs(state, wv), checked: onWs,
           fn: function () {
             commit('role workstream', function (s) {
-              s.team.forEach(function (x) { if (x.id === roleId) x.workstream = wv; });
+              s.team.forEach(function (x) {
+                if (x.id !== roleId) return;
+                var list = RM.memberWorkstreams(x).slice();
+                var at = list.indexOf(wv);
+                if (at === -1) list.push(wv);
+                else list.splice(at, 1);
+                RM.setMemberWorkstreams(x, list);
+              });
             });
           }
         });
@@ -5315,10 +5720,10 @@
     openPopover(r.left, r.bottom + 4,
       '<div class="rolep">' +
       '<label class="p-lab">First occurrence</label>' +
-      '<input type="date" id="csStart" value="' + RM.fmtISO(RM.dayToDate(meta, c.startDay)) + '">' +
+      '<input type="text" readonly class="cal-in" id="csStart" value="' + RM.fmtISO(RM.dayToDate(meta, c.startDay)) + '">' +
       (c.kind !== 'fixed'
         ? '<label class="p-lab" style="margin-top:8px">Last occurrence (empty = timeline end)</label>' +
-          '<input type="date" id="csEnd" value="' + (c.endDay != null ? RM.fmtISO(RM.dayToDate(meta, c.endDay)) : '') + '">'
+          '<input type="text" readonly class="cal-in" data-cal-clear="Timeline end" id="csEnd" value="' + (c.endDay != null ? RM.fmtISO(RM.dayToDate(meta, c.endDay)) : '') + '">'
         : '') +
       '<div class="p-row" style="margin-top:9px"><button id="csApply" class="primary fixed">Apply</button></div>' +
       '</div>',
@@ -5624,8 +6029,8 @@
         '</section>' +
         '<section class="su-card"><h2>Timeline</h2>' +
         '<div class="p-grid2">' +
-        '<div><label class="p-lab">Start (' + firstDayName + ')</label><input type="date" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
-        '<div><label class="p-lab">End (last working day)</label><input type="date" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">Start (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">End (last working day)</label><input type="text" readonly class="cal-in" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
         '</div>' +
         '</section>' +
         '<section class="su-card"><h2>Sprints</h2>' +
@@ -5635,7 +6040,7 @@
         }).join('') + '</div></div>' +
         (RM.sprintsEnabled(m)
           ? '<div class="p-grid2" style="margin-top:10px">' +
-            '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
+            '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
             '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
             '</div>'
           : '<div class="m-hint">No sprints — the header shows plain weeks.</div>') +
@@ -5646,8 +6051,8 @@
           : '<div class="m-hint">none</div>') +
         '<div class="hol-add">' +
         '<input id="suHolName" placeholder="Name (optional)">' +
-        '<input type="date" id="suHolStart" aria-label="First day">' +
-        '<input type="date" id="suHolEnd" aria-label="Last day (optional)" title="Last day — leave empty for a single day">' +
+        '<input type="text" readonly class="cal-in" id="suHolStart" placeholder="First day" aria-label="First day">' +
+        '<input type="text" readonly class="cal-in" data-cal-clear="Single day" id="suHolEnd" placeholder="Last day" aria-label="Last day (optional)" title="Last day — leave empty for a single day">' +
         '<button id="suHolAddBtn" class="fixed">Add</button>' +
         '</div>' +
         '<div class="m-hint">Single days or ranges (e.g. Christmas Eve through New Year’s). Non-working days stretch bars that span them.</div>' +
@@ -6533,8 +6938,8 @@
     }
     openPopover(cx, cy,
       '<div class="rd-pop">' +
-      '<label>Start<input type="date" id="rdStart" value="' + sv + '"></label>' +
-      '<label>End<input type="date" id="rdEnd" value="' + ev + '"></label>' +
+      '<label>Start<input type="text" readonly class="cal-in" id="rdStart" value="' + sv + '"></label>' +
+      '<label>End<input type="text" readonly class="cal-in" id="rdEnd" value="' + ev + '"></label>' +
       '<div class="po-actions"><button id="rdApply" class="primary">Apply</button></div>' +
       '</div>',
       function (host) {

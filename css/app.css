@@ -1103,10 +1103,10 @@ table.roster .rm { width: 30px; }
 /* scoping chip: the default workstream shows as a quiet italic name */
 .sc-chip i.dws, .r-ws i.dws { color: var(--ink-3); font-style: italic; }
 
-/* assignee chip in the planning left pane */
+/* assignee chip in the planning left pane — sized for two bubbles */
 .r-asg {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 24px; padding: 1px 3px;
+  width: 40px; min-width: 40px; flex: 0 0 40px; padding: 1px 3px;
   border: 1px solid transparent; border-radius: 5px;
   cursor: pointer;
 }
@@ -1704,8 +1704,11 @@ body.chrome-win #topbar { padding-right: 0; }
   background: var(--surface); color: var(--ink);
 }
 #rowFilter:focus { outline: none; border-color: var(--blue); }
+/* lucide swaps the <i> for an <svg> carrying the same class, so the size
+   must sit on .filter-ico itself */
 .filter-ico {
   position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+  width: 13px; height: 13px;
   display: inline-flex; color: var(--ink-3); pointer-events: none;
 }
 .filter-ico svg { width: 13px; height: 13px; }
@@ -2107,6 +2110,8 @@ body.present #zoomCtl { bottom: 14px !important; }
   padding: 2px 4px;
 }
 .bcosts-band .band-name { font-size: 10.5px; letter-spacing: .08em; }
+/* the COSTS band lines up with the person names below it */
+.bcosts-band .row-left { padding-left: 24px; }
 .bu-costmark {
   position: absolute; top: 50%;
   width: 9px; height: 9px;
@@ -2269,3 +2274,99 @@ body[data-view="reports"] #rowFilter { display: none; }
 .rp-flag { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--ink-2); padding: 4px 0; }
 .rp-flag svg.lucide { width: 13px; height: 13px; flex: 0 0 auto; color: var(--warn); margin-top: 1px; }
 .rp-flag.ok svg.lucide { color: var(--ok); }
+
+/* ------------------------------------------------------------ calendar */
+/* the one calendar popover behind every date field — its own layer, above
+   popover forms and modals */
+#calPop {
+  position: fixed; z-index: 120;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  box-shadow: var(--shadow-2);
+  font-size: 12.5px;
+}
+.cal { padding: 8px; width: 236px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.cal-title { font-size: 12px; font-weight: 700; }
+.cal-nav {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 1px solid var(--line-2); border-radius: 6px;
+  background: var(--surface); color: var(--ink-2); box-shadow: none;
+}
+.cal-nav:hover { background: var(--hover); color: var(--ink); }
+.cal-nav svg { width: 13px; height: 13px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.cal-dow {
+  text-align: center; font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--ink-3); padding: 3px 0;
+}
+.cal-day {
+  height: 26px; padding: 0;
+  border: 0; border-radius: 6px; box-shadow: none;
+  background: transparent; color: var(--ink);
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+}
+.cal-day:hover { background: var(--hover); }
+.cal-day.out { color: var(--ink-3); opacity: .55; }
+.cal-day.off { color: var(--ink-3); }
+.cal-day.today { box-shadow: inset 0 0 0 1px var(--blue); }
+.cal-day.sel { background: var(--blue); color: #fff; }
+.cal-day.sel:hover { background: var(--blue); }
+.cal-foot { display: flex; justify-content: space-between; margin-top: 6px; }
+.cal-lnk {
+  border: 0; background: transparent; box-shadow: none;
+  padding: 3px 6px; font-size: 11.5px; color: var(--blue); border-radius: 5px;
+}
+.cal-lnk:hover { background: var(--blue-soft); }
+.cal-lnk.cal-clear { color: var(--ink-3); margin-left: auto; }
+.cal-lnk.cal-clear:hover { color: var(--err); background: var(--err-bg); }
+/* readonly ISO inputs that open the calendar */
+input.cal-in { cursor: pointer; }
+input.cal-in:focus { outline: none; border-color: var(--blue); }
+
+/* ------------------------------------------------------------ deadlines */
+/* vertical tick on the deadline day + connector from the bar's end;
+   both go dashed red once the item runs past its deadline */
+.r-dl-mark {
+  position: absolute; top: 3px; bottom: 3px; width: 0;
+  border-left: 2px solid var(--ink-3);
+  z-index: 3; pointer-events: none;
+}
+.r-dl-mark.late { border-left-color: var(--err); border-left-style: dashed; }
+.r-dl-line {
+  position: absolute; top: 50%; margin-top: -1px; height: 0;
+  border-top: 2px solid var(--ink-3); opacity: .45;
+  z-index: 2; pointer-events: none;
+}
+.r-dl-line.late { border-top-style: dashed; border-top-color: var(--err); opacity: .9; }
+.dl-chip.late { color: var(--err); }
+.p-dl-late { color: var(--err); font-weight: 600; text-transform: none; letter-spacing: 0; }
+
+/* ------------------------------------------------------------ scoping stories */
+/* story rows are double-height in the scoping grid and their editors agree */
+body[data-view="scoping"] .row.story { height: auto; min-height: calc(var(--story-h) * 2); }
+body[data-view="scoping"] .row.story .row-left { align-items: flex-start; padding-top: 5px; }
+body[data-view="scoping"] .row.story .sc-edit { height: 46px; min-height: 46px; }
+body[data-view="scoping"] .row.story .sc-cell.sc-fix { display: flex; align-items: center; justify-content: center; }
+/* values that roll up from the feature: present, but clearly not the story's */
+.sc-roll {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-style: italic; color: var(--ink-2); opacity: .6;
+  padding: 2px 6px;
+}
+.sc-roll svg { width: 12px; height: 12px; }
+
+/* ------------------------------------------------------------ budgeting bits */
+.bu-wsmore { margin-left: 4px; color: var(--ink-3); font-size: 10px; }
+.bu-nm { display: inline-flex; align-items: center; }
+.bu-nm .bu-nm-in { flex: 1; min-width: 0; font-weight: 600; font-size: 12px; }
+
+/* ------------------------------------------------------------ sprint stories */
+.sp-card.sp-stcard { border-style: dashed; }
+.sp-sttag {
+  font-size: 8.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 4px;
+  padding: 0 4px; flex: 0 0 auto;
+}
