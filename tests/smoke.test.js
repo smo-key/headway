@@ -235,28 +235,18 @@ ok(!doc.querySelector('#popover').hidden, 'scoping risk chip opens a dropdown');
 }
 click(doc.querySelector('#viewTabs [data-view="planning"]'));
 
-click(doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-hc'));
-{
-  const hcInp = doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-hc input');
-  ok(!!hcInp, 'headcount chip opens an inline number editor');
-  hcInp.value = '3';
-  hcInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-  ok(state().items.find(i => i.id === itId).headcount === 3, 'headcount edit commits (3)');
-}
-
-// decimals are valid effort levels (0.5 = half a person)
-click(doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-hc'));
-{
-  const hcInp = doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-hc input');
-  hcInp.value = '0.5';
-  hcInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-  ok(state().items.find(i => i.id === itId).headcount === 0.5, 'headcount accepts a decimal (0.5)');
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-}
+// headcount is gone as an item field — availability is roster-driven now
+ok(!doc.querySelector('#rows .row.item .r-hc'), 'no headcount chip on planning rows');
+ok(!doc.querySelector('#panel [data-f=headcount]'), 'no headcount field in the panel');
 
 // undo via keyboard (toolbar buttons moved into the Edit menu)
-window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-ok(state().items.find(i => i.id === itId).headcount === 1, 'undo (⌘Z) restores headcount');
+{
+  const before = state().items.find(i => i.id === itId).risk;
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === itId).risk !== before || before == null,
+    'undo (⌘Z) reverts the last commit');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, shiftKey: true, bubbles: true }));
+}
 
 // ---------------------------------------------------------------- risk is metadata only
 const scheduled = state().items.find(i => i.startDay != null && !i.locked);
@@ -331,8 +321,36 @@ ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
 ok(doc.querySelectorAll('#setupView .su-tab').length === 7 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
   'settings rail: 7 vertical tabs under Project + Personal sections');
-ok(doc.querySelectorAll('#setupView .su-card').length === 2 && !!doc.querySelector('#suCapEnable'),
-  'Team tab shows team types + capacity');
+ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelector('#suCapEnable'),
+  'Team tab shows roles + work week + capacity');
+ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
+ok(!!doc.querySelector('#setupView [data-rcrate]') && !!doc.querySelector('#setupView [data-rccost]'),
+  'rate card inputs per role');
+ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data-sudays]').length === 3,
+  'work week card offers full-time hours + days per week');
+{
+  // rate card commit + inheritance shows up in core helpers
+  const rateInp = doc.querySelector('#setupView [data-rcrate]');
+  const role0 = rateInp.dataset.rcrate;
+  rateInp.value = '175';
+  rateInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.rateCard[role0] && state().meta.rateCard[role0].rate === 175,
+    'rate card edit commits to meta.rateCard');
+  ok(window.RM.memberRate(state(), { type: role0, rate: 0, cost: 0 }) === 175,
+    'a person with no override inherits the card rate');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+{
+  // work week commit
+  const wh = doc.querySelector('#suWeekHours');
+  wh.value = '32';
+  wh.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.weekHours === 32, 'full-time hours commit');
+  click(doc.querySelector('#setupView [data-sudays="4"]'));
+  ok(state().meta.daysPerWeek === 4, 'days per week commit');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
 suTab('appearance');
 ok(doc.querySelectorAll('#setupView [data-pref-theme]').length === 3,
   'Personal → Appearance offers the three themes');
@@ -477,9 +495,9 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   const rrow = doc.querySelector('#resGrid .rrow[data-mid]');
   rrow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 150, clientY: 400 }));
   const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent);
-  ok(labels.some(l => /Remove role/.test(l)) && labels.some(l => /Work type/.test(l)) &&
+  ok(labels.some(l => /Remove role/.test(l)) && labels.some(l => /Role/.test(l)) &&
     labels.some(l => /Workstream/.test(l)) && labels.some(l => /Capacity/.test(l)),
-    'role context menu offers rename/type/workstream/capacity/remove');
+    'role context menu offers rename/role/workstream/capacity/remove');
   ok(labels.some(l => /Start \/ end dates/.test(l)), 'role context menu offers start/end dates');
   doc.querySelector('#popover').hidden = true;
 }
@@ -642,8 +660,7 @@ ok(doc.body.dataset.view === 'planning', 'view switches back to planning');
   ok(doc.querySelector('#panel .p-sec[data-sec="stories"]').classList.contains('open'), 'section header toggles open');
   click(doc.querySelector('#panel [data-sectoggle="stories"]'));
   ok(!doc.querySelector('#panel .p-sec[data-sec="stories"]').classList.contains('open'), 'and toggles closed again');
-  const hcNum = doc.querySelector('#panel input[data-f="headcount"]');
-  ok(!!hcNum && hcNum.type === 'number', 'panel headcount is a number input');
+  ok(!doc.querySelector('#panel input[data-f="headcount"]'), 'headcount input is gone from the panel');
 }
 {
   ok(!/No people yet/.test(doc.querySelector('#resGrid').textContent), 'no "No people yet" message');
@@ -711,7 +728,7 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
     const inps = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid] input[data-bud]'));
     ok(inps[0].dataset.bud === 'cost' && inps[1].dataset.bud === 'rate', 'Cost input comes before Rate');
     const labels = Array.from(doc.querySelectorAll('.hl-cols .bu-only')).map(i => i.textContent);
-    ok(labels.join(',') === 'Type,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out, cost before rate');
+    ok(labels.join(',') === 'Role,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out (Role now), cost before rate');
   }
   // total = actual hours × RATE
   {
@@ -724,15 +741,18 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   ok(!!doc.querySelector('#rows .bu-cell.clipped .bu-sub'), 'holiday weeks show (actual hours) sub-line');
   // week cells are keyboard-reachable
   ok(doc.querySelector('#rows .bu-cell').getAttribute('tabindex') === '0', 'week cells are tabbable');
-  // reports header keeps its dropdown while collapsed (height stays put)
-  ok(!!doc.querySelector('#repModeCell [data-dd="repmode"]'), 'reports header keeps the grouping dropdown when collapsed');
-  // type + workstream chips edit via the shared dropdown
+  // the reports drawer is gone — Reports is a full tab now
+  ok(!doc.querySelector('#repPanel'), 'reports drawer removed from the budget view');
+  // add-role and add-cost rows
+  ok(!!doc.querySelector('#rows .row.addrow[data-kind="baddrole"]'), 'budget ends the roster with an Add role row');
+  ok(!!doc.querySelector('#rows .row.addrow[data-kind="baddcost"]'), 'budget offers an Add cost row');
+  // role + workstream chips edit via the shared dropdown
   click(doc.querySelector('#rows .row.brole [data-bact="type"]'));
-  ok(!doc.querySelector('#popover').hidden, 'type chip opens the shared dropdown');
+  ok(!doc.querySelector('#popover').hidden, 'role chip opens the shared dropdown');
   const typePick = Array.from(doc.querySelectorAll('#popover .menu-list button'))[1];
   const typeName = typePick.textContent.trim();
   click(typePick);
-  ok(state().team[0].type === typeName, 'picking a type commits');
+  ok(state().team[0].type === typeName, 'picking a role commits');
   click(doc.querySelector('#rows .row.brole [data-bact="ws"]'));
   ok(!doc.querySelector('#popover').hidden, 'workstream chip opens the shared dropdown');
   doc.querySelector('#popover').hidden = true;
@@ -816,33 +836,92 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
       'dragging the fill handle downward spreads the value to the roles below');
   }
 
-  // Expand works from Budgeting (and Scoping), not just Planning
+  // zoom cluster: shown on Budgeting, expand lives there now
+  ok(!doc.querySelector('#zoomCtl').hidden, 'zoom cluster visible on Budgeting');
+  {
+    const wpx0 = window.__headway.getState() && doc.documentElement.style.getPropertyValue('--week-px');
+    window.eval("document.querySelector('#zoomInBtn').click()");
+    ok(doc.documentElement.style.getPropertyValue('--week-px') !== wpx0, 'zoom + changes the week width on Budgeting');
+    window.eval("document.querySelector('#zoomOutBtn').click()");
+  }
   window.eval("document.querySelector('#btnPresent').click()");
   ok(doc.body.classList.contains('present') && doc.body.dataset.view === 'budget',
     'Expand enters present mode from Budgeting');
   window.eval("document.querySelector('#btnPresentExit').click()");
   ok(!doc.body.classList.contains('present'), 'exit restores the full Budgeting UI');
+  // Expand is gone from Scoping (the cluster only exists on Planning/Budgeting)
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-  window.eval("document.querySelector('#btnPresent').click()");
-  ok(doc.body.classList.contains('present') && doc.body.dataset.view === 'scoping',
-    'Expand enters present mode from Scoping');
-  window.eval("document.querySelector('#btnPresentExit').click()");
+  ok(doc.querySelector('#zoomCtl').hidden, 'no zoom/expand cluster on Scoping');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
-// ---------------------------------------------------------------- reports drawer
+// ---------------------------------------------------------------- budget: costs + add role
 {
-  ok(doc.querySelector('#repPanel').classList.contains('collapsed'), 'reports drawer starts collapsed');
-  click(doc.querySelector('#repHead .rp-title'));
-  ok(!doc.querySelector('#repPanel').classList.contains('collapsed'), 'header click opens the drawer');
-  const t = doc.querySelector('#repBody table');
-  ok(!!t && t.querySelectorAll('tbody tr').length > 1, 'workstream report renders group rows');
-  ok(/\$/.test(t.textContent), 'report prices in dollars');
-  click(doc.querySelector('#repModeCell [data-dd="repmode"]'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => b.textContent.trim() === 'By phase'));
-  ok(/^Phase/.test(doc.querySelector('#repBody thead').textContent.trim()), 'grouping switches to phase');
-  click(doc.querySelector('#repHead .rp-title'));
-  ok(doc.querySelector('#repPanel').classList.contains('collapsed'), 'drawer collapses again');
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  // add a fixed cost via its addrow
+  const cBefore = (state().costs || []).length;
+  click(doc.querySelector('#rows .row.addrow[data-kind="baddcost"]'));
+  ok(state().costs.length === cBefore + 1, 'Add cost creates a cost row');
+  const costRow = doc.querySelector('#rows .row.bcost[data-cost]');
+  ok(!!costRow, 'cost rows render in the Costs band');
+  const amt = costRow.querySelector('[data-cf="amount"]');
+  amt.value = '2500';
+  amt.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().costs[0].amount === 2500, 'cost amount commits');
+  ok(!!doc.querySelector('#rows .row.bcost .bu-costmark'), 'cost occurrences mark the timeline lane');
+  // kind → weekly multiplies occurrences
+  click(doc.querySelector('#rows .row.bcost [data-cact="kind"]'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Weekly/.test(b.textContent)));
+  ok(state().costs[0].kind === 'weekly', 'cost cadence commits');
+  ok(doc.querySelectorAll('#rows .row.bcost .bu-costmark').length > 3, 'recurring costs mark every occurrence');
+  ok(/Costs \$/.test(doc.querySelector('#rows .row.btotal').textContent), 'total row includes the cost spend');
+  // remove via the cost context menu
+  doc.querySelector('#rows .row.bcost[data-cost]')
+    .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 300 }));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Remove cost/.test(b.textContent)));
+  ok(state().costs.length === cBefore, 'context menu removes the cost');
+
+  // add-role row spawns an inline name input and creates the person
+  const tBefore = state().team.length;
+  click(doc.querySelector('#rows .row.addrow[data-kind="baddrole"]'));
+  const roleInp = doc.querySelector('#rows .row.addrow[data-kind="baddrole"] input');
+  ok(!!roleInp, 'Add role opens an inline name input');
+  roleInp.value = 'Norah';
+  roleInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(state().team.length === tBefore + 1 && state().team.some(m => m.name === 'Norah'),
+    'Enter adds the person from Budgeting');
+  // budget person row context menu
+  doc.querySelector('#rows .row.brole[data-mid]')
+    .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 200 }));
+  const rl = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent);
+  ok(rl.some(l => /Rename/.test(l)) && rl.some(l => /Remove person/.test(l)),
+    'budget person rows have a context menu');
+  doc.querySelector('#popover').hidden = true;
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- epics in Setup
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  ok(doc.querySelectorAll('#setupView [data-suepedit]').length > 0, 'Setup lists epics with edit controls');
+  click(doc.querySelector('#setupView [data-suepedit]'));
+  ok(!doc.querySelector('#modalHost').hidden, 'epic edit modal opens from Setup');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- reports tab
+{
+  ok(!doc.querySelector('#repPanel'), 'the old reports drawer is gone');
+  click(doc.querySelector('#viewTabs [data-view="reports"]'));
+  ok(doc.body.dataset.view === 'reports', 'Reports is a full view tab');
+  ok(doc.querySelectorAll('#reportsView .rp-kpi').length >= 5, 'dashboard leads with KPI cards');
+  ok(doc.querySelectorAll('#reportsView .rp-card').length >= 4,
+    'dashboard renders phase progress, workstream costs, spend curve, milestones, flags');
+  ok(/\$/.test(doc.querySelector('#reportsView').textContent), 'reports price in dollars');
+  ok(doc.querySelector('#panel').hidden, 'no edit panel on Reports');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // ---------------------------------------------------------------- capacity row toggle
@@ -858,7 +937,7 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
 
 // ---------------------------------------------------------------- capacity feature switch (Setup)
 {
-  window.eval("document.querySelector('#viewTabs [data-view=\"setup\"]').click()");
+  window.eval("document.querySelector('#btnSetup').click()");
   suTab('team'); // the capacity switch lives on the Team tab
   const capChk = doc.querySelector('#suCapEnable');
   ok(capChk && capChk.checked, 'Setup capacity checkbox reflects the enabled fixture');
@@ -871,7 +950,7 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   ok(!Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Capacity row/.test(b.textContent)),
     'View menu drops its capacity-row toggle');
   doc.querySelector('#popover').hidden = true;
-  window.eval("document.querySelector('#viewTabs [data-view=\"setup\"]').click()");
+  window.eval("document.querySelector('#btnSetup').click()");
   const capChk2 = doc.querySelector('#suCapEnable');
   capChk2.checked = true;
   capChk2.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -881,8 +960,8 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
 
 // ---------------------------------------------------------------- timeline-only preview
 {
-  const pbtn = doc.querySelector('#btnPresent');
-  ok(!!pbtn, 'expand button lives in the phase lane\'s left cell');
+  const pbtn = doc.querySelector('#zoomCtl #btnPresent');
+  ok(!!pbtn, 'expand button lives in the zoom cluster');
   click(pbtn);
   ok(doc.body.classList.contains('present') && !doc.querySelector('#btnPresentExit').hidden,
     'expand enters the preview and shows the floating minimize button');
@@ -1212,7 +1291,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // ---------------------------------------------------------------- sizing approaches
 {
-  click(doc.querySelector('#viewTabs [data-view="setup"]'));
+  click(doc.querySelector('#btnSetup'));
   suTab('sizing');
   ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
   click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
@@ -1231,7 +1310,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   ok(!doc.querySelector('#rows .row.item .r-size'), 'no size chips while sizing is off');
   ok(doc.body.classList.contains('no-size'), 'body carries the no-size flag');
-  click(doc.querySelector('#viewTabs [data-view="setup"]'));
+  click(doc.querySelector('#btnSetup'));
   click(doc.querySelector('#setupView [data-suscheme="tshirt"]'));
   ok(state().meta.sizeOrder.join(',') === 'XS,S,M,L,XL', 'T-shirt preset restores the classic scale');
 }
@@ -1246,7 +1325,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(state().meta.workstreamsEnabled === false, 'workstreams can be disabled per project');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!doc.querySelector('#hdrSprints [data-col="workstream"]'), 'Scoping hides the Workstream column when off');
-  click(doc.querySelector('#viewTabs [data-view="setup"]'));
+  click(doc.querySelector('#btnSetup'));
   suTab('workstreams');
   const wsChk2 = doc.querySelector('#suWsEnable');
   wsChk2.checked = true;
@@ -1285,11 +1364,12 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 {
   const tbRight = doc.querySelector('#topbar .tb-right');
   const kids = Array.from(tbRight.querySelectorAll('button')).map(b => b.id);
-  ok(kids.indexOf('btnPresent') !== -1, 'Expand button lives in the topbar right group');
-  ok(kids.indexOf('btnExport') !== -1 &&
-    kids.indexOf('btnPresent') < kids.indexOf('btnExport') &&
-    kids.indexOf('btnExport') < kids.indexOf('btnSave'),
-    'Export sits between Expand and Save');
+  ok(kids.indexOf('btnPresent') === -1, 'Expand button moved out of the topbar');
+  ok(kids.indexOf('btnExport') !== -1 && kids.indexOf('btnExport') < kids.indexOf('btnSave'),
+    'Export sits before Save');
+  ok(!!doc.querySelector('#btnSetup') && !doc.querySelector('#viewTabs [data-view="setup"]'),
+    'Setup is its own icon button beside the view tabs');
+  ok(!!doc.querySelector('#viewTabs [data-view="reports"]'), 'Reports tab sits in the view tabs');
 
   window.eval("document.querySelector('#btnExport').click()");
   ok(!doc.querySelector('#modalHost').hidden, 'Export opens a dialog');

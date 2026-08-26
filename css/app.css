@@ -241,16 +241,19 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 .dd-btn i, .dd-label i { color: var(--ink-3); font-style: italic; }
 .dd-dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
 
-/* view tabs (top center) */
+/* view tabs (top center) + the round Setup button on their right */
+.tabs-center {
+  display: flex; align-items: center; gap: 9px;
+  /* true centering in the header, independent of the unequal widths on
+     either side (brand+menus left, toolbar right) */
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+}
 .view-tabs {
   display: flex; gap: 3px;
   padding: 3px;
   background: var(--well);
   border: 1px solid var(--line);
   border-radius: 10px;
-  /* true centering in the header, independent of the unequal widths on
-     either side (brand+menus left, toolbar right) */
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
 }
 .view-tabs button { border-color: transparent; background: transparent; font-weight: 700; color: var(--ink-2); }
 .view-tabs button:hover { box-shadow: none; background: var(--tab-hover); }
@@ -1248,7 +1251,6 @@ body.no-cap .hdr-cap { display: none; }
 
 /* expand button in the phase lane's left cell (planning only) */
 #btnPresent { padding: 5px 8px; }
-body[data-view="setup"] #btnPresent { display: none; }
 
 /* distraction-free preview: chrome hidden everywhere; the frozen left pane
    only drops away on the planning timeline (scoping/budgeting need it) */
@@ -1344,7 +1346,6 @@ body[data-view="setup"] #resPanel { display: none; }
 
 /* budgeting view — planning's board with role rows: frozen left columns
    (name · type · ws · rate · cost · margin · total) + week-hour cells */
-body[data-view="budget"] #btnPresent,
 body[data-view="budget"] #resPanel { display: none; }
 .row.brole .row-left { align-items: center; gap: 6px; padding-left: 10px; }
 .bu-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1700,10 +1701,11 @@ body.chrome-mac #startBar { padding-left: 96px; }
 .bar.ms .ms-diamond {
   position: absolute; left: 0; top: 50%;
   width: 14px; height: 14px;
-  transform: translate(-50%, -50%) rotate(45deg);
-  background: var(--bar-c, var(--c-product));
-  border-radius: 3px;
-  box-shadow: 0 1px 2px rgba(24, 36, 48, .3);
+  /* screen-space X squeeze AFTER the rotate keeps the height, narrows the width */
+  transform: translate(-50%, -50%) scaleX(.72) rotate(45deg);
+  background: transparent;
+  border: 1.6px solid var(--bar-c, var(--c-product));
+  border-radius: 2.5px;
 }
 .bar.ms.selected { outline: none; }
 .bar.ms.selected .ms-diamond { outline: 2px solid var(--ink); outline-offset: 1.5px; }
@@ -1820,11 +1822,7 @@ body.chrome-mac #startBar { padding-left: 96px; }
 .bar.nows .b-hc { background: var(--hover); color: var(--ink-2); }
 .bar.nows .b-h:hover { background: rgba(var(--ink-rgb), .08); }
 .bar.nows.ms { border: 0; }
-.bar.nows .ms-diamond {
-  background: transparent;
-  border: 1.5px solid var(--line-3);
-  box-shadow: none;
-}
+.bar.nows .ms-diamond { border-color: var(--line-3); }
 .r-dot.nodot {
   background: transparent !important;
   border: 1px solid var(--line-3);
@@ -1900,3 +1898,159 @@ body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
 .su-scheme-main b { font-size: 13px; font-weight: 650; }
 .su-scheme-main span { font-size: 11.5px; color: var(--ink-3); }
 .hol-table input { width: 100%; min-height: 28px; }
+
+/* ------------------------------------------------- batch-3 components */
+/* themed scrollbars (dark mode gets dark tracks) */
+* { scrollbar-color: var(--line-3) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-3);
+  border-radius: 6px;
+  border: 2.5px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--ink-3); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* icon-only Setup button beside the view tabs */
+#btnSetup {
+  border-radius: 999px;
+  width: 34px; height: 34px;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--well);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+#btnSetup:hover { color: var(--ink); box-shadow: var(--shadow-1); }
+#btnSetup.on { background: var(--surface); color: var(--blue); border-color: var(--line-2); box-shadow: var(--shadow-1); }
+#btnSetup svg.lucide { width: 16px; height: 16px; }
+
+/* floating zoom / expand cluster (bottom right of the timeline) */
+#zoomCtl {
+  position: absolute;
+  right: 14px; bottom: 14px;
+  display: flex; flex-direction: column; gap: 0;
+  z-index: 26;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+#zoomCtl button {
+  border: 0; border-radius: 0;
+  background: transparent;
+  padding: 7px 9px;
+  color: var(--ink-2);
+}
+#zoomCtl button:hover { background: var(--hover); color: var(--ink); box-shadow: none; }
+#zoomCtl button + button { border-top: 1px solid var(--line); }
+#zoomCtl #btnPresent { border-top: 1px solid var(--line-2); }
+#zoomCtl svg.lucide { width: 14px; height: 14px; }
+body:not(.no-cap) #zoomCtl { bottom: 14px; }
+#resPanel:not(.collapsed) ~ #zoomCtl { bottom: 14px; }
+
+/* budget chips follow the scoping grid language: full-height rectangular
+   cells, keyboard focusable, no pill styling */
+.brole .bu-chip {
+  align-self: stretch;
+  height: auto;
+  display: inline-flex; align-items: center;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 9px;
+  margin: 0;
+  font-size: 11.5px;
+  cursor: pointer;
+  gap: 6px;
+  overflow: hidden; white-space: nowrap;
+}
+.brole .bu-chip:hover { background: var(--hover); }
+.brole .bu-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.brole .row-left { gap: 0; }
+.brole .row-left .r-dot { margin: 0 7px; }
+.brole .bu-nm { padding-right: 8px; }
+.brole .bu-in.bu-col { border-radius: 0; border: 0; border-left: 1px solid var(--line); height: 100%; }
+.brole .bu-in.inherited { color: var(--ink-3); }
+.brole .bu-in.inherited::placeholder { color: var(--ink-2); }
+.bu-nm-in {
+  flex: 1; min-width: 0;
+  border: 0; background: transparent;
+  font-size: 12.5px; font-weight: 650;
+  padding: 2px 4px;
+}
+.bcosts-band .band-name { font-size: 10.5px; letter-spacing: .08em; }
+.bu-costmark {
+  position: absolute; top: 50%;
+  width: 9px; height: 9px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--warn);
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(24, 36, 48, .3);
+}
+
+/* rate card inputs in Setup */
+.su-rc { width: 76px; flex: 0 0 auto; text-align: right; }
+.su-rc-head {
+  display: flex; justify-content: flex-end; gap: 8px;
+  font-size: 10.5px; color: var(--ink-3);
+  padding-right: 38px;
+}
+.su-rc-head span:nth-child(2), .su-rc-head span:nth-child(3) { width: 76px; text-align: center; }
+
+/* ------------------------------------------------- reports dashboard */
+#reportsView { display: none; }
+body[data-view="reports"] #reportsView { display: block; flex: 1; overflow: auto; }
+body[data-view="reports"] #board,
+body[data-view="reports"] #leftRzLine,
+body[data-view="reports"] #resPanel,
+body[data-view="reports"] #rowFilter { display: none; }
+.rp-page { max-width: 1060px; margin: 0 auto; padding: 22px 26px 40px; }
+.rp-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 14px 0 16px;
+}
+.rp-kpi {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.rp-kpi-label { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.rp-kpi-value { font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+.rp-kpi-sub { font-size: 11px; color: var(--ink-3); }
+.rp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.rp-card { min-width: 0; }
+.rp-wide { grid-column: 1 / -1; }
+.rp-bar-row { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
+.rp-bar-label { flex: 0 0 130px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rp-bar-track { flex: 1; height: 8px; border-radius: 4px; background: var(--well); overflow: hidden; }
+.rp-bar-fill { display: block; height: 100%; border-radius: 4px; }
+.rp-bar-val { flex: 0 0 auto; font-size: 11px; color: var(--ink-2); font-family: var(--mono); }
+.rp-curve { width: 100%; height: 130px; display: block; }
+.rp-curve-cap { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); margin-top: 4px; }
+.rp-ms { display: flex; align-items: center; gap: 9px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.rp-ms:last-child { border-bottom: 0; }
+.rp-ms-d {
+  width: 9px; height: 9px; flex: 0 0 auto;
+  transform: scaleX(.72) rotate(45deg);
+  border: 1.5px solid var(--blue); border-radius: 2px;
+}
+.rp-ms.done .rp-ms-d { border-color: var(--ok); background: var(--ok); }
+.rp-ms.late .rp-ms-d { border-color: var(--err); }
+.rp-ms-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rp-ms-date { color: var(--ink-2); font-family: var(--mono); font-size: 11px; }
+.rp-ms-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); }
+.rp-ms.late .rp-ms-tag { color: var(--err); }
+.rp-ms.done .rp-ms-tag { color: var(--ok); }
+.rp-flag { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--ink-2); padding: 4px 0; }
+.rp-flag svg.lucide { width: 13px; height: 13px; flex: 0 0 auto; color: var(--warn); margin-top: 1px; }
+.rp-flag.ok svg.lucide { color: var(--ok); }

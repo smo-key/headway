@@ -164,6 +164,60 @@ final report.
   naming known US observances; the capacity-header week toggle adds/carves
   ranges.
 
+## 10. Third batch (added mid-session)
+
+- **Work week**: `meta.weekHours` (full-time hours, default 40) and
+  `meta.daysPerWeek` (1–5, default 5) in Setup → Team. Short weeks are
+  modeled as implicit non-working day slots (day index % 5 ≥ daysPerWeek),
+  so bar stretching, blackouts, and capacity all respect them; hours/day =
+  weekHours ÷ daysPerWeek drives effort-hour and budget math.
+- **Dark scrollbars**: explicit themed scrollbar styling (WebKit +
+  scrollbar-color) on top of `color-scheme`.
+- **Rate card**: `meta.rateCard[role] = {rate, cost}`. "Team types" become
+  **Roles**; Setup → Team lists each role with its default hourly rate/cost.
+  A person inherits their role's numbers unless overridden on the person
+  (0/empty = inherit); Budgeting shows effective values.
+- **Capacity rework** (researched: Kanban WIP limits & Little's Law, the
+  "limit concurrent big bets to roughly team size ÷ 2" heuristic, flow
+  focus over utilization): headcount disappears as an item field. The
+  capacity row now shows **available people** per week (fractional FTE from
+  the roster's hours ÷ full-time). "Too much work" is judged by
+  size-weighted WIP: each active item costs focus by size (M≈1 unit at 2w,
+  scaling by working days ÷ 10, clamped 0.3–2). A week is flagged when
+  weighted WIP exceeds available FTE. Auto-schedule and snap use the same
+  weights.
+- **Budgeting**:
+  - "+ Add role" click-to-add row at the bottom (same flow as Resources).
+  - **Fixed & recurring costs**: `state.costs` [{name, amount, kind:
+    fixed|weekly|monthly, startDay, endDay}] — their own section under the
+    roles with occurrence markers on the timeline lane, included in the
+    grand total and Reports.
+  - Zoom works on Budgeting (wheel + buttons).
+  - Role/Workstream chips restyle as full-height grid cells (scoping-like),
+    keyboard-reachable.
+- **Zoom & expand**: smoother wheel zoom (exponential per-delta instead of
+  fixed 1.2× jumps); a floating bottom-right cluster on Planning/Budgeting
+  with +, − and the Expand button (removed from the topbar, and Expand no
+  longer exists on Scoping).
+- **Reports tab** (replaces the reports drawer; researched: PMBOK-style
+  status areas — schedule/scope/cost/risk, EVM-lite % complete, RAG
+  flags, burnup): a dashboard view right of Budgeting with KPI cards
+  (% complete by effort, items done, weeks left, effort, planned cost,
+  billing & margin), progress-by-phase bars, effort/cost by workstream,
+  a cumulative planned-cost curve including roster + fixed/recurring
+  costs, upcoming milestones, and top validation flags.
+- **Context-menu audit**: no default browser menu anywhere except inside
+  editable text (inputs/rich editors keep the native clipboard menu).
+  Added: start-page recents (Open/Remove), budget role rows (rename, role,
+  workstream, remove), budget cost rows (remove), scoping column headers
+  (right-click = column menu), plus the app-chrome theme fallback
+  everywhere else.
+- **Setup surface**: Epics editable from Setup (Workstreams tab card);
+  Setup leaves the view-tab group and becomes a separate icon-only round
+  button to the right of Scoping/Planning/Budgeting/Reports.
+- **Milestones**: unfilled (outline) diamonds, ~30% narrower, same height.
+- **macOS**: traffic lights up 2px (y 26 → 24).
+
 ## Testing
 
 - Core tests: milestone span/schedule/validation, scope-column defaults and

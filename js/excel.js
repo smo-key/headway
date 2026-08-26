@@ -276,7 +276,7 @@
     var tws = wb.addWorksheet('Team');
     // Rate/Cost append AFTER the hours column so older importers (which read
     // col 5 as hours) still parse this layout
-    tws.getRow(1).values = ['Role', 'Type', 'Workstream', 'Capacity (at 40h)', 'Week hours (overrides, default 40)', 'Rate (hourly)', 'Cost (hourly)'];
+    tws.getRow(1).values = ['Person', 'Role', 'Workstream', 'Capacity (at full-time)', 'Week hours (overrides)', 'Rate (hourly)', 'Cost (hourly)'];
     tws.getRow(1).font = { bold: true };
     tws.getColumn(1).width = 28;
     tws.getColumn(2).width = 18;

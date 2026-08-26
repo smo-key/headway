@@ -112,7 +112,7 @@
   function applyUi(ui) {
     if (!ui) return;
     weekPx = ui.weekPx || 28;
-    view = ['scoping', 'setup', 'budget'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    view = ['scoping', 'setup', 'budget', 'reports'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
     depsMode = ui.depsMode === 'none' ? 'none' : 'on';
     groupWs = ui.groupWs != null ? !!ui.groupWs : ui.groupBy === 'ws';
     groupEpic = ui.groupEpic != null ? !!ui.groupEpic : (ui.groupBy === 'epic' || !!ui.groupByEpic);
@@ -428,13 +428,19 @@
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
     document.documentElement.style.setProperty('--left-w',
-      (presentMode && view === 'planning' ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+      (presentMode && (view === 'planning' || view === 'budget') ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     document.body.dataset.view = view;
 
     renderTopbar();
+    syncZoomCtl();
     if (view === 'setup') {
       renderSetup();
+      renderPanel();
+      return;
+    }
+    if (view === 'reports') {
+      renderReportsPage();
       renderPanel();
       return;
     }
@@ -449,7 +455,6 @@
       $('#arrowPaths').innerHTML = '';
       $('#arrows').setAttribute('width', 0);
       $('#arrows').setAttribute('height', 0);
-      renderReports();
       renderPanel();
       syncHdrH();
       board.scrollLeft = sx; board.scrollTop = sy;
@@ -488,59 +493,175 @@
     requestAnimationFrame(function () { renderArrows(); positionToday(); });
   }
 
-  // ------------------------------------------------------------ reports drawer
-  var REP_MODES = [['workstream', 'By workstream'], ['phase', 'By phase'], ['phase-ws', 'By phase × workstream']];
-  function repModeLabel() {
-    var out = 'By workstream';
-    REP_MODES.forEach(function (m) { if (m[0] === repMode) out = m[1]; });
-    return out;
-  }
-  function renderReports() {
-    var panel = $('#repPanel');
-    if (!panel) return;
-    panel.classList.toggle('collapsed', repCollapsed);
-    $('#repChev').classList.toggle('open', !repCollapsed);
-    // the mode dropdown stays even while collapsed so the header keeps its height
-    $('#repModeCell').innerHTML = ddButton('repmode', esc(repModeLabel()), null, 'Group the report');
-    if (repCollapsed) { $('#repBody').innerHTML = ''; return; }
-    var rep = RM.costReport(state, repMode);
-    var wsMode = repMode === 'workstream';
-    var head = '<tr><th class="bu-name">' + (repMode === 'phase' ? 'Phase' : wsMode ? 'Workstream' : 'Phase · Workstream') + '</th>' +
-      '<th class="bu-num">Items</th><th class="bu-num">Effort (wks)</th><th class="bu-num">Hours</th><th class="bu-num">Est. cost</th>' +
-      (wsMode ? '<th class="bu-num">Role hours</th><th class="bu-num">Role cost</th>' : '') + '</tr>';
-    function row(r, cls) {
-      return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td class="bu-name">' + esc(r.key) + '</td>' +
-        '<td class="bu-num">' + r.items + '</td>' +
-        '<td class="bu-num">' + (Math.round(r.days / 5 * 10) / 10) + '</td>' +
-        '<td class="bu-num">' + Math.round(r.hours) + '</td>' +
-        '<td class="bu-num">' + fmtMoney(r.cost) + '</td>' +
-        (wsMode ? '<td class="bu-num">' + Math.round(r.roleHours || 0) + '</td>' +
-          '<td class="bu-num">' + fmtMoney(r.roleCost || 0) + '</td>' : '') + '</tr>';
+  // ------------------------------------------------------------ reports page
+  // Dashboard-style project reporting (replaces the old drawer): KPI cards,
+  // progress by phase, effort/cost by workstream, a cumulative planned-cost
+  // curve, upcoming milestones, and open flags — the classic status areas
+  // (schedule / scope / cost / risk) at a glance.
+  function fmtPct(x) { return isFinite(x) ? Math.round(x * 100) + '%' : '—'; }
+  function renderReportsPage() {
+    var host = $('#reportsView');
+    if (!host) return;
+    var meta = state.meta;
+    var items = state.items;
+
+    // ---- effort-weighted completion (EVM-lite: done working days / total)
+    var totalDays = 0, doneDays = 0, doneCount = 0, schedCount = 0, msTotal = 0, msDone = 0;
+    items.forEach(function (it) {
+      if (it.milestone) {
+        msTotal += 1;
+        if (it.done || (it.startDay != null && (function () {
+          var today = RM.dateToDay(meta, new Date());
+          return today != null && it.startDay < today && it.done;
+        })())) msDone += it.done ? 1 : 0;
+        return;
+      }
+      var info = RM.itemEffortInfo(state, it);
+      totalDays += info.days;
+      if (it.done) { doneDays += info.days; doneCount += 1; }
+      if (it.startDay != null) schedCount += 1;
+    });
+    var workItems = items.filter(function (i) { return !i.milestone; });
+
+    // ---- schedule window
+    var stats = RM.scheduleStats(state);
+    var today = RM.dateToDay(meta, new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
+    var lastDay = stats.lastDay != null ? stats.lastDay : RM.numDays(meta);
+    var weeksLeft = today != null ? Math.max(0, Math.ceil((lastDay - today) / 5)) : null;
+
+    // ---- cost: items (estimate), roster (hours × cost), fixed/recurring
+    var rep = RM.costReport(state, 'workstream');
+    var rosterCost = 0, billing = 0;
+    state.team.forEach(function (m) {
+      var h = RM.roleTotalHours(state, m);
+      rosterCost += h * RM.memberCost(state, m);
+      billing += h * RM.memberRate(state, m);
+    });
+    var fixedCosts = RM.costsTotal(state);
+    var planned = rosterCost + fixedCosts;
+    var margin = billing > 0 ? (billing - planned) / billing : null;
+
+    // ---- flags
+    var flags = [];
+    items.forEach(function (it) {
+      (validation.byItem[it.id] || []).forEach(function (v) {
+        if (v.level !== 'info') flags.push('#' + it.num + ' ' + shorten(it.feature || '(untitled)', 22) + ' — ' + v.msg);
+      });
+    });
+    validation.global.forEach(function (v) { flags.push(v.msg); });
+
+    function kpi(label, value, sub) {
+      return '<div class="rp-kpi"><span class="rp-kpi-label">' + label + '</span>' +
+        '<span class="rp-kpi-value">' + value + '</span>' +
+        (sub ? '<span class="rp-kpi-sub">' + sub + '</span>' : '') + '</div>';
     }
-    $('#repBody').innerHTML =
-      '<table class="bu-table rep-table"><thead>' + head + '</thead><tbody>' +
-      rep.rows.map(function (r) { return row(r); }).join('') +
-      row(rep.total, 'bu-total') + '</tbody></table>';
+    function barRow(label, frac, right, color) {
+      var pct = Math.max(0, Math.min(1, frac));
+      return '<div class="rp-bar-row"><span class="rp-bar-label" title="' + esc(label) + '">' + esc(label) + '</span>' +
+        '<span class="rp-bar-track"><span class="rp-bar-fill" style="width:' + (pct * 100).toFixed(1) +
+        '%;background:' + (color || 'var(--blue)') + '"></span></span>' +
+        '<span class="rp-bar-val">' + right + '</span></div>';
+    }
+
+    // progress by phase (done effort / total effort)
+    var phaseBars = state.phases.map(function (p) {
+      var tot = 0, done = 0, n = 0;
+      RM.itemsInPhase(state, p.id).forEach(function (it) {
+        if (it.milestone) return;
+        var d = RM.itemEffortInfo(state, it).days;
+        tot += d; n += 1;
+        if (it.done) done += d;
+      });
+      if (!n) return '';
+      return barRow(p.name, tot ? done / tot : 0, fmtPct(tot ? done / tot : 0) + ' · ' + n + ' items');
+    }).join('') || '<div class="p-none">No items yet.</div>';
+
+    // effort & cost by workstream
+    var maxCost = 1;
+    rep.rows.forEach(function (r) { if (r.cost > maxCost) maxCost = r.cost; });
+    var wsBars = rep.rows.map(function (r) {
+      var col = '#' + RM.colorForWs(state, r.key === '(no workstream)' ? '' : r.key);
+      return barRow(r.key, r.cost / maxCost,
+        fmtMoney(r.cost) + ' · ' + (Math.round(r.days / 5 * 10) / 10) + 'w', col);
+    }).join('') || '<div class="p-none">Nothing scheduled or sized yet.</div>';
+
+    // cumulative planned cost curve (roster + fixed/recurring), by week
+    var weekly = new Array(meta.numWeeks);
+    for (var w = 0; w < meta.numWeeks; w++) weekly[w] = 0;
+    state.team.forEach(function (m) {
+      var c = RM.memberCost(state, m);
+      if (!c) return;
+      for (var w2 = 0; w2 < meta.numWeeks; w2++) weekly[w2] += RM.roleWeekHours(state, m, w2).actual * c;
+    });
+    (state.costs || []).forEach(function (cst) {
+      RM.costOccurrences(state, cst).forEach(function (o) {
+        var wk = Math.min(meta.numWeeks - 1, Math.floor(o.day / 5));
+        weekly[wk] += o.amount;
+      });
+    });
+    var cum = [], run = 0;
+    weekly.forEach(function (v) { run += v; cum.push(run); });
+    var curve = '';
+    if (run > 0) {
+      var W = 560, H = 120;
+      var pts = cum.map(function (v, i) {
+        return (i / Math.max(1, cum.length - 1) * W).toFixed(1) + ',' + (H - (v / run) * (H - 6)).toFixed(1);
+      });
+      var todayX = today != null && today >= 0 && today <= RM.numDays(meta)
+        ? (today / RM.numDays(meta)) * W : null;
+      curve =
+        '<svg class="rp-curve" viewBox="0 0 ' + W + ' ' + (H + 4) + '" preserveAspectRatio="none">' +
+        '<polyline points="' + pts.join(' ') + '" fill="none" stroke="var(--blue)" stroke-width="2"/>' +
+        '<polygon points="0,' + H + ' ' + pts.join(' ') + ' ' + W + ',' + H + '" fill="var(--blue)" opacity=".08"/>' +
+        (todayX != null ? '<line x1="' + todayX.toFixed(1) + '" y1="0" x2="' + todayX.toFixed(1) + '" y2="' + H + '" stroke="var(--err)" stroke-dasharray="3 3" stroke-width="1"/>' : '') +
+        '</svg>' +
+        '<div class="rp-curve-cap"><span>' + esc(RM.fmtShortYear(RM.parseISO(meta.timelineStart))) + '</span>' +
+        '<span>' + fmtMoney(run) + ' total</span>' +
+        '<span>' + esc(meta.endDate ? RM.fmtShortYear(RM.parseISO(meta.endDate)) : '') + '</span></div>';
+    } else {
+      curve = '<div class="p-none">Add roster costs or fixed costs to see spend over time.</div>';
+    }
+
+    // upcoming milestones
+    var msRows = items.filter(function (i) { return i.milestone && i.startDay != null; })
+      .sort(function (a, b) { return a.startDay - b.startDay; })
+      .slice(0, 6)
+      .map(function (m2) {
+        var past = today != null && m2.startDay < today;
+        return '<div class="rp-ms' + (m2.done ? ' done' : past ? ' late' : '') + '">' +
+          '<span class="rp-ms-d"></span>' +
+          '<span class="rp-ms-name">' + esc(m2.feature || '(untitled)') + '</span>' +
+          '<span class="rp-ms-date">' + RM.fmtShortYear(RM.dayToDate(meta, m2.startDay)) + '</span>' +
+          '<span class="rp-ms-tag">' + (m2.done ? 'done' : past ? 'overdue' : 'upcoming') + '</span>' +
+          '</div>';
+      }).join('') || '<div class="p-none">No milestones on the timeline — convert an item via its context menu.</div>';
+
+    var flagRows = flags.slice(0, 8).map(function (f) {
+      return '<div class="rp-flag"><i data-lucide="triangle-alert"></i>' + esc(f) + '</div>';
+    }).join('') || '<div class="rp-flag ok"><i data-lucide="circle-check"></i>No open warnings.</div>';
+
+    host.innerHTML =
+      '<div class="rp-page">' +
+      '<h1 class="su-page">Reports</h1>' +
+      '<div class="rp-kpis">' +
+      kpi('Complete', fmtPct(totalDays ? doneDays / totalDays : 0), doneCount + ' of ' + workItems.length + ' items done') +
+      kpi('Scheduled', fmtPct(workItems.length ? schedCount / workItems.length : 0), schedCount + ' items on the timeline') +
+      kpi('Time left', weeksLeft != null ? weeksLeft + 'w' : '—',
+        stats.lastDay != null ? 'finishes ' + RM.fmtShortYear(RM.dayToDate(meta, Math.max(0, stats.lastDay - 1))) : 'nothing scheduled') +
+      kpi('Effort', (Math.round(totalDays / 5 * 10) / 10) + 'w', 'estimated person-weeks') +
+      kpi('Planned cost', fmtMoney(planned), fmtMoney(rosterCost) + ' team + ' + fmtMoney(fixedCosts) + ' costs') +
+      kpi('Billing', billing > 0 ? fmtMoney(billing) : '—',
+        margin != null ? fmtPct(margin) + ' margin' : 'no bill rates set') +
+      '</div>' +
+      '<div class="rp-grid">' +
+      '<section class="su-card rp-card"><h2>Progress by phase</h2>' + phaseBars + '</section>' +
+      '<section class="su-card rp-card"><h2>Cost &amp; effort by workstream</h2>' + wsBars + '</section>' +
+      '<section class="su-card rp-card rp-wide"><h2>Planned spend over time</h2>' + curve + '</section>' +
+      '<section class="su-card rp-card"><h2>Milestones</h2>' + msRows + '</section>' +
+      '<section class="su-card rp-card"><h2>Flags</h2>' + flagRows + '</section>' +
+      '</div></div>';
     if (window.lucide) lucide.createIcons();
   }
-
-  $('#repHead').addEventListener('click', function (e) {
-    if (e.target.closest('#repModeCell')) return;
-    repCollapsed = !repCollapsed;
-    saveLocal();
-    renderReports();
-  });
-  $('#repModeCell').addEventListener('click', function (e) {
-    var dd = e.target.closest('[data-dd="repmode"]');
-    if (!dd) return;
-    openDropdown(dd, REP_MODES.map(function (m) {
-      return { label: m[1], checked: repMode === m[0], fn: function () {
-        repMode = m[0];
-        saveLocal();
-        renderReports();
-      } };
-    }));
-  });
 
   function renderScopeHeader() {
     var out = ['<div class="sc-hrow">'];
@@ -576,7 +697,7 @@
     var dot = $('#valDot');
     dot.className = counts.error ? 'err' : (counts.warn ? 'warn' : '');
     dot.id = 'valDot';
-    $$('#viewTabs button').forEach(function (b) {
+    $$('#viewTabs button, #btnSetup').forEach(function (b) {
       b.classList.toggle('on', b.dataset.view === view);
     });
 
@@ -619,8 +740,8 @@
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
-    // capacity row: ≈ parallel work items available (people-equivalents of
-    // the selected work type), colored by demand
+    // capacity row: PEOPLE AVAILABLE per week (fractional when hours or
+    // part-time roles reduce it), colored by size-weighted WIP pressure
     var cap = validation.capacity;
     for (var w = 0; w < meta.numWeeks; w++) {
       var cell = cap.weeks[w];
@@ -629,17 +750,15 @@
       var hn = RM.holidaysInWeek(meta, w, hset);
       var cls, txt2 = '', title;
       if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
-      else if (cap.teamTotal === 0) {
-        cls = demand > 0 ? 'ok' : 'idle';
-        txt2 = weekPx >= 22 && demand ? fmtPe(demand) : '';
-        title = fmtPe(demand) + ' parallel item(s) needed (no roster yet)';
-      } else if (avail === Infinity) {
-        cls = 'idle'; title = 'No roster';
+      else if (cap.teamTotal === 0 || avail === Infinity) {
+        cls = 'idle'; title = 'No roster yet — add people in Resources';
       } else {
         var over = demand > avail + 1e-9;
         cls = over ? 'over' : (avail > 0 && demand / avail > 0.85 ? 'mid' : (demand === 0 ? 'idle' : 'ok'));
-        txt2 = weekPx >= 26 ? (fmtPe(demand) + '/' + fmtPe(avail)) : (weekPx >= 20 ? fmtPe(avail) : '');
-        title = fmtPe(demand) + ' needed / ' + fmtPe(avail) + ' parallel ' + (capType || 'any-type') + ' capacity (hours ÷ 40)';
+        txt2 = weekPx >= 20 ? fmtPe(avail) : '';
+        title = fmtPe(avail) + ' ' + (capType || '') + ' available' +
+          (over ? ' — looks like too much concurrent work (' + fmtPe(demand) + ' focus units in flight)'
+            : demand ? ' · ' + fmtPe(demand) + ' focus units in flight' : '');
       }
       hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
         '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
@@ -681,7 +800,7 @@
     $('#hdrSprints').style.width = laneW + 'px';
     $('#hdrCap').innerHTML = hc.join('');
     $('#capTypeCell').innerHTML = ddButton('captype',
-      'capacity: ' + (capType ? esc(capType) : 'all types'), null, 'Which work type the capacity row counts');
+      'available: ' + (capType ? esc(capType) : 'all roles'), null, 'Which role the availability row counts');
     if (window.lucide) lucide.createIcons();
   }
 
@@ -773,7 +892,7 @@
   $('#capTypeCell').addEventListener('click', function (e) {
     var dd = e.target.closest('[data-dd="captype"]');
     if (!dd) return;
-    var items = [{ label: 'All types', checked: !capType, fn: function () { capType = ''; saveLocal(); render(); } }];
+    var items = [{ label: 'All roles', checked: !capType, fn: function () { capType = ''; saveLocal(); render(); } }];
     state.teamTypes.forEach(function (t) {
       items.push({ label: esc(t), checked: capType === t, fn: function () { capType = t; saveLocal(); render(); } });
     });
@@ -909,7 +1028,7 @@
       var workW = Math.max(6, it.durDays * dayPx());
       var riskW = (it.riskDays || 0) * dayPx();
       var width = workW + riskW;
-      var hcTag = (state.meta.capacityEnabled && it.headcount > 1 && width > 90) ? '<span class="b-hc">×' + it.headcount + '</span>' : '';
+      var hcTag = '';
       // label rides inside the bar when it fits (~6.3px/char at 10.5px bold);
       // otherwise it sits just right of the bar in ink
       var labelW = it.feature.length * 6.3 + 16 + (hcTag ? 30 : 0) + (it.done ? 16 : 0);
@@ -917,7 +1036,7 @@
       var dates = RM.fmtShort(RM.dayToDate(meta, it.startDay)) + ' → ' +
         RM.fmtShort(RM.spanEndDate(meta, it.startDay, RM.itemSpan(it)));
       var tip = it.feature + '  ·  ' + dates + (it.size ? '  ·  ' + it.size : '') +
-        (it.risk ? '  ·  risk ' + it.risk : '') + '  ·  ×' + it.headcount +
+        (it.risk ? '  ·  risk ' + it.risk : '') +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
@@ -993,9 +1112,7 @@
             ? '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>'
             : '') +
           '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit">' + totalWeeks(it) + '</span>' +
-          (state.meta.capacityEnabled
-            ? '<span class="r-hc' + (it.headcount > 1 ? ' multi' : '') + '" tabindex="0" role="button" data-act="hc" title="Headcount — click to edit">×' + it.headcount + '</span>'
-            : ''))) +
+          '')) +
       warnBadge(it) +
       '</div>' +
       '<div class="row-lane">' + laneInner + '</div>' +
@@ -1404,11 +1521,7 @@
         '</div>') +
 
       sec('people', 'People', '',
-        '<div class="p-grid2">' +
-        '<div><label class="p-lab">Headcount</label>' +
-        '<input type="number" data-f="headcount" min="0.1" step="0.25" value="' + it.headcount + '" style="width:100%"></div>' +
-        '<div><label class="p-lab">Role</label>' + typeDd + '</div>' +
-        '</div>') +
+        '<label class="p-lab">Role</label>' + typeDd) +
 
       sec('deps', 'Dependencies', '',
         '<label class="p-lab">Depends on</label>' +
@@ -2019,13 +2132,6 @@
     }
     if (!f) return;
     var val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    if (f === 'headcount') {
-      // decimals are fine (0.5 = a half-time person); capacity math is hours-based
-      var hv = parseFloat(val);
-      hv = isFinite(hv) && hv > 0 ? Math.round(hv * 100) / 100 : 1;
-      commit('headcount', function (s) { RM.itemById(s, it.id).headcount = hv; });
-      return;
-    }
     var simple = { feature: 1, description: 1, workstream: 1, enables: 1, outOfScope: 1, notes: 1, extDeps: 1 };
     if (simple[f]) {
       commit(f, function (s) { RM.itemById(s, it.id)[f] = val; });
@@ -2246,37 +2352,6 @@
           });
           return;
         }
-        case 'hc': {
-          if (act.querySelector('input')) return;
-          var hcInp = document.createElement('input');
-          hcInp.type = 'number';
-          hcInp.min = '0.1';
-          hcInp.step = '0.25';
-          hcInp.value = it.headcount;
-          hcInp.className = 'hc-edit';
-          act.textContent = '×';
-          act.appendChild(hcInp);
-          hcInp.focus();
-          hcInp.select();
-          var hcDone = false;
-          var hcFin = function (saveIt) {
-            if (hcDone) return; hcDone = true;
-            var n = parseFloat(hcInp.value);
-            if (saveIt && isFinite(n) && n > 0) {
-              n = Math.round(n * 100) / 100;
-              commit('headcount', function (s) {
-                RM.itemById(s, itemId).headcount = n;
-              });
-            } else render();
-          };
-          hcInp.addEventListener('blur', function () { hcFin(true); });
-          hcInp.addEventListener('keydown', function (ev) {
-            ev.stopPropagation();
-            if (ev.key === 'Enter') hcFin(true);
-            if (ev.key === 'Escape') hcFin(false);
-          });
-          return;
-        }
         case 'size': {
           openDropdown(act, [{ label: '<i>no size</i>', checked: !it.size, fn: function () {
             setItemSize(itemId, null);
@@ -2447,7 +2522,9 @@
   rowsEl.addEventListener('contextmenu', function (e) {
     var rowEl = e.target.closest('.row');
     if (!rowEl || e.target.closest('input,textarea,select')) return;
+    if (view === 'budget') return; // budget rows carry their own menu below
     e.preventDefault();
+    e.stopPropagation(); // the document fallback must not replace this menu
     var cx = e.clientX, cy = e.clientY;
     var items = [];
     if (rowEl.dataset.kind === 'band') {
@@ -2556,10 +2633,31 @@
 
   // right-click on app chrome (header, setup, start page background) →
   // quick app menu: theme switch lives here
+  // No surface shows the browser's default context menu. Editable text keeps
+  // the native menu (copy/paste is essential there); specific surfaces attach
+  // their own menus and preventDefault first; everything else falls back to
+  // the app-chrome theme menu.
   document.addEventListener('contextmenu', function (e) {
-    if (e.defaultPrevented) return; // rows / resources handled it already
+    if (e.defaultPrevented) return; // rows / resources / budget handled it already
     if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
-    if (!e.target.closest('#topbar, #setupView, #startPage')) return;
+    // start-page recents: open / remove
+    var spRow = e.target.closest('.sp-row[data-sp-open]');
+    if (spRow) {
+      e.preventDefault();
+      var spPath = spRow.dataset.spOpen;
+      openContextMenu(e.clientX, e.clientY, [
+        { icon: 'folder-open', label: 'Open', fn: function () { openRecent(spPath); } },
+        { icon: 'x', label: 'Remove from this list', fn: function () { dropRecent(spPath); renderStartPage(); } }
+      ]);
+      return;
+    }
+    // scoping column headers: right-click = the column menu
+    var colHd = e.target.closest('#hdrSprints [data-colmenu]');
+    if (colHd && view === 'scoping') {
+      e.preventDefault();
+      colHd.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return;
+    }
     e.preventDefault();
     openContextMenu(e.clientX, e.clientY, themeMenuItems());
   });
@@ -3577,14 +3675,16 @@
     }
   });
 
-  $('#viewTabs').addEventListener('click', function (e) {
+  function switchView(e) {
     var b = e.target.closest('[data-view]');
     if (!b || b.dataset.view === view) return;
     view = b.dataset.view;
     saveLocal();
     render();
     if (view === 'planning') requestAnimationFrame(goToday);
-  });
+  }
+  $('#viewTabs').addEventListener('click', switchView);
+  $('#btnSetup').addEventListener('click', switchView);
 
   function goToday() {
     var now = new Date();
@@ -3824,18 +3924,30 @@
   }, true);
 
   // ⌘/ctrl-scroll zooms the timeline around the cursor
+  // ⌘/ctrl-scroll zooms on Planning AND Budgeting — smooth (scaled by the
+  // wheel delta, so trackpad pinches glide instead of jumping in fixed steps)
   board.addEventListener('wheel', function (e) {
-    if (view !== 'planning' || (!e.ctrlKey && !e.metaKey)) return;
+    if ((view !== 'planning' && view !== 'budget') || (!e.ctrlKey && !e.metaKey)) return;
     e.preventDefault();
     var r = board.getBoundingClientRect();
     var laneX = board.scrollLeft + (e.clientX - r.left) - leftW();
     var day = laneX / dayPx();
-    weekPx = Math.max(14, Math.min(80, weekPx * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    var f = Math.exp(-e.deltaY * 0.006);
+    f = Math.max(0.7, Math.min(1.4, f));
+    weekPx = Math.max(14, Math.min(80, weekPx * f));
     saveLocal();
     render();
     board.scrollLeft = Math.max(0, day * dayPx() - (e.clientX - r.left - leftW()));
     requestAnimationFrame(renderArrows);
   }, { passive: false });
+
+  // floating zoom / expand cluster (bottom right of the timeline)
+  function syncZoomCtl() {
+    var z = $('#zoomCtl');
+    if (z) z.hidden = !(view === 'planning' || view === 'budget') || presentMode;
+  }
+  $('#zoomInBtn').addEventListener('click', function () { zoomBy(1.2); });
+  $('#zoomOutBtn').addEventListener('click', function () { zoomBy(1 / 1.2); });
 
   function addFeature(phaseId) {
     var newId = RM.uid('i');
@@ -4002,17 +4114,21 @@
     var meta = state.meta;
     var html = [];
     var sumTotal = 0;
+    var fullWeek = RM.weekHoursOf(meta);
     state.team.forEach(function (m) {
       var wsHex = RM.colorForWs(state, m.workstream);
       var cr = parseInt(wsHex.slice(0, 2), 16), cg = parseInt(wsHex.slice(2, 4), 16), cb = parseInt(wsHex.slice(4, 6), 16);
       var hours = RM.roleTotalHours(state, m);
-      var total = hours * (m.rate || 0); // billing total: actual hours × rate
+      var effRate = RM.memberRate(state, m);
+      var effCost = RM.memberCost(state, m);
+      var total = hours * effRate; // billing total: actual hours × effective rate
       sumTotal += total;
-      var margin = RM.roleMargin(m);
+      var margin = RM.roleMargin(state, m);
+      var rc = RM.rateCardFor(state, m.type);
       var cells = [];
       for (var w = 0; w < meta.numWeeks; w++) {
         var wh = RM.roleWeekHours(state, m, w);
-        var a = Math.max(0, Math.min(1, wh.actual / 40));
+        var a = Math.max(0, Math.min(1, wh.actual / fullWeek));
         // clipped weeks (holidays) show the ACTUAL hours below in small text —
         // that's what totals and cost are built from
         var clipped = wh.actual < wh.planned;
@@ -4027,28 +4143,60 @@
         '<div class="row-left">' +
         '<span class="r-dot" style="background:#' + wsHex + '"></span>' +
         '<span class="bu-nm">' + esc(m.name) + '</span>' +
-        '<span class="r-ws sc-chip bu-col" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-bact="type" title="Type — click to change">' + esc(shorten(m.type || '·', 13)) + '</span>' +
-        '<span class="r-ws sc-chip bu-col" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-bact="ws" title="Workstream — click to change">' +
-        '<span class="dd-dot" style="background:#' + wsHex + '"></span>' +
-        (m.workstream ? esc(shorten(m.workstream, 14)) : '·') + '</span>' +
-        '<input class="bu-in bu-col" style="width:' + BU_COLS.cost + 'px" type="number" min="0" data-bud="cost" value="' + (m.cost || 0) + '" title="Cost (hourly)">' +
-        '<input class="bu-in bu-col" style="width:' + BU_COLS.rate + 'px" type="number" min="0" data-bud="rate" value="' + (m.rate || 0) + '" title="Rate (hourly)">' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-bact="type" title="Role — sets the default rate from the rate card">' + esc(shorten(m.type || '', 13)) + '</span>' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-bact="ws" title="Workstream — click to change">' +
+        (m.workstream ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(m.workstream, 14)) : '') + '</span>' +
+        '<input class="bu-in bu-col' + (!m.cost && effCost ? ' inherited' : '') + '" style="width:' + BU_COLS.cost +
+        'px" type="number" min="0" data-bud="cost" value="' + (m.cost || '') + '" placeholder="' + (rc && rc.cost ? rc.cost : 0) +
+        '" title="Cost (hourly) — empty inherits the role’s rate card">' +
+        '<input class="bu-in bu-col' + (!m.rate && effRate ? ' inherited' : '') + '" style="width:' + BU_COLS.rate +
+        'px" type="number" min="0" data-bud="rate" value="' + (m.rate || '') + '" placeholder="' + (rc && rc.rate ? rc.rate : 0) +
+        '" title="Rate (hourly) — empty inherits the role’s rate card">' +
         '<span class="bu-col bu-ro" style="width:' + BU_COLS.margin + 'px" title="Margin">' + (margin == null ? '—' : Math.round(margin) + '%') + '</span>' +
         '<span class="bu-col bu-ro" style="width:' + BU_COLS.total + 'px" title="Total — actual hours × rate">' + fmtMoney(total) + '</span>' +
         '</div><div class="row-lane">' + cells.join('') + '</div></div>');
     });
-    if (state.team.length) {
+    // click-to-add role row (same flow as the Resources panel)
+    html.push('<div class="row addrow" data-kind="baddrole" title="Add a person to the roster">' +
+      '<div class="row-left"><span class="addrow-lab"><i data-lucide="plus"></i> Add role</span></div>' +
+      '<div class="row-lane"></div></div>');
+
+    // ---- fixed & recurring costs: their own band + rows with timeline markers
+    var costs = state.costs || [];
+    var costsTotal = RM.costsTotal(state);
+    html.push('<div class="row band bcosts-band"><div class="row-left">' +
+      '<span class="band-name">COSTS</span><span class="band-count">' + costs.length + '</span></div>' +
+      '<div class="row-lane"></div></div>');
+    costs.forEach(function (c) {
+      var occ = RM.costOccurrences(state, c);
+      var marks = occ.map(function (o) {
+        return '<span class="bu-costmark" title="' + esc(c.name + ' — ' + fmtMoney(o.amount) + ' on ' +
+          RM.fmtShortYear(RM.dayToDate(meta, o.day))) + '" style="left:' + (o.day * dayPx()) + 'px"></span>';
+      }).join('');
+      var kindLabel = c.kind === 'fixed' ? 'One-time' : c.kind === 'weekly' ? 'Weekly' : 'Monthly';
+      var cTotal = RM.costTotal(state, c);
+      sumTotal = sumTotal; // billing total stays roster-only; costs are spend
+      html.push('<div class="row brole bcost" data-cost="' + c.id + '">' +
+        '<div class="row-left">' +
+        '<span class="r-dot nodot"></span>' +
+        '<input class="bu-in bu-nm-in" data-cf="name" value="' + esc(c.name) + '" title="Cost name">' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-cact="kind" title="One-time, weekly, or monthly">' + kindLabel + '</span>' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-cact="dates" title="When it applies — click to edit">' +
+        esc(RM.fmtShort(RM.dayToDate(meta, c.startDay)) + (c.kind !== 'fixed' ? ' →' + (c.endDay != null ? ' ' + RM.fmtShort(RM.dayToDate(meta, c.endDay)) : ' end') : '')) + '</span>' +
+        '<input class="bu-in bu-col" style="width:' + BU_COLS.cost + 'px" type="number" min="0" data-cf="amount" value="' + c.amount + '" title="Amount per occurrence">' +
+        '<span class="bu-col" style="width:' + BU_COLS.rate + 'px"></span>' +
+        '<span class="bu-col" style="width:' + BU_COLS.margin + 'px"></span>' +
+        '<span class="bu-col bu-ro" style="width:' + BU_COLS.total + 'px" title="Total across ' + occ.length + ' occurrence(s)">' + fmtMoney(cTotal) + '</span>' +
+        '</div><div class="row-lane">' + marks + '</div></div>');
+    });
+    html.push('<div class="row addrow" data-kind="baddcost" title="Add a fixed or recurring cost">' +
+      '<div class="row-left"><span class="addrow-lab"><i data-lucide="plus"></i> Add cost</span></div>' +
+      '<div class="row-lane"></div></div>');
+
+    if (state.team.length || costs.length) {
       html.push('<div class="row brole btotal"><div class="row-left">' +
         '<span class="r-dot" style="background:transparent"></span>' +
-        '<span class="bu-nm">Total</span>' +
-        '<span class="bu-col" style="width:' + BU_COLS.type + 'px"></span><span class="bu-col" style="width:' + BU_COLS.ws + 'px"></span>' +
-        '<span class="bu-col" style="width:' + BU_COLS.cost + 'px"></span><span class="bu-col" style="width:' + BU_COLS.rate + 'px"></span>' +
-        '<span class="bu-col" style="width:' + BU_COLS.margin + 'px"></span>' +
-        '<span class="bu-col bu-ro" style="width:' + BU_COLS.total + 'px">' + fmtMoney(sumTotal) + '</span>' +
-        '</div><div class="row-lane"></div></div>');
-    } else {
-      html.push('<div class="row brole"><div class="row-left">' +
-        '<span class="bu-nm" style="color:var(--ink-3)">No roles yet — add people in the Resources panel</span>' +
+        '<span class="bu-nm">Billing ' + fmtMoney(sumTotal) + (costsTotal ? ' · Costs ' + fmtMoney(costsTotal) : '') + '</span>' +
         '</div><div class="row-lane"></div></div>');
     }
     rowsEl.innerHTML = html.join('');
@@ -4232,6 +4380,164 @@
     }
   });
 
+  // add-role / add-cost rows + cost field edits (budget view)
+  function addBudgetRole(rowEl) {
+    var lab = rowEl.querySelector('.addrow-lab');
+    if (!lab || lab.querySelector('input')) return;
+    var inp = document.createElement('input');
+    inp.placeholder = 'Name…';
+    inp.className = 'st-add-input';
+    lab.innerHTML = '';
+    lab.appendChild(inp);
+    inp.focus();
+    var done = false;
+    function finish(saveIt) {
+      if (done) return; done = true;
+      var v = inp.value.trim();
+      if (saveIt && v) {
+        commit('add person', function (s) {
+          s.team.push({ id: RM.uid('t'), name: v, type: s.teamTypes[0], weekHours: {} });
+        });
+      } else render();
+    }
+    inp.addEventListener('blur', function () { finish(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') finish(true);
+      if (ev.key === 'Escape') finish(false);
+    });
+  }
+  function costById(id) {
+    return (state.costs || []).filter(function (c) { return c.id === id; })[0] || null;
+  }
+  function costDatesPopover(anchor, costId) {
+    var c = costById(costId);
+    if (!c) return;
+    var r = anchor.getBoundingClientRect();
+    var meta = state.meta;
+    openPopover(r.left, r.bottom + 4,
+      '<div class="rolep">' +
+      '<label class="p-lab">First occurrence</label>' +
+      '<input type="date" id="csStart" value="' + RM.fmtISO(RM.dayToDate(meta, c.startDay)) + '">' +
+      (c.kind !== 'fixed'
+        ? '<label class="p-lab" style="margin-top:8px">Last occurrence (empty = timeline end)</label>' +
+          '<input type="date" id="csEnd" value="' + (c.endDay != null ? RM.fmtISO(RM.dayToDate(meta, c.endDay)) : '') + '">'
+        : '') +
+      '<div class="p-row" style="margin-top:9px"><button id="csApply" class="primary fixed">Apply</button></div>' +
+      '</div>',
+      function (host) {
+        function apply() {
+          var sd = RM.dateToDay(state.meta, RM.parseISO($('#csStart', host).value));
+          var edEl = $('#csEnd', host);
+          var ed = edEl && edEl.value ? RM.dateToDay(state.meta, RM.parseISO(edEl.value)) : null;
+          closePopover();
+          commit('cost dates', function (s) {
+            var c2 = (s.costs || []).filter(function (x) { return x.id === costId; })[0];
+            if (!c2) return;
+            if (sd != null) c2.startDay = Math.max(0, sd);
+            c2.endDay = ed != null && ed >= c2.startDay ? ed : null;
+          });
+        }
+        $('#csApply', host).onclick = apply;
+        host.addEventListener('keydown', function (ke) { if (ke.key === 'Enter') apply(); });
+      });
+  }
+  rowsEl.addEventListener('click', function (e) {
+    if (view !== 'budget') return;
+    var add = e.target.closest('.row.addrow');
+    if (add) {
+      if (add.dataset.kind === 'baddrole') { addBudgetRole(add); return; }
+      if (add.dataset.kind === 'baddcost') {
+        commit('add cost', function (s) {
+          s.costs.push({ id: RM.uid('cost'), name: 'New cost', amount: 0, kind: 'fixed', startDay: 0, endDay: null });
+        });
+        requestAnimationFrame(function () {
+          var last = $$('#rows .row.bcost').pop();
+          var inp = last && last.querySelector('[data-cf="name"]');
+          if (inp) { inp.focus(); inp.select(); }
+        });
+        return;
+      }
+    }
+    var cact = e.target.closest('[data-cact]');
+    var costRow = e.target.closest('[data-cost]');
+    if (cact && costRow) {
+      var costId = costRow.dataset.cost;
+      if (cact.dataset.cact === 'kind') {
+        openDropdown(cact, [['fixed', 'One-time'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(function (k) {
+          return { label: k[1], checked: (costById(costId) || {}).kind === k[0], fn: function () {
+            commit('cost kind', function (s) {
+              var c2 = (s.costs || []).filter(function (x) { return x.id === costId; })[0];
+              if (c2) c2.kind = k[0];
+            });
+          } };
+        }));
+      } else if (cact.dataset.cact === 'dates') {
+        costDatesPopover(cact, costId);
+      }
+    }
+  });
+  rowsEl.addEventListener('change', function (e) {
+    if (view !== 'budget') return;
+    var cf = e.target.dataset.cf;
+    var costRow = e.target.closest('[data-cost]');
+    if (!cf || !costRow) return;
+    var costId = costRow.dataset.cost;
+    var val = cf === 'amount' ? Math.max(0, parseFloat(e.target.value) || 0) : e.target.value.trim();
+    commit('cost ' + cf, function (s) {
+      var c2 = (s.costs || []).filter(function (x) { return x.id === costId; })[0];
+      if (!c2) return;
+      if (cf === 'amount') c2.amount = val;
+      else if (val) c2.name = val;
+    });
+  });
+
+  // right-click: budget people and cost rows get their own menus
+  rowsEl.addEventListener('contextmenu', function (e) {
+    if (view !== 'budget') return;
+    var costRow = e.target.closest('[data-cost]');
+    var roleRow = e.target.closest('[data-mid]');
+    if (!costRow && !roleRow) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (costRow) {
+      var cid = costRow.dataset.cost;
+      openContextMenu(e.clientX, e.clientY, [
+        { icon: 'trash-2', label: 'Remove cost', fn: function () {
+          commit('remove cost', function (s) {
+            s.costs = (s.costs || []).filter(function (x) { return x.id !== cid; });
+          });
+        } }
+      ]);
+      return;
+    }
+    if (roleRow.classList.contains('btotal')) return;
+    var mid2 = roleRow.dataset.mid;
+    var mm2 = null;
+    state.team.forEach(function (x) { if (x.id === mid2) mm2 = x; });
+    if (!mm2) return;
+    openContextMenu(e.clientX, e.clientY, [
+      { icon: 'pencil', label: 'Rename', fn: function () {
+        var nm = roleRow.querySelector('.bu-nm');
+        if (nm) startInlineEdit(nm, function (v) {
+          if (v.trim()) commit('rename person', function (s) {
+            s.team.forEach(function (x) { if (x.id === mid2) x.name = v.trim(); });
+          });
+        });
+      } },
+      { icon: 'tags', label: 'Role…', fn: function () {
+        var chipT = roleRow.querySelector('[data-bact="type"]');
+        if (chipT) chipT.click();
+      } },
+      { icon: 'layers', label: 'Workstream…', fn: function () {
+        var chipW = roleRow.querySelector('[data-bact="ws"]');
+        if (chipW) chipW.click();
+      } },
+      { sep: true },
+      { icon: 'trash-2', label: 'Remove person…', fn: function () { deleteRoleConfirm(mid2); } }
+    ]);
+  });
+
   // week-hour cells edit in place (budget rows); Tab/Shift+Tab commits and
   // hops to the neighbouring week like the resources spreadsheet
   function openBuCellEditor(td) {
@@ -4242,7 +4548,7 @@
     var mm = null;
     state.team.forEach(function (x) { if (x.id === roleId) mm = x; });
     if (!mm) return;
-    var cur = mm.weekHours[iso] != null ? mm.weekHours[iso] : 40;
+    var cur = mm.weekHours[iso] != null ? mm.weekHours[iso] : RM.weekHoursOf(state.meta);
     var inp = document.createElement('input');
     inp.type = 'number';
     inp.min = '0';
@@ -4259,7 +4565,7 @@
         commit('role hours', function (s) {
           s.team.forEach(function (m2) {
             if (m2.id !== roleId) return;
-            if (h === 40) delete m2.weekHours[iso]; else m2.weekHours[iso] = h;
+            if (h === RM.weekHoursOf(s.meta)) delete m2.weekHours[iso]; else m2.weekHours[iso] = h;
           });
         });
       } else render();
@@ -4356,11 +4662,28 @@
 
     var typeCounts = {};
     state.team.forEach(function (mm) { typeCounts[mm.type] = (typeCounts[mm.type] || 0) + 1; });
+    // roles carry the RATE CARD: default hourly rate/cost that people of the
+    // role inherit unless overridden on the person (Budgeting)
     var typeRows = state.teamTypes.map(function (t) {
+      var rc = (m.rateCard && m.rateCard[t]) || {};
       return '<div class="su-row" data-key="' + esc(t) + '">' + grip() +
         '<span class="su-name">' + esc(t) + '</span>' +
         '<span class="band-count">' + (typeCounts[t] || 0) + '</span>' +
-        '<button data-suttrm="' + esc(t) + '" class="danger" title="Remove type"><i data-lucide="x"></i></button>' +
+        '<input class="su-rc" type="number" min="0" data-rccost="' + esc(t) + '" value="' + (rc.cost || '') + '" placeholder="cost/h" title="Default hourly cost for this role">' +
+        '<input class="su-rc" type="number" min="0" data-rcrate="' + esc(t) + '" value="' + (rc.rate || '') + '" placeholder="rate/h" title="Default hourly bill rate for this role">' +
+        '<button data-suttrm="' + esc(t) + '" class="danger" title="Remove role"><i data-lucide="x"></i></button>' +
+        '</div>';
+    }).join('');
+
+    var epicRows = allEpics().map(function (ep) {
+      var count = state.items.filter(function (x) { return x.epic === ep; }).length;
+      var ico = RM.iconForEpic(state, ep);
+      return '<div class="su-row" data-key="' + esc(ep) + '">' +
+        '<span class="r-ico">' + (ico ? '<i data-lucide="' + ico + '"></i>' : '<i data-lucide="tag"></i>') + '</span>' +
+        '<span class="su-name">' + esc(ep) + '</span>' +
+        '<span class="band-count">' + count + '</span>' +
+        '<button data-suepedit="' + esc(ep) + '" title="Edit"><i data-lucide="pencil"></i></button>' +
+        '<button data-suepdel="' + esc(ep) + '" class="danger" title="Delete"><i data-lucide="trash-2"></i></button>' +
         '</div>';
     }).join('');
 
@@ -4407,14 +4730,30 @@
           ? '<div class="su-rows" style="margin-top:10px" data-sulist="ws">' + (wsRows || '<div class="m-hint">none yet</div>') + '</div>' +
             '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>'
           : '<div class="m-hint">Workstreams are off — items keep a neutral color and the Scoping column is hidden.</div>') +
+        '</section>' +
+        '<section class="su-card"><h2>Epics</h2>' +
+        '<div class="su-rows">' + (epicRows || '<div class="m-hint">none yet — set an epic on any item to create one</div>') + '</div>' +
         '</section>',
       team:
-        '<section class="su-card"><h2>Team types</h2>' +
+        '<section class="su-card"><h2>Roles &amp; rate card</h2>' +
+        '<div class="su-rc-head"><span></span><span>Cost/h</span><span>Rate/h</span><span></span></div>' +
         '<div class="su-rows" data-sulist="type">' + typeRows + '</div>' +
-        '<div class="p-row" style="margin-top:8px"><input id="suTypeAdd" placeholder="New type, e.g. Data Scientist"><button id="suTypeAddBtn" class="fixed">Add</button></div>' +
+        '<div class="p-row" style="margin-top:8px"><input id="suTypeAdd" placeholder="New role, e.g. Data Scientist"><button id="suTypeAddBtn" class="fixed">Add</button></div>' +
+        '<div class="m-hint">People inherit their role’s hourly cost and bill rate; either can be overridden per person in Budgeting.</div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Work week</h2>' +
+        '<div class="p-grid2">' +
+        '<div><label class="p-lab">Full-time hours per week</label>' +
+        '<input type="number" id="suWeekHours" min="1" max="80" value="' + m.weekHours + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">Working days per week</label>' +
+        '<div class="seg">' + [3, 4, 5].map(function (dd2) {
+          return '<button data-sudays="' + dd2 + '"' + (m.daysPerWeek === dd2 ? ' class="on"' : '') + '>' + dd2 + ' days</button>';
+        }).join('') + '</div></div>' +
+        '</div>' +
+        '<div class="m-hint">Defines what one full-time person means. Days beyond the work week count as non-working time on the grid.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Capacity</h2>' +
-        '<label class="p-check" title="Roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
+        '<label class="p-check" title="Roster limits scheduling and validation; shows the availability row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
         '<div class="m-hint">People and their weekly hours live in the Resources panel under the timeline.</div>' +
         '</section>',
       sizing:
@@ -4496,6 +4835,23 @@
       var wsOn = t.checked;
       commit('workstream feature', function (s2) { s2.meta.workstreamsEnabled = wsOn; });
       toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
+      return;
+    }
+    if (t.id === 'suWeekHours') {
+      var wh2 = Math.max(1, Math.min(80, parseFloat(t.value) || RM.WEEK_HOURS));
+      commit('week hours', function (s2) { s2.meta.weekHours = wh2; });
+      return;
+    }
+    if (t.dataset.rcrate != null || t.dataset.rccost != null) {
+      var rcRole = t.dataset.rcrate != null ? t.dataset.rcrate : t.dataset.rccost;
+      var rcField = t.dataset.rcrate != null ? 'rate' : 'cost';
+      var rcVal = Math.max(0, parseFloat(t.value) || 0);
+      commit('rate card', function (s2) {
+        var card = s2.meta.rateCard[rcRole] || { rate: 0, cost: 0 };
+        card[rcField] = rcVal;
+        if (card.rate || card.cost) s2.meta.rateCard[rcRole] = card;
+        else delete s2.meta.rateCard[rcRole];
+      });
       return;
     }
     if (t.dataset.suszlabel != null) {
@@ -4602,13 +4958,19 @@
       return;
     }
     if (t.dataset.suwsedit) { wsEditModal(t.dataset.suwsedit); return; }
-    if (t.id === 'suPhAdd') { phaseModal(null); return; }
+    if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }
+    if (t.dataset.suepdel) { deleteEpicConfirm(t.dataset.suepdel); return; }
+    if (t.dataset.sudays) {
+      var dpw = parseInt(t.dataset.sudays, 10);
+      commit('work week', function (s2) { s2.meta.daysPerWeek = dpw; });
+      return;
+    }
     if (t.dataset.suphedit) { phaseModal(t.dataset.suphedit); return; }
     if (t.dataset.suphdel) { deletePhaseConfirm(t.dataset.suphdel); return; }
     if (t.id === 'suTypeAddBtn') {
       var tv = $('#suTypeAdd').value.trim();
       if (!tv) return;
-      if (state.teamTypes.indexOf(tv) !== -1) { toast('Type already exists'); return; }
+      if (state.teamTypes.indexOf(tv) !== -1) { toast('Role already exists'); return; }
       commit('add type', function (s2) { s2.teamTypes.push(tv); });
       return;
     }
@@ -4739,8 +5101,8 @@
       '<b>Rows</b> — drag the left pane to reorder / move phase (auto-order can re-sort by start) · right-click for insert/delete · chips cycle on click<br>' +
       '<b>Links</b> — drag a bar’s edge circles onto another row (left = depends ON it, right = dependency FOR it; Esc cancels) · click an arrow, Delete removes · orange = critical path<br>' +
       '<b>Timeline</b> — drag empty space to pan · <span class="kbd">⌘scroll</span> zooms · click a capacity cell to toggle a holiday week; single dates + sprint numbering (e.g. S1 = Sep 7) in Settings<br>' +
-      '<b>Capacity row</b> — ≈ parallel work items (hours ÷ 40) for the selected work type; filter via its dropdown<br>' +
-      '<b>Resources panel</b> — bottom, resizable/collapsible; hours per person per week (default 40) — click a cell to type, drag to fill; drag the grip to reorder people<br>' +
+      '<b>Availability row</b> — people available per week (fractional when hours dip); flags weeks with too much concurrent work<br>' +
+      '<b>Resources panel</b> — bottom, resizable/collapsible; hours per person per week (default = the project full-time week) — click a cell to type, drag to fill; drag the grip to reorder people<br>' +
       '<b>Auto</b> — dependency-ordered, capacity-aware schedule; locked items stay put<br>' +
       '<span class="kbd">⌘Z</span> undo · <span class="kbd">⇧⌘Z</span> redo · <span class="kbd">⌘S</span> save · <span class="kbd">Del</span> delete · <span class="kbd">Esc</span> close' +
       '</div>' +
@@ -4780,10 +5142,10 @@
       var cells = [];
       for (var w = 0; w < meta.numWeeks; w++) {
         var h = RM.memberHoursForWeek(meta, m, w);
-        var cls = h > RM.WEEK_HOURS ? ' rh-over' : '';
-        // 0h → 40h ramps toward blue from the theme's ground: white in light
-        // (dark label), surface in dark (light label) — see --cell-ink
-        var t2 = Math.max(0, Math.min(1, h / RM.WEEK_HOURS));
+        var cls = h > RM.weekHoursOf(meta) ? ' rh-over' : '';
+        // 0h → full-week ramps toward blue from the theme's ground: white in
+        // light (dark label), surface in dark (light label) — see --cell-ink
+        var t2 = Math.max(0, Math.min(1, h / RM.weekHoursOf(meta)));
         var bg = '#' + (darkActive() ? mixHex('242C35', '31597F', t2) : RM.tint('7FAEDD', 1 - t2));
         cells.push('<div class="rh' + cls + '" data-w="' + w + '" style="left:' + (w * weekPx) +
           'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(m.name + ' — week of ' +
@@ -4795,12 +5157,12 @@
         '<div class="rleft">' +
         '<span class="r-grip rr-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="res-name" data-rname="' + m.id + '" title="Role — click to rename">' + esc(m.name) + '</span>' +
-        '<button class="res-type" data-rtype="' + m.id + '" title="Work type">' + esc(m.type) + '</button>' +
+        '<button class="res-type" data-rtype="' + m.id + '" title="Role">' + esc(m.type) + '</button>' +
         '<button class="res-type res-wschip" data-rws="' + m.id + '" title="Workstream (optional)">' +
         (m.workstream ? esc(shorten(m.workstream, 12)) : '—') + '</button>' +
         (state.meta.capacityEnabled
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
-            '" title="Capacity at 40 h — click to edit">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
+            '" title="Capacity at full-time hours — click to edit">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
           : '') +
         '</div>' +
         '<div class="rlane" style="width:' + laneW + 'px">' + cells.join('') + '</div>' +
@@ -5121,6 +5483,7 @@
     var rrow = e.target.closest('.rrow[data-mid]');
     if (!rrow || e.target.closest('input')) return;
     e.preventDefault();
+    e.stopPropagation(); // the document fallback must not replace this menu
     var mid = rrow.dataset.mid;
     var m = null;
     state.team.forEach(function (x) { if (x.id === mid) m = x; });
@@ -5131,7 +5494,7 @@
         var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rname]');
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } },
-      { icon: 'tags', label: 'Work type…', fn: function () {
+      { icon: 'tags', label: 'Role…', fn: function () {
         openContextMenu(cx, cy, state.teamTypes.map(function (t) {
           return { label: esc(t), checked: m.type === t, fn: function () {
             commit('member type', function (s) {

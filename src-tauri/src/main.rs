@@ -12,7 +12,7 @@ mod traffic {
 
     // keep in sync with trafficLightPosition in tauri.macos.conf.json
     const X: f64 = 16.0;
-    const Y: f64 = 26.0;
+    const Y: f64 = 24.0;
 
     pub fn apply(ns_window: *mut std::ffi::c_void) {
         unsafe {

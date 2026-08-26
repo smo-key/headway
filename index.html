@@ -33,15 +33,17 @@
     <button class="menu-btn" data-menu="view">View</button>
   </nav>
 
-  <div class="view-tabs" id="viewTabs">
-    <button data-view="setup" title="Project setup — timeline, workstreams, phases, sprints, types, holidays, sizing"><i data-lucide="settings-2"></i>Setup</button>
-    <button data-view="scoping" title="Spreadsheet of descriptions and scope"><i data-lucide="table-properties"></i>Scoping</button>
-    <button data-view="planning" title="Timeline / gantt"><i data-lucide="chart-gantt"></i>Planning</button>
-    <button data-view="budget" title="Resources — rates, costs and timelines"><i data-lucide="wallet"></i>Budgeting</button>
+  <div class="tabs-center">
+    <div class="view-tabs" id="viewTabs">
+      <button data-view="scoping" title="Spreadsheet of descriptions and scope"><i data-lucide="table-properties"></i>Scoping</button>
+      <button data-view="planning" title="Timeline / gantt"><i data-lucide="chart-gantt"></i>Planning</button>
+      <button data-view="budget" title="Resources — rates, costs and timelines"><i data-lucide="wallet"></i>Budgeting</button>
+      <button data-view="reports" title="Project reporting dashboard"><i data-lucide="chart-pie"></i>Reports</button>
+    </div>
+    <button id="btnSetup" data-view="setup" title="Project setup — timeline, phases, workstreams, roles, sizing"><i data-lucide="settings-2"></i></button>
   </div>
 
   <div class="tb-right">
-    <button id="btnPresent" title="Expand — timeline-only preview"><i data-lucide="maximize-2"></i></button>
     <button id="btnExport" title="Export the timeline (or a filtered slice) as a PNG"><i data-lucide="image"></i>Export</button>
     <button id="btnSave" class="primary" title="Save as .xlsx (styled, re-loadable)"><i data-lucide="download"></i>Save</button>
     <button id="btnValidation" class="chip" title="Preflight — validation report" hidden><span id="valDot"></span><span id="valCount">0</span></button>
@@ -51,13 +53,14 @@
 <div id="main">
 <div id="centerCol">
   <div id="setupView"></div>
+  <div id="reportsView"></div>
     <div id="board">
     <div id="grid">
       <div id="bgcols"></div>
       <div id="hdr">
         <div class="hdr-line hdr-phases"><div class="hdr-left" id="filterCell"><input id="rowFilter" type="search" placeholder="Filter rows… (⌘F)" aria-label="Filter rows"></div><div class="hdr-lane" id="hdrPhases"></div></div>
         <div class="hdr-line hdr-sprints"><div class="hdr-left corner">
-          <span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Role</span><span class="hl-cols"><i class="pl-only sz-lab" style="width:34px">size</i><i class="pl-only" style="width:34px">dur</i><i class="pl-only hc-lab" style="width:30px">hc</i><i class="pl-only" style="width:22px"></i><i class="bu-only" style="width:96px">Type</i><i class="bu-only" style="width:108px">Workstream</i><i class="bu-only" style="width:76px">Cost</i><i class="bu-only" style="width:76px">Rate</i><i class="bu-only" style="width:54px">Margin</i><i class="bu-only" style="width:80px">Total</i></span><span id="leftRz" title="Drag to resize the left pane"></span>
+          <span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Person</span><span class="hl-cols"><i class="pl-only sz-lab" style="width:34px">size</i><i class="pl-only" style="width:34px">dur</i><i class="pl-only" style="width:22px"></i><i class="bu-only" style="width:96px">Role</i><i class="bu-only" style="width:108px">Workstream</i><i class="bu-only" style="width:76px">Cost</i><i class="bu-only" style="width:76px">Rate</i><i class="bu-only" style="width:54px">Margin</i><i class="bu-only" style="width:80px">Total</i></span><span id="leftRz" title="Drag to resize the left pane"></span>
         </div><div class="hdr-lane" id="hdrSprints"></div></div>
         <div class="hdr-line hdr-cap"><div class="hdr-left" id="capTypeCell"></div><div class="hdr-lane" id="hdrCap"></div></div>
       </div>
@@ -70,14 +73,6 @@
     </div>
   </div>
 
-  <div id="repPanel" class="collapsed">
-    <div id="repHead">
-      <span class="band-chev" id="repChev" title="Collapse / expand">▶</span>
-      <span class="rp-title">Reports</span>
-      <span id="repModeCell"></span>
-    </div>
-    <div id="repBody"></div>
-  </div>
   <div id="resPanel">
     <div id="resResize" title="Drag to resize"></div>
     <div id="resHead">
@@ -89,6 +84,11 @@
     <div id="resBody"><div id="resGrid"></div></div>
   </div>
   <div id="leftRzLine" title="Drag to resize the left pane"></div>
+  <div id="zoomCtl" hidden>
+    <button id="zoomInBtn" title="Zoom in"><i data-lucide="plus"></i></button>
+    <button id="zoomOutBtn" title="Zoom out"><i data-lucide="minus"></i></button>
+    <button id="btnPresent" title="Expand — timeline-only preview"><i data-lucide="maximize-2"></i></button>
+  </div>
 </div>
 
   <aside id="panel" hidden></aside>

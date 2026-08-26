@@ -122,15 +122,16 @@ var sV = mkState([
   { num: 2, feature: 'early bird', deps: [1], startDay: 5, durDays: 5, size: 'M' },
   { num: 3, feature: 'no size', startDay: 0, durDays: 5 },
   { num: 4, feature: 'ghost dep', deps: [42], startDay: 20, durDays: 5, size: 'M' },
-  { num: 5, feature: 'big ask', startDay: 0, durDays: 5, size: 'M', headcount: 4, teamType: 'Data' }
+  { num: 5, feature: 'big ask', startDay: 0, durDays: 25, size: 'XL', teamType: 'Data' }
 ], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Data' }] });
 var v = RM.validate(sV);
 function codes(state, i) { return (v.byItem[state.items[i].id] || []).map(function (x) { return x.code; }); }
 ok(codes(sV, 1).indexOf('DEP_ORDER') !== -1, 'DEP_ORDER: starts before dep ends');
 ok(codes(sV, 2).indexOf('NO_SIZE') !== -1, 'NO_SIZE flagged');
 ok(codes(sV, 3).indexOf('UNKNOWN_DEP') !== -1, 'UNKNOWN_DEP flagged');
-ok(codes(sV, 4).indexOf('HC_TYPE') !== -1, 'HC_TYPE: 4 Data needed, 1 on roster');
-ok(v.global.some(function (g) { return g.code === 'OVER_CAP'; }), 'OVER_CAP: weekly demand over roster');
+ok(v.global.some(function (g) { return g.code === 'OVER_CAP' && /Data/.test(g.msg); }),
+  'role-level WIP overload flagged (a 2-focus item vs 1 Data person)');
+ok(v.global.some(function (g) { return g.code === 'OVER_CAP'; }), 'OVER_CAP: weekly WIP over what the team can focus on');
 ok(v.counts.warn > 0, 'counts aggregated');
 
 var vClean = RM.validate(mkState([{ num: 1, feature: 'solo', startDay: 0, durDays: 5, size: 'M' }]));
@@ -147,15 +148,21 @@ ok(!(vd.byItem[sDone.items[1].id] || []).some(function (x) { return x.code === '
 
 // ------------------------------------------------------------- capacity
 section('capacity');
+// WIP model: an active item costs focus by its working days / 10 (M = 1,
+// clamped 0.3..2) — 'demand' is size-weighted concurrent work, 'cap' the
+// fractional people available
 var sCap = mkState([
-  { num: 1, feature: 'a', startDay: 0, durDays: 10, size: 'L', headcount: 2 },
-  { num: 2, feature: 'b', startDay: 5, durDays: 5, size: 'M' }
+  { num: 1, feature: 'big', startDay: 0, durDays: 20, size: 'XL' },   // weight 2
+  { num: 2, feature: 'mid', startDay: 5, durDays: 10, size: 'M' }     // weight 1
 ], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Development' }] });
 var cap = RM.capacity(sCap);
-eq(cap.weeks[0].demand, 2, 'week 0 demand = 2');
-eq(cap.weeks[1].demand, 3, 'week 1 demand = 3 (overlap)');
-ok(cap.weeks[1].over, 'week 1 over a 2-person roster');
+eq(cap.weeks[0].demand, 2, 'week 0 WIP = 2 focus units (one XL)');
+eq(cap.weeks[1].demand, 3, 'week 1 WIP = 3 (overlap)');
+eq(cap.weeks[0].cap, 2, 'availability = fractional people on the roster');
+ok(cap.weeks[1].over, 'week 1: more WIP than the 2-person team can focus on');
 ok(!cap.weeks[0].over, 'week 0 fits');
+eq(RM.wipWeight(sCap, { size: 'XS' }), 0.3, 'tiny items still register (clamped floor)');
+eq(RM.wipWeight(sCap, { size: 'XL' }), 2, 'XL clamps at 2 focus units');
 
 // ------------------------------------------------------------- auto-schedule
 section('autoSchedule');
@@ -277,10 +284,10 @@ ok(sHol.meta.holidays.indexOf('2026-08-05') === -1, 'removing a range removes it
 var sSelf = mkState([{ num: 1, feature: 'ouroboros', deps: [1] }]);
 ok((RM.validate(sSelf).byItem[sSelf.items[0].id] || []).some(function (x) { return x.code === 'SELF_DEP'; }),
   'self-dependency produces SELF_DEP warning');
-// snapEarliest: infeasible item stays put with a note
+// snapEarliest: infeasible item (more focus than the roster has) stays put
 var sInf = mkState([
-  { num: 1, feature: 'crowd', startDay: 10, durDays: 5, size: 'M', headcount: 3 }
-], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Development' }] });
+  { num: 1, feature: 'crowd', startDay: 10, durDays: 15, size: 'L' }
+], { team: [{ name: 'X', type: 'Development', capacity: 0.5 }] });
 var rInf = RM.snapEarliest(sInf, sInf.items[0].id);
 eq(rInf.changed, 0, 'infeasible snap changes nothing');
 eq(RM.itemByNum(rInf.state, 1).startDay, 10, 'infeasible snap keeps the old start');
@@ -299,23 +306,23 @@ eq(late.startDay, 240, 'feasible overflow schedules right after the packed horiz
 ok(rPack.state.meta.numWeeks >= 49, 'timeline extended to fit (' + rPack.state.meta.numWeeks + 'w)');
 // autoSchedule: infeasible item gets a note and no endless walk
 var sInf2 = mkState([
-  { num: 1, feature: 'crowd', size: 'M', headcount: 9 }
-], { team: [{ name: 'X', type: 'Development' }] });
+  { num: 1, feature: 'crowd', size: 'XL' }
+], { team: [{ name: 'X', type: 'Development', capacity: 0.5 }] });
 var rInf2 = RM.autoSchedule(sInf2);
 ok(rInf2.notes.some(function (nn) { return nn.indexOf('left unscheduled') !== -1; }),
   'autoSchedule notes the infeasible item');
 eq(RM.itemByNum(rInf2.state, 1).startDay, null, 'infeasible item is left unscheduled, never overallocated');
 
-// hours-aware: a part-time roster (20h = 0.5 people) can't absorb a full head
+// hours-aware: a part-time roster (20h = 0.5 people) can't absorb an M's focus
 var sInf3 = mkState([
-  { num: 1, feature: 'full-time ask', size: 'S', headcount: 1 }
+  { num: 1, feature: 'full-time ask', size: 'M' }
 ], { team: [{ name: 'Half', type: 'Development', weekHours: (function () {
   var wh = {};
   for (var w = 0; w < 60; w++) wh[RM.fmtISO(RM.weekStartDate(META, w))] = 20;
   return wh;
 })() }] });
 var rInf3 = RM.autoSchedule(sInf3);
-eq(RM.itemByNum(rInf3.state, 1).startDay, null, 'part-time-only roster leaves a full-head item unscheduled');
+eq(RM.itemByNum(rInf3.state, 1).startDay, null, 'part-time-only roster leaves a full-focus item unscheduled');
 ok(rInf3.notes.length > 0, 'shortfall is noted');
 
 // a sufficient roster schedules without tripping the over-capacity check
@@ -356,8 +363,15 @@ var sBud = mkState([
   { name: 'Dev', type: 'Development', workstream: 'WS1', rate: 200, cost: 100 },
   { name: 'Analyst', type: 'Data', workstream: 'WS2', rate: 150, cost: 50 }
 ] });
-eq(RM.roleMargin(sBud.team[0]), 50, 'margin 50% at rate 200 / cost 100');
-ok(RM.roleMargin({ rate: 0, cost: 10 }) === null, 'no rate → no margin');
+eq(RM.roleMargin(sBud, sBud.team[0]), 50, 'margin 50% at rate 200 / cost 100');
+ok(RM.roleMargin(sBud, { rate: 0, cost: 10, type: 'Nope' }) === null, 'no rate → no margin');
+// rate card: a person with no override inherits their role's numbers
+sBud.meta.rateCard = { Design: { rate: 180, cost: 90 } };
+var rcM = { name: 'D', type: 'Design', rate: 0, cost: 0 };
+eq(RM.memberRate(sBud, rcM), 180, 'rate card supplies the role rate');
+eq(RM.memberCost(sBud, rcM), 90, 'rate card supplies the role cost');
+eq(RM.memberRate(sBud, { type: 'Design', rate: 250, cost: 0 }), 250, 'a personal override beats the card');
+eq(RM.roleMargin(sBud, rcM), 50, 'margin computes from effective card numbers');
 // actual hours clip each week to its workable (non-holiday) days
 var expT = 0;
 for (var wq = 0; wq < sBud.meta.numWeeks; wq++) expT += Math.min(40, (5 - RM.holidaysInWeek(sBud.meta, wq)) * 8);
@@ -369,7 +383,7 @@ sBud.team[0].weekHours['2026-07-27'] = 0;
 eq(RM.roleTotalHours(sBud, sBud.team[0]), expT - w0Act, 'week-hour override subtracts');
 eq(RM.avgCostRate(sBud, 'Data'), 50, 'avg cost rate by team type');
 var inf1 = RM.itemEffortInfo(sBud, sBud.items[0]);
-eq(inf1.hours, 10 * 8 * 2, 'scheduled effort hours = days × 8 × headcount');
+eq(inf1.hours, 10 * 8, 'scheduled effort hours = days × hours-per-day');
 eq(inf1.cost, inf1.hours * 100, 'item cost priced at the type cost rate');
 var repWs = RM.costReport(sBud, 'workstream');
 eq(repWs.rows.length, 2, 'workstream report covers both groups');
@@ -433,7 +447,7 @@ ok((vRk.byItem[sRk2.items[1].id] || []).some(function (v) { return v.code === 'D
 // ------------------------------------------------------------- resources / time off
 section('time off');
 var sOff = mkState([
-  { num: 1, feature: 'pair work', startDay: 0, durDays: 5, headcount: 2, size: 'S' }
+  { num: 1, feature: 'chunky work', startDay: 0, durDays: 15 }
 ], {
   team: [
     { id: 'm1', name: 'Ada', type: 'Development', offWeeks: ['2026-07-27'] },
@@ -442,7 +456,7 @@ var sOff = mkState([
 });
 var capOff = RM.capacity(sOff);
 eq(capOff.weeks[0].cap, 1, 'off member lowers week 0 capacity');
-ok(capOff.weeks[0].over, 'hc 2 vs 1 available is over');
+ok(capOff.weeks[0].over, '1.5 focus units vs 1 person available is over');
 eq(capOff.weeks[1].cap, 2, 'week 1 back to full roster');
 var snapOff = RM.snapEarliest(sOff, sOff.items[0].id);
 eq(snapOff.state.items[0].startDay, 5, 'snap skips the short-handed week');
@@ -450,7 +464,7 @@ eq(snapOff.state.items[0].startDay, 5, 'snap skips the short-handed week');
 // ------------------------------------------------------------- hours model
 section('hours');
 var sHr = mkState([
-  { num: 1, feature: 'w', startDay: 0, durDays: 5, headcount: 1, teamType: 'Development', size: 'S' }
+  { num: 1, feature: 'w', startDay: 0, durDays: 10, teamType: 'Development' }
 ], {
   team: [
     { id: 'h1', name: 'Ada', type: 'Development', weekHours: { '2026-07-27': 20 } },
@@ -461,7 +475,7 @@ eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 0), 20, 'explicit week hours rea
 eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 1), 40, 'unlisted weeks default to 40');
 eq(RM.availForWeek(sHr, 0).byType['Development'], 0.5, '20h = 0.5 parallel Development items');
 eq(RM.availForWeek(sHr, 0).total, 1.5, 'total people-equivalents');
-ok(RM.capacity(sHr).weeks[0].over, '1 Development item vs 0.5 capacity is over');
+ok(RM.capacity(sHr).weeks[0].over, 'a 1-focus Development item vs 0.5 available is over');
 // legacy offWeeks migrate to zero-hour weeks
 var sOffMig = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p' }], items: [],
@@ -563,9 +577,37 @@ eq(depWarns.indexOf('DEP_ORDER'), -1, 'dependent may start on the milestone day'
 var msAuto = RM.autoSchedule(sMs);
 eq(RM.itemById(msAuto.state, sMs.items[1].id).startDay, 10, 'auto-schedule leaves milestones fixed');
 var msCap = RM.capacity(sMs);
-eq(msCap.weeks[2].demand, 1, 'milestone consumes no capacity');
+eq(msCap.weeks[2].demand, 0.5, 'milestone consumes no capacity (only the 5-day item registers)');
 var sMsStory = mkState([{ num: 1, feature: 'a', stories: [{ title: 's', custom: { c1: 'v' } }] }]);
 eq(sMsStory.items[0].stories[0].custom.c1, 'v', 'story custom fields survive normalize');
+
+// ------------------------------------------------------------- work week & costs
+section('work week & costs');
+var sWw = mkState([{ num: 1, feature: 'x' }]);
+sWw.meta.daysPerWeek = 4;
+sWw.meta.weekHours = 32;
+eq(RM.workInSpan(sWw.meta, 0, 5), 4, 'a 4-day week holds 4 working days per index week');
+eq(RM.stretchSpan(sWw.meta, 0, 5), 6, '5 work days stretch across the off slot');
+eq(RM.hoursPerDay(sWw.meta), 8, '32 h over 4 days = 8 h/day');
+eq(RM.memberHoursForWeek(sWw.meta, {}, 0), 32, 'default member week = the project full-time week');
+sWw.team = [{ id: 't1', name: 'A', type: 'Development', capacity: 1, weekHours: {} }];
+eq(RM.availForWeek(sWw, 0).total, 1, '32 h at a 32 h full-time week = 1 person');
+var sWw5 = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, weekHours: 32, daysPerWeek: 4 }, phases: [{ id: 'p' }], items: [] });
+eq(sWw5.meta.weekHours, 32, 'weekHours survives normalize');
+eq(sWw5.meta.daysPerWeek, 4, 'daysPerWeek survives normalize');
+
+var sCst = mkState([{ num: 1, feature: 'x' }]);
+sCst.costs = [
+  { id: 'c1', name: 'License', amount: 1000, kind: 'fixed', startDay: 10 },
+  { id: 'c2', name: 'Cloud', amount: 50, kind: 'weekly', startDay: 0, endDay: 20 },
+  { id: 'c3', name: 'Rent', amount: 300, kind: 'monthly', startDay: 0, endDay: null }
+];
+sCst = RM.normalizeState(sCst);
+eq(RM.costOccurrences(sCst, sCst.costs[0]).length, 1, 'fixed cost hits once');
+eq(RM.costOccurrences(sCst, sCst.costs[1]).length, 5, 'weekly cost repeats to its end day');
+eq(RM.costTotal(sCst, sCst.costs[1]), 250, 'weekly total sums occurrences');
+ok(RM.costOccurrences(sCst, sCst.costs[2]).length >= 3, 'monthly cost repeats to the timeline end');
+eq(RM.costsTotal(sCst), 1000 + 250 + RM.costTotal(sCst, sCst.costs[2]), 'grand total sums all costs');
 
 // ------------------------------------------------------------- dependency risk
 section('depRisk');

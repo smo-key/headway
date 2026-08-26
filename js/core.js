@@ -240,9 +240,27 @@
   RM.fmtShort = function (dt) { return MONTHS[dt.getUTCMonth()] + ' ' + dt.getUTCDate(); };
   RM.fmtShortYear = function (dt) { return MONTHS[dt.getUTCMonth()] + ' ' + dt.getUTCDate() + ' ’' + String(dt.getUTCFullYear()).slice(2); };
 
+  // ---- work week: how many of the 5 index slots are working days, and what
+  // a full-time week means in hours. Short weeks (e.g. 4-day) keep the 5-slot
+  // index space — the trailing slot(s) simply count as non-working days.
+  RM.daysPerWeekOf = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    var d = m && m.daysPerWeek;
+    return isFinite(+d) && +d >= 1 && +d <= 5 ? Math.round(+d) : 5;
+  };
+  RM.weekHoursOf = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    var h = m && m.weekHours;
+    return isFinite(+h) && +h > 0 ? +h : RM.WEEK_HOURS;
+  };
+  RM.hoursPerDay = function (metaOrState) {
+    return RM.weekHoursOf(metaOrState) / RM.daysPerWeekOf(metaOrState);
+  };
+
   // Holidays are INDIVIDUAL dates (meta.holidays, ISO strings). This builds a
   // { workingDayIndex: true } lookup; weekend-dated holidays are ignored since
-  // weekends don't exist in the index space.
+  // weekends don't exist in the index space. Slots beyond meta.daysPerWeek
+  // (a 4-day week's Fridays, say) read as non-working via offDay().
   RM.holidayDaySet = function (meta) {
     var set = {};
     (meta.holidays || []).forEach(function (iso) {
@@ -256,22 +274,29 @@
     return set;
   };
 
-  RM.isHolidayDay = function (meta, day, set) {
+  // A non-working day slot: an explicit holiday OR past the work week's end.
+  RM.offDay = function (meta, day, set) {
+    if ((day % 5) >= RM.daysPerWeekOf(meta)) return true;
     return (set || RM.holidayDaySet(meta))[day] === true;
   };
 
-  // A week is "blacked out" only when ALL FIVE of its working days are
-  // holidays — those weeks are excluded from capacity math entirely.
+  RM.isHolidayDay = function (meta, day, set) {
+    return RM.offDay(meta, day, set);
+  };
+
+  // A week is "blacked out" only when ALL its working days are holidays —
+  // those weeks are excluded from capacity math entirely.
   RM.isBlackoutWeek = function (meta, week, set) {
     set = set || RM.holidayDaySet(meta);
-    for (var i = 0; i < 5; i++) if (!set[week * 5 + i]) return false;
+    for (var i = 0; i < RM.daysPerWeekOf(meta); i++) if (!set[week * 5 + i]) return false;
     return true;
   };
 
+  // Non-working day slots in a week (explicit holidays + short-week slots).
   RM.holidaysInWeek = function (meta, week, set) {
     set = set || RM.holidayDaySet(meta);
     var n = 0;
-    for (var i = 0; i < 5; i++) if (set[week * 5 + i]) n += 1;
+    for (var i = 0; i < 5; i++) if (RM.offDay(meta, week * 5 + i, set)) n += 1;
     return n;
   };
 
@@ -359,7 +384,7 @@
     var d = startDay;
     var guard = 0;
     while (remaining > 0 && guard < 20000) {
-      if (!set[d]) remaining -= 1;
+      if (!RM.offDay(meta, d, set)) remaining -= 1;
       d += 1;
       guard += 1;
     }
@@ -371,7 +396,7 @@
     var set = RM.holidayDaySet(meta);
     var n = 0;
     for (var d = startDay; d < startDay + span; d++) {
-      if (!set[d]) n += 1;
+      if (!RM.offDay(meta, d, set)) n += 1;
     }
     return n;
   };
@@ -544,6 +569,19 @@
     });
     // workstream feature switch — ON unless the project turned it off
     m.workstreamsEnabled = m.workstreamsEnabled !== false;
+    // work week: full-time hours + working days per week
+    m.weekHours = isFinite(+m.weekHours) && +m.weekHours > 0 ? Math.min(80, +m.weekHours) : RM.WEEK_HOURS;
+    m.daysPerWeek = isFinite(+m.daysPerWeek) && +m.daysPerWeek >= 1 && +m.daysPerWeek <= 5
+      ? Math.round(+m.daysPerWeek) : 5;
+    // rate card: role -> default hourly { rate, cost }
+    var rcIn = m.rateCard && typeof m.rateCard === 'object' ? m.rateCard : {};
+    m.rateCard = {};
+    Object.keys(rcIn).forEach(function (k) {
+      var v = rcIn[k] || {};
+      var rr = isFinite(+v.rate) && +v.rate > 0 ? +v.rate : 0;
+      var cc = isFinite(+v.cost) && +v.cost > 0 ? +v.cost : 0;
+      if (rr || cc) m.rateCard[k] = { rate: rr, cost: cc };
+    });
     delete m.sprintDates;
 
     state.phases = (state.phases || []).map(function (p) {
@@ -687,6 +725,22 @@
     wsRefList.forEach(function (w) { if (wsOrder.indexOf(w) === -1) wsOrder.push(w); });
     state.wsOrder = wsOrder;
     state.teamTypes = state.teamTypes && state.teamTypes.length ? state.teamTypes : RM.clone(RM.DEFAULT_TEAM_TYPES);
+    // fixed & recurring costs (budgeting)
+    state.costs = (state.costs || []).map(function (c) {
+      if (!c || typeof c !== 'object') return null;
+      var kind = ['fixed', 'weekly', 'monthly'].indexOf(c.kind) !== -1 ? c.kind : 'fixed';
+      var sd = isFinite(+c.startDay) && +c.startDay >= 0 ? Math.round(+c.startDay) : 0;
+      var ed = kind !== 'fixed' && c.endDay != null && isFinite(+c.endDay) && +c.endDay >= sd
+        ? Math.round(+c.endDay) : null;
+      return {
+        id: c.id || RM.uid('cost'),
+        name: typeof c.name === 'string' && c.name ? c.name : 'Cost',
+        amount: isFinite(+c.amount) && +c.amount >= 0 ? +c.amount : 0,
+        kind: kind,
+        startDay: sd,
+        endDay: ed
+      };
+    }).filter(Boolean);
     state.team = (state.team || []).map(function (mbr) {
       // weekHours: { isoMonday: hours } — default 40 for any week not listed.
       // Legacy offWeeks (whole weeks off) migrate to 0-hour entries.
@@ -897,10 +951,10 @@
   // ------------------------------------------------------------ capacity
   // A member's hours for a given week index (default 40; keyed by ISO Monday).
   RM.memberHoursForWeek = function (meta, member, week) {
-    if (!member.weekHours) return RM.WEEK_HOURS;
+    if (!member.weekHours) return RM.weekHoursOf(meta);
     var iso = RM.fmtISO(RM.weekStartDate(meta, week));
     var h = member.weekHours[iso];
-    return h != null && isFinite(h) ? h : RM.WEEK_HOURS;
+    return h != null && isFinite(h) ? h : RM.weekHoursOf(meta);
   };
 
   // Back-compat: "off" = a zero-hour week.
@@ -908,12 +962,13 @@
     return RM.memberHoursForWeek(meta, member, week) === 0;
   };
 
-  // Roster availability for one week, in PEOPLE-EQUIVALENTS (hours / 40):
-  // the approximate number of parallel work items the roster can absorb.
+  // Roster availability for one week, in PEOPLE-EQUIVALENTS (hours ÷ the
+  // project's full-time week): the fractional headcount actually available.
   RM.availForWeek = function (state, week) {
     var total = 0, byType = {};
+    var full = RM.weekHoursOf(state.meta);
     state.team.forEach(function (m) {
-      var pe = (RM.memberHoursForWeek(state.meta, m, week) / RM.WEEK_HOURS) * (m.capacity != null ? m.capacity : 1);
+      var pe = (RM.memberHoursForWeek(state.meta, m, week) / full) * (m.capacity != null ? m.capacity : 1);
       if (pe <= 0) return;
       total += pe;
       byType[m.type] = (byType[m.type] || 0) + pe;
@@ -921,8 +976,23 @@
     return { total: total, byType: byType };
   };
 
-  // Weekly demand vs roster capacity. Blackout weeks carry no demand and no
-  // check; member off-weeks lower that week's capacity.
+  // How much team focus one active item consumes, in "focus units".
+  // Grounded in Kanban WIP-limit practice (and Little's Law): a team's
+  // throughput collapses when concurrent work outgrows the people available,
+  // and BIG items eat disproportionate focus — most teams can only run a
+  // couple of large initiatives at once. An M (2 working weeks) counts as 1
+  // unit; weight scales with the item's working days ÷ 10, clamped to
+  // [0.3, 2] so a swarm of XS chores still registers and an XL can't demand
+  // more than two people-equivalents of attention.
+  RM.wipWeight = function (state, it) {
+    var days = it.startDay != null && it.durDays != null
+      ? RM.workInSpan(state.meta, it.startDay, it.durDays)
+      : (RM.sizeDays(state, it.size) || it.durDays || 5);
+    return Math.max(0.3, Math.min(2, days / 10));
+  };
+
+  // Weekly size-weighted WIP vs the people available. Blackout weeks carry
+  // no demand and no check; member off-weeks lower that week's availability.
   RM.capacity = function (state) {
     var meta = state.meta;
     var weeks = [];
@@ -942,15 +1012,16 @@
     }
     state.items.forEach(function (it) {
       if (it.startDay == null || it.durDays == null || it.done || it.milestone) return;
+      var wt = RM.wipWeight(state, it);
       var w0 = Math.floor(it.startDay / 5);
       var w1 = Math.floor((it.startDay + it.durDays - 1) / 5);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
         var cell = weeks[wk];
         if (cell.blackout) continue;
-        cell.demand += it.headcount;
+        cell.demand += wt;
         cell.items.push(it.id);
         if (it.teamType) {
-          cell.demandByType[it.teamType] = (cell.demandByType[it.teamType] || 0) + it.headcount;
+          cell.demandByType[it.teamType] = (cell.demandByType[it.teamType] || 0) + wt;
         }
       }
     });
@@ -1140,28 +1211,19 @@
         add(it, 'info', 'UNSCHEDULED', 'In an active phase but not on the timeline');
       }
 
-      if (state.meta.capacityEnabled && state.team.length > 0) {
-        if (it.teamType) {
-          var avail = state.team.filter(function (m) { return m.type === it.teamType; }).length;
-          if (it.headcount > avail) {
-            add(it, 'warn', 'HC_TYPE', 'Needs ' + it.headcount + ' × ' + it.teamType + ' but roster has ' + avail);
-          }
-        } else if (it.headcount > state.team.length) {
-          add(it, 'warn', 'HC_TOTAL', 'Headcount ' + it.headcount + ' exceeds roster of ' + state.team.length);
-        }
-      }
     });
 
     var cap = RM.capacity(state);
     cap.weeks.forEach(function (cell, w) {
       if (!state.meta.capacityEnabled || !cell.over) return;
       var d = RM.weekStartDate(state.meta, w);
+      function r1(x) { return Math.round(x * 10) / 10; }
       var what = cell.overTypes.length
-        ? cell.overTypes.map(function (t) { return t + ' ' + cell.demandByType[t] + '/' + (cap.typeCounts[t] || 0); }).join(', ')
-        : cell.demand + ' needed / ' + cell.cap + ' on roster';
+        ? cell.overTypes.map(function (t) { return t + ' ' + r1(cell.demandByType[t]) + ' vs ' + r1(cell.capByType[t] || 0); }).join(', ')
+        : r1(cell.demand) + ' focus units vs ' + r1(cell.cap) + ' people available';
       global.push({
         level: 'warn', code: 'OVER_CAP', week: w,
-        msg: 'Week of ' + RM.fmtShort(d) + ' over capacity (' + what + ')',
+        msg: 'Week of ' + RM.fmtShort(d) + ' looks like too much concurrent work (' + what + ')',
         items: cell.items
       });
     });
@@ -1208,17 +1270,18 @@
     for (var w = 0; w < HORIZON_WEEKS; w++) ledgerTotal[w] = 0;
 
     function occupy(it, startDay, durDays) {
+      var wWt = RM.wipWeight(state, it);
       var w0 = Math.floor(startDay / 5);
       var w1 = Math.floor((startDay + durDays - 1) / 5);
       for (var wk = w0; wk <= w1 && wk < HORIZON_WEEKS; wk++) {
         if (RM.isBlackoutWeek(meta, wk)) continue;
-        ledgerTotal[wk] += it.headcount;
+        ledgerTotal[wk] += wWt;
         if (it.teamType) {
           if (!ledgerType[it.teamType]) {
             ledgerType[it.teamType] = new Array(HORIZON_WEEKS);
             for (var z = 0; z < HORIZON_WEEKS; z++) ledgerType[it.teamType][z] = 0;
           }
-          ledgerType[it.teamType][wk] += it.headcount;
+          ledgerType[it.teamType][wk] += wWt;
         }
       }
     }
@@ -1226,17 +1289,18 @@
 
     function fits(it, startDay, durDays) {
       if (teamTotal === 0) return true; // no roster -> no capacity constraint
+      var wWt = RM.wipWeight(state, it);
       var w0 = Math.floor(startDay / 5);
       var w1 = Math.floor((startDay + durDays - 1) / 5);
       for (var wk = w0; wk <= w1; wk++) {
         if (wk >= HORIZON_WEEKS) return true;
         if (RM.isBlackoutWeek(meta, wk)) continue;
         var avail = RM.availForWeek(state, wk);
-        if (ledgerTotal[wk] + it.headcount > avail.total + 1e-9) return false;
+        if (ledgerTotal[wk] + wWt > avail.total + 1e-9) return false;
         if (it.teamType) {
           var typeCap = avail.byType[it.teamType] || 0;
           var used = ledgerType[it.teamType] ? ledgerType[it.teamType][wk] : 0;
-          if (used + it.headcount > typeCap + 1e-9) return false;
+          if (used + wWt > typeCap + 1e-9) return false;
         }
       }
       return true;
@@ -1276,10 +1340,10 @@
     var changed = 0;
     var maxDay = 0;
 
-    // An item that can NEVER fit the roster — headcount above the PEAK weekly
-    // availability (hours-based people-equivalents, total or for its type) —
-    // must not trigger an endless capacity walk. Peaks are hours-aware, so a
-    // roster of part-time roles counts fractionally.
+    // An item that can NEVER fit the roster — WIP weight above the PEAK
+    // weekly availability (hours-based people-equivalents, total or for its
+    // type) — must not trigger an endless capacity walk. Peaks are
+    // hours-aware, so a roster of part-time roles counts fractionally.
     var peakTotal = 0, peakType = {};
     if (teamTotal > 0) {
       for (var pw = 0; pw < HORIZON_WEEKS; pw++) {
@@ -1293,8 +1357,9 @@
     }
     function infeasible(it) {
       if (teamTotal === 0) return false;
-      if (it.headcount > peakTotal + 1e-9) return true;
-      if (it.teamType && it.headcount > (peakType[it.teamType] || 0) + 1e-9) return true;
+      var wWt = RM.wipWeight(state, it);
+      if (wWt > peakTotal + 1e-9) return true;
+      if (it.teamType && wWt > (peakType[it.teamType] || 0) + 1e-9) return true;
       return false;
     }
 
@@ -1397,11 +1462,12 @@
     var typeCounts = {};
     state.team.forEach(function (m) { typeCounts[m.type] = (typeCounts[m.type] || 0) + 1; });
 
-    if (teamTotal > 0 && (it.headcount > teamTotal ||
-      (it.teamType && it.headcount > (typeCounts[it.teamType] || 0)))) {
+    var snapWt = RM.wipWeight(state, it);
+    if (teamTotal > 0 && (snapWt > teamTotal ||
+      (it.teamType && snapWt > (typeCounts[it.teamType] || 0)))) {
       var what = it.teamType
-        ? it.headcount + ' × ' + it.teamType + ' (roster has ' + (typeCounts[it.teamType] || 0) + ')'
-        : it.headcount + ' people (roster has ' + teamTotal + ')';
+        ? 'more ' + it.teamType + ' focus than the roster has (' + (typeCounts[it.teamType] || 0) + ')'
+        : 'more focus than the roster of ' + teamTotal + ' can give';
       return { state: state, changed: 0, note: 'Needs ' + what + ' — no slot can ever fit. Left unchanged.' };
     }
 
@@ -1426,10 +1492,10 @@
         var cell = wk < capData.weeks.length ? capData.weeks[wk] : null;
         var avail = cell ? { total: cell.cap, byType: cell.capByType } : RM.availForWeek(state, wk);
         var demand = cell ? cell.demand : 0;
-        if (demand + it.headcount > avail.total + 1e-9) return false;
+        if (demand + snapWt > avail.total + 1e-9) return false;
         if (it.teamType) {
           var used = cell ? (cell.demandByType[it.teamType] || 0) : 0;
-          if (used + it.headcount > (avail.byType[it.teamType] || 0) + 1e-9) return false;
+          if (used + snapWt > (avail.byType[it.teamType] || 0) + 1e-9) return false;
         }
       }
       return true;
@@ -1572,8 +1638,8 @@
   // non-holiday day. Actual is the basis for totals and cost.
   RM.roleWeekHours = function (state, m, w) {
     var iso = RM.fmtISO(RM.weekStartDate(state.meta, w));
-    var planned = m.weekHours[iso] != null ? m.weekHours[iso] : 40;
-    var workable = (5 - RM.holidaysInWeek(state.meta, w)) * 8;
+    var planned = m.weekHours[iso] != null ? m.weekHours[iso] : RM.weekHoursOf(state.meta);
+    var workable = (5 - RM.holidaysInWeek(state.meta, w)) * RM.hoursPerDay(state.meta);
     return { iso: iso, planned: planned, actual: Math.min(planned, workable) };
   };
   // Per-role ACTUAL hours over the whole project.
@@ -1582,29 +1648,88 @@
     for (var w = 0; w < state.meta.numWeeks; w++) total += RM.roleWeekHours(state, m, w).actual;
     return total;
   };
+  // ---- rate card: per-role default hourly rate/cost (meta.rateCard[role] =
+  // { rate, cost }). A person inherits their role's numbers unless they carry
+  // an explicit override (0/empty = inherit).
+  RM.rateCardFor = function (state, role) {
+    var rc = state.meta.rateCard;
+    return (rc && rc[role]) || null;
+  };
+  RM.memberRate = function (state, m) {
+    if (m.rate > 0) return m.rate;
+    var rc = RM.rateCardFor(state, m.type);
+    return rc && isFinite(+rc.rate) && +rc.rate > 0 ? +rc.rate : 0;
+  };
+  RM.memberCost = function (state, m) {
+    if (m.cost > 0) return m.cost;
+    var rc = RM.rateCardFor(state, m.type);
+    return rc && isFinite(+rc.cost) && +rc.cost > 0 ? +rc.cost : 0;
+  };
+
   // Margin: share of the bill rate kept after hourly cost, in %; null if no rate.
-  RM.roleMargin = function (m) {
-    if (!m.rate) return null;
-    return (m.rate - (m.cost || 0)) / m.rate * 100;
+  RM.roleMargin = function (state, m) {
+    var rate = RM.memberRate(state, m);
+    if (!rate) return null;
+    return (rate - RM.memberCost(state, m)) / rate * 100;
+  };
+
+  // ---- fixed & recurring costs (state.costs). kind: 'fixed' hits once on
+  // startDay; 'weekly'/'monthly' repeat from startDay through endDay
+  // (endDay null = the end of the timeline).
+  RM.costOccurrences = function (state, c) {
+    var meta = state.meta;
+    var last = RM.numDays(meta) - 1;
+    var start = Math.max(0, c.startDay || 0);
+    if (c.kind === 'fixed') {
+      return start <= last ? [{ day: start, amount: c.amount }] : [];
+    }
+    var end = c.endDay != null ? Math.min(c.endDay, last) : last;
+    var out = [];
+    if (c.kind === 'weekly') {
+      for (var d = start; d <= end; d += 5) out.push({ day: d, amount: c.amount });
+      return out;
+    }
+    // monthly: same day-of-month as the start date, until end
+    var dt = RM.dayToDate(meta, start);
+    var guard = 0;
+    while (guard++ < 240) {
+      var day = RM.dateToDay(meta, dt);
+      if (day == null || day > end) break;
+      if (day >= start) out.push({ day: day, amount: c.amount });
+      dt = new Date(dt.getTime());
+      dt.setUTCMonth(dt.getUTCMonth() + 1);
+    }
+    return out;
+  };
+  RM.costTotal = function (state, c) {
+    return RM.costOccurrences(state, c).reduce(function (a, o) { return a + o.amount; }, 0);
+  };
+  RM.costsTotal = function (state) {
+    return (state.costs || []).reduce(function (a, c) { return a + RM.costTotal(state, c); }, 0);
   };
   // Average hourly COST of roster roles with the given team type; roles with
   // no cost set are ignored; falls back to the blended roster average.
   RM.avgCostRate = function (state, teamType) {
-    var pool = state.team.filter(function (m) { return m.cost > 0 && (!teamType || m.type === teamType); });
-    if (!pool.length && teamType) pool = state.team.filter(function (m) { return m.cost > 0; });
-    if (!pool.length) return 0;
+    function eff(m) { return RM.memberCost(state, m); }
+    var pool = state.team.filter(function (m) { return eff(m) > 0 && (!teamType || m.type === teamType); });
+    if (!pool.length && teamType) pool = state.team.filter(function (m) { return eff(m) > 0; });
+    if (!pool.length) {
+      // no roster costs: the rate card itself can price the work
+      var rc = teamType ? RM.rateCardFor(state, teamType) : null;
+      return rc && +rc.cost > 0 ? +rc.cost : 0;
+    }
     var s = 0;
-    pool.forEach(function (m) { s += m.cost; });
+    pool.forEach(function (m) { s += eff(m); });
     return s / pool.length;
   };
   // Item effort: scheduled items use their painted working days, unscheduled
-  // ones their size estimate. Hours = days × 8 × headcount; cost prices those
-  // hours at the avg cost rate for the item's team type.
+  // ones their size estimate. Hours = days × the project's hours-per-day;
+  // cost prices those hours at the avg cost rate for the item's role.
   RM.itemEffortInfo = function (state, it) {
     var days = it.startDay != null && it.durDays != null
       ? RM.workInSpan(state.meta, it.startDay, it.durDays)
-      : (it.size ? RM.sizeDays(state, it.size) : 0);
-    var hours = days * 8 * (it.headcount || 1);
+      : (it.size ? RM.sizeDays(state, it.size) : (it.durDays || 0));
+    var hours = days * RM.hoursPerDay(state.meta);
     return { days: days, hours: hours, cost: hours * RM.avgCostRate(state, it.teamType) };
   };
   // Cost/effort rollup for the Reports panel. mode: 'workstream' | 'phase' |
@@ -1631,7 +1756,7 @@
         var b = bucket(m.workstream || '(no workstream)');
         var h = RM.roleTotalHours(state, m);
         b.roleHours = (b.roleHours || 0) + h;
-        b.roleCost = (b.roleCost || 0) + h * (m.cost || 0);
+        b.roleCost = (b.roleCost || 0) + h * RM.memberCost(state, m);
       });
     }
     var out = order.map(function (k) { return rows[k]; });
