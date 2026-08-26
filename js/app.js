@@ -64,6 +64,7 @@
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
   var capType = 'Development'; // work type the header capacity row counts ('' = all)
+  var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
   var autoSave = true;       // desktop: write to the open file after each change
@@ -103,7 +104,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab };
   }
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
@@ -131,6 +132,7 @@
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
+    setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -4074,55 +4076,99 @@
         '</div>';
     }).join('');
 
+    // one card set per vertical tab
+    var tabBodies = {
+      timeline:
+        '<section class="su-card"><h2>Timeline</h2>' +
+        '<div class="p-grid2">' +
+        '<div><label class="p-lab">Start (Monday)</label><input type="date" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">End (last working day)</label><input type="date" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
+        '</div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Sprint numbering</h2>' +
+        '<div class="p-grid2">' +
+        '<div><label class="p-lab">Sprint starts on (Monday)</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
+        '</div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Holidays</h2>' +
+        '<div class="su-chips">' + (holChips || '<span class="m-hint">none</span>') + '</div>' +
+        '<div class="p-row" style="margin-top:8px"><input type="date" id="suHolAdd" class="fixed"><button id="suHolAddBtn" class="fixed">Add day</button></div>' +
+        '</section>',
+      phases:
+        '<section class="su-card"><h2>Phases</h2>' +
+        '<div class="su-rows" data-sulist="phase">' + phaseRows + '</div>' +
+        '<button id="suPhAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add phase</button>' +
+        '</section>',
+      workstreams:
+        '<section class="su-card"><h2>Workstreams</h2>' +
+        '<div class="su-rows" data-sulist="ws">' + (wsRows || '<div class="m-hint">none yet</div>') + '</div>' +
+        '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>' +
+        '</section>',
+      team:
+        '<section class="su-card"><h2>Team types</h2>' +
+        '<div class="su-rows" data-sulist="type">' + typeRows + '</div>' +
+        '<div class="p-row" style="margin-top:8px"><input id="suTypeAdd" placeholder="New type, e.g. Data Scientist"><button id="suTypeAddBtn" class="fixed">Add</button></div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Capacity</h2>' +
+        '<label class="p-check" title="Roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
+        '<div class="m-hint">People and their weekly hours live in the Resources panel under the timeline.</div>' +
+        '</section>',
+      sizing:
+        '<section class="su-card"><h2>Sizing rules</h2>' +
+        '<div class="size-grid">' + sizeInputs + '</div>' +
+        '<div class="m-hint">Working days per T-shirt size; the risk buffer uses the same scale.</div>' +
+        '</section>',
+      appearance:
+        '<section class="su-card"><h2>Appearance</h2>' + personalFieldsHtml('appearance') +
+        '<div class="m-hint">System follows your OS. Personal settings live on this machine — they never travel inside a project file.</div>' +
+        '</section>',
+      prefs:
+        '<section class="su-card"><h2>Preferences</h2>' + personalFieldsHtml('behavior') + '</section>'
+    };
+    if (!tabBodies[setupTab]) setupTab = 'timeline';
+
+    var rail = SETUP_SECTIONS.map(function (sec) {
+      return '<div class="su-rail-hd">' + sec[0] + '</div>' +
+        sec[1].map(function (t) {
+          return '<button class="su-tab' + (setupTab === t[0] ? ' on' : '') + '" data-sutab="' + t[0] + '">' +
+            '<i data-lucide="' + t[2] + '"></i>' + t[1] + '</button>';
+        }).join('');
+    }).join('');
+
     host.innerHTML =
-      '<div class="su-wrap">' +
-      '<h1 class="su-title">Project setup</h1>' +
-
-      '<div class="su-grid">' +
-      '<section class="su-card"><h2>Timeline</h2>' +
-      '<div class="p-grid2">' +
-      '<div><label class="p-lab">Start (Monday)</label><input type="date" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
-      '<div><label class="p-lab">End (last working day)</label><input type="date" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
-      '</div>' +
-      '</section>' +
-
-      '<section class="su-card"><h2>Sprint numbering</h2>' +
-      '<div class="p-grid2">' +
-      '<div><label class="p-lab">Sprint starts on (Monday)</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
-      '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
-      '</div>' +
-      '</section>' +
-
-      '<section class="su-card"><h2>Workstreams</h2>' +
-      '<div class="su-rows" data-sulist="ws">' + (wsRows || '<div class="m-hint">none yet</div>') + '</div>' +
-      '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>' +
-      '</section>' +
-
-      '<section class="su-card"><h2>Phases</h2>' +
-      '<div class="su-rows" data-sulist="phase">' + phaseRows + '</div>' +
-      '<button id="suPhAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add phase</button>' +
-      '</section>' +
-
-      '<section class="su-card"><h2>Team types</h2>' +
-      '<div class="su-rows" data-sulist="type">' + typeRows + '</div>' +
-      '<div class="p-row" style="margin-top:8px"><input id="suTypeAdd" placeholder="New type, e.g. Data Scientist"><button id="suTypeAddBtn" class="fixed">Add</button></div>' +
-      '</section>' +
-
-      '<section class="su-card"><h2>Sizing rules</h2>' +
-      '<div class="size-grid">' + sizeInputs + '</div>' +
-      '</section>' +
-
-      '<section class="su-card"><h2>Capacity</h2>' +
-      '<label class="p-check" title="Roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
-      '</section>' +
-
-      '<section class="su-card su-span2"><h2>Holidays</h2>' +
-      '<div class="su-chips">' + (holChips || '<span class="m-hint">none</span>') + '</div>' +
-      '<div class="p-row" style="margin-top:8px"><input type="date" id="suHolAdd" class="fixed"><button id="suHolAddBtn" class="fixed">Add day</button></div>' +
-      '</section>' +
-      '</div></div>';
+      '<div class="su-layout">' +
+      '<nav class="su-rail" aria-label="Settings sections">' + rail + '</nav>' +
+      '<div class="su-content">' + tabBodies[setupTab] + '</div>' +
+      '</div>';
     if (window.lucide) lucide.createIcons();
   }
+
+  var SETUP_SECTIONS = [
+    ['Project', [
+      ['timeline', 'Timeline', 'calendar-range'],
+      ['phases', 'Phases', 'flag'],
+      ['workstreams', 'Workstreams', 'layers'],
+      ['team', 'Team', 'users'],
+      ['sizing', 'Sizing', 'ruler']
+    ]],
+    ['Personal', [
+      ['appearance', 'Appearance', 'palette'],
+      ['prefs', 'Preferences', 'sliders-horizontal']
+    ]]
+  ];
+
+  // vertical settings rail; personal controls share the modal's wiring
+  $('#setupView').addEventListener('click', function (e) {
+    var tab = e.target.closest('[data-sutab]');
+    if (!tab) return;
+    setupTab = tab.dataset.sutab;
+    saveLocal();
+    renderSetup();
+  });
+  wirePersonalFields($('#setupView'), function () {
+    if (view === 'setup') renderSetup();
+  });
 
   $('#setupView').addEventListener('change', function (e) {
     var t = e.target;
@@ -4435,6 +4481,7 @@
   });
   $('#resManage').addEventListener('click', function () {
     view = 'setup';
+    setupTab = 'team';
     saveLocal();
     render();
   });
@@ -4901,7 +4948,8 @@
   // ------------------------------------------------------------ personal settings
   // One set of controls, used by Setup → Personal and the start page modal.
   // Everything here is per-machine (UI_KEY / THEME_KEY), never document data.
-  function personalFieldsHtml() {
+  // part: 'appearance' | 'behavior' | undefined (both — the start page modal)
+  function personalFieldsHtml(part) {
     var desktop = !!window.HeadwayDesktop;
     function chk(key, label, on) {
       return '<label class="p-check" style="margin-top:7px">' +
@@ -4915,8 +4963,8 @@
       return '<button data-pref-snap="' + sn[0] + '"' + (snapDays === sn[0] ? ' class="on"' : '') + '>' +
         sn[1] + '</button>';
     }).join('') + '</div>';
-    return '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>' +
-      '<div class="m-sec"><label>Drag snap</label>' + snapSeg + '</div>' +
+    var appearance = '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>';
+    var behavior = '<div class="m-sec"><label>Drag snap</label>' + snapSeg + '</div>' +
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
@@ -4930,6 +4978,9 @@
       (desktop
         ? '<div class="m-sec"><label>Files</label>' + chk('autoSave', 'Auto-save to the open file', autoSave) + '</div>'
         : '');
+    if (part === 'appearance') return appearance;
+    if (part === 'behavior') return behavior;
+    return appearance + behavior;
   }
   // delegated wiring; `after` refreshes whatever surface hosts the fields
   function wirePersonalFields(host, after) {

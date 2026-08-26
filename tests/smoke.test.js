@@ -315,9 +315,34 @@ doc.querySelector('#popover').hidden = true;
 }
 
 // ---------------------------------------------------------------- setup view
+const suTab = (k) => click(doc.querySelector('#setupView [data-sutab="' + k + '"]'));
 click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
-ok(doc.querySelectorAll('#setupView .su-card').length === 8, 'setup shows all eight cards (incl. Capacity)');
+ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
+  'resources "manage" lands on the Team tab');
+ok(doc.querySelectorAll('#setupView .su-tab').length === 7 &&
+  doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
+  'settings rail: 7 vertical tabs under Project + Personal sections');
+ok(doc.querySelectorAll('#setupView .su-card').length === 2 && !!doc.querySelector('#suCapEnable'),
+  'Team tab shows team types + capacity');
+suTab('appearance');
+ok(doc.querySelectorAll('#setupView [data-pref-theme]').length === 3,
+  'Personal → Appearance offers the three themes');
+suTab('prefs');
+ok(!!doc.querySelector('#setupView [data-pref="crit"]') &&
+  doc.querySelectorAll('#setupView [data-pref-snap]').length === 3,
+  'Personal → Preferences holds the view options');
+{
+  const cb = doc.querySelector('#setupView [data-pref="crit"]');
+  cb.checked = false;
+  cb.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(window.localStorage.getItem('headway-ui-v1').includes('"showCrit":false'),
+    'unticking critical path persists to the UI prefs');
+  const cb2 = doc.querySelector('#setupView [data-pref="crit"]');
+  cb2.checked = true;
+  cb2.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+suTab('timeline');
 ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline start/end editable in setup');
 {
   const end = doc.querySelector('#suEnd');
@@ -328,13 +353,18 @@ ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline s
     'end date drives numWeeks (' + state().meta.numWeeks + ' from ' + startIso + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
+ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.holidays.length,
+  'holidays listed as removable chips (Timeline tab)');
+suTab('team');
 {
   const inp = doc.querySelector('#suTypeAdd');
   inp.value = 'Data Scientist';
   click(doc.querySelector('#suTypeAddBtn'));
   ok(state().teamTypes.indexOf('Data Scientist') !== -1, 'setup adds a team type');
 }
+suTab('phases');
 ok(doc.querySelectorAll('#setupView [data-suphedit]').length === state().phases.length, 'phases listed with edit controls');
+suTab('workstreams');
 ok(doc.querySelectorAll('#setupView [data-suwsedit]').length > 0, 'workstreams listed with edit controls');
 
 // picking "Default blue" for a workstream with a seeded default must SURVIVE
@@ -352,14 +382,12 @@ ok(doc.querySelectorAll('#setupView [data-suwsedit]').length > 0, 'workstreams l
   ok(window.RM.colorForWs(reloaded, wsName) === window.RM.PALETTE.product,
     'color survives a reload (normalize does not re-seed the default)');
 }
-ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.holidays.length, 'holidays listed as removable chips');
 ok(doc.querySelectorAll('#setupView .su-grip').length ===
   doc.querySelectorAll('#setupView [data-sulist] .su-row').length, 'every reorderable row has a drag grip');
-ok(!doc.querySelector('#setupView .su-card .m-hint') ||
-  doc.querySelectorAll('#setupView .su-card .m-hint').length === 0, 'no explanatory grey text on setup cards');
 // drag the first phase's grip to the bottom of its list (jsdom rects are all
 // zero, so a large clientY resolves to "after the last row")
 {
+  suTab('phases');
   const firstId = state().phases[0].id;
   const grip = doc.querySelector('#setupView [data-sulist="phase"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -371,6 +399,7 @@ ok(!doc.querySelector('#setupView .su-card .m-hint') ||
 }
 // same machinery drives team types
 {
+  suTab('team');
   const firstType = state().teamTypes[0];
   const grip = doc.querySelector('#setupView [data-sulist="type"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -380,6 +409,7 @@ ok(!doc.querySelector('#setupView .su-card .m-hint') ||
 }
 // and workstreams (order persists in state.wsOrder)
 {
+  suTab('workstreams');
   const firstWs = doc.querySelector('#setupView [data-sulist="ws"] .su-row').dataset.key;
   const grip = doc.querySelector('#setupView [data-sulist="ws"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -802,6 +832,7 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
 // ---------------------------------------------------------------- capacity feature switch (Setup)
 {
   window.eval("document.querySelector('#viewTabs [data-view=\"setup\"]').click()");
+  suTab('team'); // the capacity switch lives on the Team tab
   const capChk = doc.querySelector('#suCapEnable');
   ok(capChk && capChk.checked, 'Setup capacity checkbox reflects the enabled fixture');
   capChk.checked = false;
