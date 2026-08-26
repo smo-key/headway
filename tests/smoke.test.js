@@ -331,19 +331,25 @@ ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data
   !!doc.querySelector('#suWeekStart'),
   'work week card offers full-time hours, Sun-Sat day checkboxes and a first-day select');
 {
-  // Mon-Fri checked by default; the other two disabled at the 5-day cap
+  // Mon-Fri checked by default; up to all 7 days can be selected
   const wdBoxes = Array.from(doc.querySelectorAll('#setupView [data-suwday]'));
-  ok(wdBoxes.filter(b => b.checked).length === 5 && wdBoxes.filter(b => b.disabled).length === 2,
-    'five working days checked, extras disabled at the cap');
-  // unchecking Friday commits a 4-day week
+  ok(wdBoxes.filter(b => b.checked).length === 5 && wdBoxes.filter(b => b.disabled).length === 0,
+    'five working days checked, none disabled (7-day weeks allowed)');
+  // unchecking Friday commits a 4-day week and re-encodes the day space
   const fri = wdBoxes.find(b => b.dataset.suwday === '5');
   fri.checked = false;
   fri.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.workDays.join(',') === '1,2,3,4', 'unchecking Friday leaves Mon-Thu');
-  const mon = doc.querySelector('#setupView [data-suwday="5"]');
-  mon.checked = true;
-  mon.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.workDays.join(',') === '1,2,3,4,5', 'rechecking Friday restores Mon-Fri');
+  ok(window.RM.slotsOf(state().meta) === 4, 'the index week now has 4 slots');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(window.RM.slotsOf(state().meta) === 5, 'undo restores the 5-slot week exactly');
+  // a 6th day can be checked (Saturday) — and undone
+  const sat = doc.querySelector('#setupView [data-suwday="6"]');
+  sat.checked = true;
+  sat.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(window.RM.slotsOf(state().meta) === 6, 'checking Saturday makes a 6-slot week');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(window.RM.slotsOf(state().meta) === 5, 'undo restores Mon-Fri');
 }
 {
   // rate card commit + inheritance shows up in core helpers
@@ -867,8 +873,9 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   window.eval("document.querySelector('#btnPresent').click()");
   ok(doc.body.classList.contains('present') && doc.body.dataset.view === 'budget',
     'Expand enters present mode from Budgeting');
-  window.eval("document.querySelector('#btnPresentExit').click()");
-  ok(!doc.body.classList.contains('present'), 'exit restores the full Budgeting UI');
+  ok(!doc.querySelector('#zoomCtl').hidden, 'zoom cluster stays put in expand mode');
+  window.eval("document.querySelector('#btnPresent').click()");
+  ok(!doc.body.classList.contains('present'), 'clicking it again restores the full Budgeting UI');
   // Expand is gone from Scoping (the cluster only exists on Planning/Budgeting)
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(doc.querySelector('#zoomCtl').hidden, 'no zoom/expand cluster on Scoping');
@@ -983,11 +990,12 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   const pbtn = doc.querySelector('#zoomCtl #btnPresent');
   ok(!!pbtn, 'expand button lives in the zoom cluster');
   click(pbtn);
-  ok(doc.body.classList.contains('present') && !doc.querySelector('#btnPresentExit').hidden,
-    'expand enters the preview and shows the floating minimize button');
-  click(doc.querySelector('#btnPresentExit'));
-  ok(!doc.body.classList.contains('present') && doc.querySelector('#btnPresentExit').hidden,
-    'minimize restores the full UI');
+  ok(doc.body.classList.contains('present'), 'expand enters the preview');
+  ok(!doc.querySelector('#btnPresentExit'), 'no floating exit button — the cluster button toggles in place');
+  ok(doc.querySelector('#topbar') && !doc.querySelector('#zoomCtl').hidden,
+    'the app header and the zoom cluster stay during expand');
+  click(doc.querySelector('#zoomCtl #btnPresent'));
+  ok(!doc.body.classList.contains('present'), 'clicking again restores the full UI');
 }
 
 // ---------------------------------------------------------------- critical path toggle

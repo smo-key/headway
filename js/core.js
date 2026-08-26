@@ -2,7 +2,8 @@
  * Headway core — pure logic, no DOM. Loaded in the browser as window.RM and
  * in node (tests) via require. Time is measured in WORKING DAYS from
  * meta.timelineStart (a Monday): 5 per week, weekends don't exist in the index
- * space. week = floor(day / 5).
+ * space. week = floor(day / slotsPerWeek) — the slot count follows the
+ * selected working days (1-7).
  */
 (function (root) {
   'use strict';
@@ -248,12 +249,12 @@
     return dt.toISOString().slice(0, 10);
   };
 
-  RM.numDays = function (meta) { return meta.numWeeks * 5; };
+  RM.numDays = function (meta) { return meta.numWeeks * RM.slotsOf(meta); };
 
   // keep meta.endDate (last working day, a Friday) in sync with numWeeks;
   // call after any change to numWeeks or timelineStart
   RM.syncEndDate = function (meta) {
-    meta.endDate = RM.fmtISO(RM.dayToDate(meta, meta.numWeeks * 5 - 1));
+    meta.endDate = RM.fmtISO(RM.dayToDate(meta, meta.numWeeks * RM.slotsOf(meta) - 1));
   };
 
   RM.weekStartDate = function (meta, week) {
@@ -280,10 +281,13 @@
         d = Math.round(+d);
         if (isFinite(d) && d >= 0 && d <= 6 && !seen[d]) { seen[d] = true; out.push(d); }
       });
-      if (out.length >= 1 && out.length <= 5) return out;
+      if (out.length >= 1 && out.length <= 7) return out;
     }
     return [1, 2, 3, 4, 5]; // Mon–Fri
   };
+  // slots per index week = number of selected working days (1-7); every
+  // slot is a working day — only holidays make a slot non-working
+  RM.slotsOf = function (metaOrState) { return RM.workDaysOf(metaOrState).length; };
   // day-offsets (0–6 from the week's first day) of each working slot, ascending
   RM.workOffsets = function (meta) {
     var ws = RM.weekStartOf(meta);
@@ -315,12 +319,59 @@
     // snapped-back start only widens the window by part of a week
   };
 
+  // Re-encode every stored day index from one week shape into another by
+  // round-tripping through calendar dates — the one mapping both shapes
+  // share. Used when the work week changes (slots per week, week start).
+  RM.remapDaySpace = function (state, oldMeta) {
+    var m = state.meta;
+    function mapDay(d) {
+      if (d == null || !isFinite(d)) return d;
+      return Math.max(0, RM.dateToDay(m, RM.dayToDate(oldMeta, d)));
+    }
+    function mapSpan(obj) {
+      if (obj.startDay == null) return;
+      var s0 = obj.startDay;
+      var e0 = s0 + Math.max(1, obj.durDays || 1) - 1;
+      var s1 = mapDay(s0);
+      var e1 = mapDay(e0);
+      obj.startDay = s1;
+      if (obj.durDays != null) {
+        obj.durDays = obj.milestone ? 0 : Math.max(1, e1 - s1 + 1);
+      }
+    }
+    (state.items || []).forEach(function (it) {
+      mapSpan(it);
+      (it.stories || []).forEach(mapSpan);
+    });
+    (state.costs || []).forEach(function (c) {
+      c.startDay = mapDay(c.startDay) || 0;
+      if (c.endDay != null) c.endDay = mapDay(c.endDay);
+    });
+    (state.phases || []).forEach(function (p) {
+      if (p.startDay != null) p.startDay = mapDay(p.startDay);
+      if (p.endDay != null) p.endDay = mapDay(p.endDay);
+    });
+  };
+
+  // The one entry point for editing the work week on a LIVE document:
+  // applies the setting, then re-encodes all day indices so every bar keeps
+  // its calendar dates.
+  RM.changeWorkWeek = function (state, patch) {
+    var m = state.meta;
+    var oldMeta = RM.clone(m);
+    if (patch && Array.isArray(patch.workDays)) m.workDays = patch.workDays;
+    if (patch && patch.weekStart != null) m.weekStart = patch.weekStart;
+    RM.applyWorkWeek(m);
+    RM.remapDaySpace(state, oldMeta);
+  };
+
   RM.dayToDate = function (meta, day) {
-    var week = Math.floor(day / 5);
-    var dow = ((day % 5) + 5) % 5;
+    var S = RM.slotsOf(meta);
+    var week = Math.floor(day / S);
+    var slot = ((day % S) + S) % S;
     var offs = RM.workOffsets(meta);
     var d = RM.parseISO(meta.timelineStart);
-    d.setUTCDate(d.getUTCDate() + week * 7 + offs[Math.min(dow, offs.length - 1)]);
+    d.setUTCDate(d.getUTCDate() + week * 7 + offs[Math.min(slot, offs.length - 1)]);
     return d;
   };
 
@@ -339,7 +390,7 @@
     var offs = RM.workOffsets(meta);
     var slot = 0;
     for (var i = 0; i < offs.length; i++) if (offs[i] <= rem) slot = i;
-    return week * 5 + slot; // non-working weekday -> previous working slot
+    return week * RM.slotsOf(meta) + slot; // non-working weekday -> previous working slot
   };
 
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -385,9 +436,9 @@
     return set;
   };
 
-  // A non-working day slot: an explicit holiday OR past the work week's end.
+  // A non-working day slot: every slot is a selected working day, so only
+  // an explicit holiday switches one off.
   RM.offDay = function (meta, day, set) {
-    if ((day % 5) >= RM.daysPerWeekOf(meta)) return true;
     return (set || RM.holidayDaySet(meta))[day] === true;
   };
 
@@ -399,7 +450,8 @@
   // those weeks are excluded from capacity math entirely.
   RM.isBlackoutWeek = function (meta, week, set) {
     set = set || RM.holidayDaySet(meta);
-    for (var i = 0; i < RM.daysPerWeekOf(meta); i++) if (!set[week * 5 + i]) return false;
+    var S = RM.slotsOf(meta);
+    for (var i = 0; i < S; i++) if (!set[week * S + i]) return false;
     return true;
   };
 
@@ -407,7 +459,8 @@
   RM.holidaysInWeek = function (meta, week, set) {
     set = set || RM.holidayDaySet(meta);
     var n = 0;
-    for (var i = 0; i < 5; i++) if (RM.offDay(meta, week * 5 + i, set)) n += 1;
+    var S = RM.slotsOf(meta);
+    for (var i = 0; i < S; i++) if (RM.offDay(meta, week * S + i, set)) n += 1;
     return n;
   };
 
@@ -521,7 +574,7 @@
     var anchorWeek = 0;
     if (meta.sprintAnchor) {
       var d = RM.dateToDay(meta, RM.parseISO(meta.sprintAnchor));
-      if (d != null) anchorWeek = Math.round(d / 5);
+      if (d != null) anchorWeek = Math.round(d / RM.slotsOf(meta));
     }
     return { wps: wps, anchorWeek: anchorWeek, firstNum: meta.sprintAnchorNum != null ? meta.sprintAnchorNum : 1 };
   };
@@ -596,9 +649,10 @@
       m.blackoutWeeks.forEach(function (iso) {
         var day = RM.dateToDay(m, RM.parseISO(iso));
         if (day == null) return;
-        var week = Math.floor(day / 5);
-        for (var i = 0; i < 5; i++) {
-          var dIso = RM.fmtISO(RM.dayToDate(m, week * 5 + i));
+        var mS = RM.slotsOf(m);
+        var week = Math.floor(day / mS);
+        for (var i = 0; i < mS; i++) {
+          var dIso = RM.fmtISO(RM.dayToDate(m, week * mS + i));
           if (dIso && !seenHol[dIso]) { seenHol[dIso] = true; m.holidays.push(dIso); }
         }
       });
@@ -912,6 +966,19 @@
     state.team.forEach(function (mbr) {
       if (mbr.type && state.teamTypes.indexOf(mbr.type) === -1) state.teamTypes.push(mbr.type);
     });
+
+    // one-time day-space migration: documents saved before variable
+    // slots-per-week kept a fixed 5-slot index week (short weeks read the
+    // trailing slots as off). Re-encode their indices into the true
+    // slots-per-week space via calendar dates.
+    if (!m.dayspaceV2) {
+      m.dayspaceV2 = true;
+      if (RM.slotsOf(m) !== 5) {
+        var legacyMeta = RM.clone(m);
+        legacyMeta.workDays = [0, 1, 2, 3, 4].map(function (i) { return (m.weekStart + i) % 7; });
+        RM.remapDaySpace(state, legacyMeta);
+      }
+    }
     return state;
   };
 
@@ -1144,8 +1211,9 @@
     state.items.forEach(function (it) {
       if (it.startDay == null || it.durDays == null || it.done || it.milestone) return;
       var wt = RM.wipWeight(state, it);
-      var w0 = Math.floor(it.startDay / 5);
-      var w1 = Math.floor((it.startDay + it.durDays - 1) / 5);
+      var S = RM.slotsOf(meta);
+      var w0 = Math.floor(it.startDay / S);
+      var w1 = Math.floor((it.startDay + it.durDays - 1) / S);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
         var cell = weeks[wk];
         if (cell.blackout) continue;
@@ -1384,10 +1452,11 @@
     var ledgerTotal = new Array(HORIZON_WEEKS);
     for (var w = 0; w < HORIZON_WEEKS; w++) ledgerTotal[w] = 0;
 
+    var SLOTS = RM.slotsOf(meta);
     function occupy(it, startDay, durDays) {
       var wWt = RM.wipWeight(state, it);
-      var w0 = Math.floor(startDay / 5);
-      var w1 = Math.floor((startDay + durDays - 1) / 5);
+      var w0 = Math.floor(startDay / SLOTS);
+      var w1 = Math.floor((startDay + durDays - 1) / SLOTS);
       for (var wk = w0; wk <= w1 && wk < HORIZON_WEEKS; wk++) {
         if (RM.isBlackoutWeek(meta, wk)) continue;
         ledgerTotal[wk] += wWt;
@@ -1398,8 +1467,8 @@
     function fits(it, startDay, durDays) {
       if (teamTotal === 0) return true; // no roster -> no capacity constraint
       var wWt = RM.wipWeight(state, it);
-      var w0 = Math.floor(startDay / 5);
-      var w1 = Math.floor((startDay + durDays - 1) / 5);
+      var w0 = Math.floor(startDay / SLOTS);
+      var w1 = Math.floor((startDay + durDays - 1) / SLOTS);
       for (var wk = w0; wk <= w1; wk++) {
         if (wk >= HORIZON_WEEKS) return true;
         if (RM.isBlackoutWeek(meta, wk)) continue;
@@ -1493,12 +1562,12 @@
         leaveUnscheduled('needs more capacity than the roster ever has in a week');
         return;
       }
-      while (!fits(it, s, dur) && guard < HORIZON_WEEKS * 5) {
+      while (!fits(it, s, dur) && guard < HORIZON_WEEKS * SLOTS) {
         s += 1;
         dur = RM.stretchSpan(meta, s, work);
         guard += 1;
       }
-      if (guard >= HORIZON_WEEKS * 5) {
+      if (guard >= HORIZON_WEEKS * SLOTS) {
         leaveUnscheduled('could not find a capacity-valid slot');
         return;
       }
@@ -1536,7 +1605,7 @@
       place(it);
     }
 
-    var neededWeeks = Math.ceil(maxDay / 5);
+    var neededWeeks = Math.ceil(maxDay / SLOTS);
     if (neededWeeks > meta.numWeeks) {
       meta.numWeeks = neededWeeks;
       RM.syncEndDate(meta);
@@ -1574,10 +1643,11 @@
     var work = it.milestone ? 0 : RM.effortDays(state, it);
 
     var capData = RM.capacity(state);
-    var LIMIT = (meta.numWeeks + 104) * 5;
+    var snapS = RM.slotsOf(meta);
+    var LIMIT = (meta.numWeeks + 104) * snapS;
     function fits(s, dur) {
       if (teamTotal === 0) return true;
-      var w0 = Math.floor(s / 5), w1 = Math.floor((s + dur - 1) / 5);
+      var w0 = Math.floor(s / snapS), w1 = Math.floor((s + dur - 1) / snapS);
       for (var wk = w0; wk <= w1; wk++) {
         if (RM.isBlackoutWeek(meta, wk)) continue;
         var cell = wk < capData.weeks.length ? capData.weeks[wk] : null;
@@ -1599,7 +1669,7 @@
     }
     var riskSpan = RM.stretchSpan(meta, s + dur, RM.riskEffortDays(state, it));
     var note = null;
-    var neededWeeks = Math.ceil((s + dur + riskSpan) / 5);
+    var neededWeeks = Math.ceil((s + dur + riskSpan) / snapS);
     if (neededWeeks > meta.numWeeks) {
       meta.numWeeks = neededWeeks;
       RM.syncEndDate(meta);
@@ -1763,7 +1833,7 @@
   RM.roleWeekHours = function (state, m, w) {
     var iso = RM.fmtISO(RM.weekStartDate(state.meta, w));
     var planned = m.weekHours[iso] != null ? m.weekHours[iso] : RM.weekHoursOf(state.meta);
-    var workable = (5 - RM.holidaysInWeek(state.meta, w)) * RM.hoursPerDay(state.meta);
+    var workable = (RM.slotsOf(state.meta) - RM.holidaysInWeek(state.meta, w)) * RM.hoursPerDay(state.meta);
     return { iso: iso, planned: planned, actual: Math.min(planned, workable) };
   };
   // Per-role ACTUAL hours over the whole project.
@@ -1810,7 +1880,7 @@
     var end = c.endDay != null ? Math.min(c.endDay, last) : last;
     var out = [];
     if (c.kind === 'weekly') {
-      for (var d = start; d <= end; d += 5) out.push({ day: d, amount: c.amount });
+      for (var d = start; d <= end; d += RM.slotsOf(state.meta)) out.push({ day: d, amount: c.amount });
       return out;
     }
     // monthly: same day-of-month as the start date, until end

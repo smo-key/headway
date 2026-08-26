@@ -83,7 +83,8 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
-  function dayPx() { return weekPx / 5; }
+  function SPW() { return RM.slotsOf(state.meta); } // slots (working days) per week
+  function dayPx() { return weekPx / SPW(); }
   function leftW() {
     return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--left-w')) || 478;
   }
@@ -494,7 +495,7 @@
     var sx = board.scrollLeft, sy = board.scrollTop;
     critCache = RM.criticalPath(state);
     document.documentElement.style.setProperty('--week-px', weekPx + 'px');
-    if (presentMode && view === 'setup') { presentMode = false; $('#btnPresentExit').hidden = true; }
+    if (presentMode && view === 'setup') setPresent(false);
     document.body.classList.toggle('no-cap', !showCap || !state.meta.capacityEnabled);
     document.body.classList.toggle('present', presentMode);
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
@@ -599,7 +600,7 @@
     var stats = RM.scheduleStats(state);
     var today = RM.dateToDay(meta, new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
     var lastDay = stats.lastDay != null ? stats.lastDay : RM.numDays(meta);
-    var weeksLeft = today != null ? Math.max(0, Math.ceil((lastDay - today) / 5)) : null;
+    var weeksLeft = today != null ? Math.max(0, Math.ceil((lastDay - today) / SPW())) : null;
 
     // ---- cost: items (estimate), roster (hours × cost), fixed/recurring
     var rep = RM.costReport(state, 'workstream');
@@ -654,7 +655,7 @@
     var wsBars = rep.rows.map(function (r) {
       var col = '#' + RM.colorForWs(state, r.key === RM.defaultWsName(state) ? '' : r.key);
       return barRow(r.key, r.cost / maxCost,
-        fmtMoney(r.cost) + ' · ' + (Math.round(r.days / 5 * 10) / 10) + 'w', col);
+        fmtMoney(r.cost) + ' · ' + (Math.round(r.days / SPW() * 10) / 10) + 'w', col);
     }).join('') || '<div class="p-none">Nothing scheduled or sized yet.</div>';
 
     // cumulative planned cost curve (roster + fixed/recurring), by week
@@ -667,7 +668,7 @@
     });
     (state.costs || []).forEach(function (cst) {
       RM.costOccurrences(state, cst).forEach(function (o) {
-        var wk = Math.min(meta.numWeeks - 1, Math.floor(o.day / 5));
+        var wk = Math.min(meta.numWeeks - 1, Math.floor(o.day / SPW()));
         weekly[wk] += o.amount;
       });
     });
@@ -720,7 +721,7 @@
       kpi('Scheduled', fmtPct(workItems.length ? schedCount / workItems.length : 0), schedCount + ' items on the timeline') +
       kpi('Time left', weeksLeft != null ? weeksLeft + 'w' : '—',
         stats.lastDay != null ? 'finishes ' + RM.fmtShortYear(RM.dayToDate(meta, Math.max(0, stats.lastDay - 1))) : 'nothing scheduled') +
-      kpi('Effort', (Math.round(totalDays / 5 * 10) / 10) + 'w', 'estimated person-weeks') +
+      kpi('Effort', (Math.round(totalDays / SPW() * 10) / 10) + 'w', 'estimated person-weeks') +
       kpi('Planned cost', fmtMoney(planned), fmtMoney(rosterCost) + ' team + ' + fmtMoney(fixedCosts) + ' costs') +
       kpi('Billing', billing > 0 ? fmtMoney(billing) : '—',
         margin != null ? fmtPct(margin) + ' margin' : 'no bill rates set') +
@@ -967,10 +968,10 @@
     if (!cell) return;
     var w = parseInt(cell.dataset.w, 10);
     var iso = RM.fmtISO(RM.weekStartDate(state.meta, w));
-    var isFull = RM.holidaysInWeek(state.meta, w) === 5;
+    var isFull = RM.holidaysInWeek(state.meta, w) === SPW();
     commit('toggle holiday', function (s) {
-      var mon = RM.fmtISO(RM.dayToDate(s.meta, w * 5));
-      var fri = RM.fmtISO(RM.dayToDate(s.meta, w * 5 + 4));
+      var mon = RM.fmtISO(RM.dayToDate(s.meta, w * RM.slotsOf(s.meta)));
+      var fri = RM.fmtISO(RM.dayToDate(s.meta, (w + 1) * RM.slotsOf(s.meta) - 1));
       if (isFull) {
         // carve this week out of every holiday range
         RM.clipHolidayRanges(s.meta, mon, fri);
@@ -1012,7 +1013,16 @@
     var line = $('#todayLine');
     if (d < 0 || d > RM.numDays(state.meta)) { line.hidden = true; return; }
     line.hidden = false;
+    line.dataset.x = d * dayPx();
     line.style.left = 'calc(var(--left-w) + ' + (d * dayPx()) + 'px)';
+    syncTodayClip();
+  }
+  // the line paints above the sticky header, so it must duck when scrolled
+  // behind the frozen left pane
+  function syncTodayClip() {
+    var line = $('#todayLine');
+    if (!line || line.hidden) return;
+    line.classList.toggle('under-left', (+line.dataset.x || 0) - board.scrollLeft < 0);
   }
 
   function warnBadge(it) {
@@ -1324,7 +1334,7 @@
     var d = RM.sizeDays(state, size);
     if (d == null) return '';
     if (d < 5) return d + 'd';
-    return (d / 5) + 'w';
+    return (Math.round(d / SPW() * 100) / 100) + 'w';
   }
   function sizeMatches(it) {
     if (!it.size || !isScheduled(it)) return true;
@@ -1501,7 +1511,7 @@
         '<div><label class="p-lab">Start</label>' +
         '<input type="date" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">Duration (weeks)</label>' +
-        '<input type="number" data-f="durWeeks" min="0.2" step="0.2" value="' + (it.durDays / 5) + '" style="width:100%"></div>' +
+        '<input type="number" data-f="durWeeks" min="0.2" step="0.2" value="' + (Math.round(it.durDays / SPW() * 100) / 100) + '" style="width:100%"></div>' +
         '</div>' +
         '<div class="p-row" style="margin-top:8px">' +
         '<button data-f="snap" title="Earliest slot after dependencies with free capacity">Snap earliest</button>' +
@@ -1511,7 +1521,7 @@
       scheduleInfo =
         '<div><label class="p-lab">Duration (weeks)</label>' +
         '<input type="number" data-f="durWeeks" min="0.2" step="0.2" value="' +
-        (it.durDays != null ? it.durDays / 5 : '') + '" placeholder="1" style="width:100%"' +
+        (it.durDays != null ? Math.round(it.durDays / SPW() * 100) / 100 : '') + '" placeholder="1" style="width:100%"' +
         ' title="Used when the item lands on the timeline (empty = 1 week, or the size)"></div>' +
         '<div class="p-row" style="margin-top:8px">' +
         '<button data-f="schedule-now" class="primary">Place on timeline</button>' +
@@ -1656,7 +1666,7 @@
         '<div><label class="p-lab">Start</label>' +
         '<input type="date" data-stf="startDate" value="' + RM.fmtISO(RM.dayToDate(state.meta, st.startDay)) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">Weeks</label>' +
-        '<input type="number" data-stf="durWeeks" min="0.2" step="0.2" value="' + (st.durDays / 5) + '" style="width:100%"></div>' +
+        '<input type="number" data-stf="durWeeks" min="0.2" step="0.2" value="' + (Math.round(st.durDays / SPW() * 100) / 100) + '" style="width:100%"></div>' +
         '</div>' +
         '<div class="p-row" style="margin-top:8px"><button data-stf="untimeline">Remove timeline</button></div>';
     } else {
@@ -1970,7 +1980,7 @@
   function fmtDays(d) {
     if (d == null) return '';
     if (d < 5) return d + 'd';
-    var w = d / 5;
+    var w = d / SPW();
     return (Math.round(w * 10) / 10) + 'w';
   }
   function shorten(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
@@ -2237,7 +2247,7 @@
         var swv = Math.max(0.2, parseFloat(sval) || 1);
         commit('story duration', function (s) {
           var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
-          if (st2 && st2.startDay != null) st2.durDays = Math.max(1, Math.round(swv * 5));
+          if (st2 && st2.startDay != null) st2.durDays = Math.max(1, Math.round(swv * SPW()));
         });
         return;
       }
@@ -2306,7 +2316,7 @@
       }
       var wv = Math.max(0.2, parseFloat(val) || 1);
       commit('duration', function (s) {
-        RM.itemById(s, it.id).durDays = Math.max(1, Math.round(wv * 5));
+        RM.itemById(s, it.id).durDays = Math.max(1, Math.round(wv * SPW()));
       });
       return;
     }
@@ -2453,8 +2463,8 @@
           wkInp.min = '0.2';
           wkInp.step = '0.2';
           wkInp.value = wkSched
-            ? Math.round((RM.workInSpan(state.meta, it.startDay, it.durDays) / 5) * 10) / 10
-            : (it.durDays != null ? it.durDays / 5 : '');
+            ? Math.round((RM.workInSpan(state.meta, it.startDay, it.durDays) / SPW()) * 10) / 10
+            : (it.durDays != null ? Math.round(it.durDays / SPW() * 100) / 100 : '');
           wkInp.placeholder = '1';
           wkInp.className = 'hc-edit';
           wkInp.style.width = '30px';
@@ -2473,8 +2483,8 @@
               commit('duration', function (s) {
                 var t = RM.itemById(s, itemId);
                 t.durDays = t.startDay != null
-                  ? RM.stretchSpan(s.meta, t.startDay, Math.max(1, Math.round(wv * 5)))
-                  : Math.max(1, Math.round(wv * 5));
+                  ? RM.stretchSpan(s.meta, t.startDay, Math.max(1, Math.round(wv * SPW())))
+                  : Math.max(1, Math.round(wv * SPW()));
               });
             } else render();
           };
@@ -2662,9 +2672,9 @@
   function holidayMenuItems(day) {
     var meta = state.meta;
     var iso = RM.fmtISO(RM.dayToDate(meta, day));
-    var wk = Math.floor(day / 5);
-    var w0 = RM.fmtISO(RM.dayToDate(meta, wk * 5));
-    var w1 = RM.fmtISO(RM.dayToDate(meta, wk * 5 + RM.daysPerWeekOf(meta) - 1));
+    var wk = Math.floor(day / SPW());
+    var w0 = RM.fmtISO(RM.dayToDate(meta, wk * SPW()));
+    var w1 = RM.fmtISO(RM.dayToDate(meta, (wk + 1) * SPW() - 1));
     var hitIdx = -1, hitName = '';
     (meta.holidayRanges || []).forEach(function (r, i) {
       if (hitIdx === -1 && iso >= r.start && iso <= r.end) { hitIdx = i; hitName = r.name; }
@@ -2681,7 +2691,7 @@
         commit('holiday add', function (s) { RM.addHolidayRange(s.meta, '', iso, iso); });
       } });
     }
-    var fullWeek = RM.holidaysInWeek(meta, wk) === 5;
+    var fullWeek = RM.holidaysInWeek(meta, wk) === SPW();
     items.push(fullWeek
       ? { icon: 'calendar-check', label: 'Make week of ' + esc(RM.fmtShort(RM.parseISO(w0))) + ' a working week', fn: function () {
           commit('toggle holiday', function (s) { RM.clipHolidayRanges(s.meta, w0, w1); });
@@ -4160,7 +4170,11 @@
   // floating zoom / expand cluster (bottom right of the timeline)
   function syncZoomCtl() {
     var z = $('#zoomCtl');
-    if (z) z.hidden = !(view === 'planning' || view === 'budget') || presentMode;
+    if (z) z.hidden = !(view === 'planning' || view === 'budget');
+    // the cluster sits above the Resources panel when that is visible
+    var rp = $('#resPanel');
+    document.documentElement.style.setProperty('--res-total',
+      (rp && view === 'planning' && !presentMode ? rp.offsetHeight : 0) + 'px');
   }
   $('#zoomInBtn').addEventListener('click', function () { zoomBy(1.2); });
   $('#zoomOutBtn').addEventListener('click', function () { zoomBy(1 / 1.2); });
@@ -4993,11 +5007,10 @@
         '<div style="margin-top:12px"><label class="p-lab">Working days</label>' +
         '<div class="su-wdays">' + DAY_NAMES.map(function (dn, di) {
           var onDay = RM.workDaysOf(m).indexOf(di) !== -1;
-          var full = !onDay && RM.workDaysOf(m).length >= 5;
-          return '<label class="p-check wd' + (full ? ' off' : '') + '"><input type="checkbox" data-suwday="' + di + '"' +
-            (onDay ? ' checked' : '') + (full ? ' disabled' : '') + '> ' + dn.slice(0, 3) + '</label>';
+          return '<label class="p-check wd"><input type="checkbox" data-suwday="' + di + '"' +
+            (onDay ? ' checked' : '') + '> ' + dn.slice(0, 3) + '</label>';
         }).join('') + '</div></div>' +
-        '<div class="m-hint">Defines what one full-time person means — up to 5 working days per week; the rest count as non-working time on the grid.</div>' +
+        '<div class="m-hint">Defines what one full-time person means — the schedule plans across exactly the days checked (1–7); bars keep their calendar dates when this changes.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Capacity</h2>' +
         '<label class="p-check" title="Roster limits scheduling and validation; shows the availability row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
@@ -5096,8 +5109,7 @@
     if (t.id === 'suWeekStart') {
       var wsd = parseInt(t.value, 10);
       commit('week start', function (s2) {
-        s2.meta.weekStart = wsd;
-        RM.applyWorkWeek(s2.meta);
+        RM.changeWorkWeek(s2, { weekStart: wsd });
       });
       return;
     }
@@ -5106,10 +5118,9 @@
       var list = RM.workDaysOf(state.meta).slice();
       if (t.checked) { if (list.indexOf(dayN) === -1) list.push(dayN); }
       else list = list.filter(function (x) { return x !== dayN; });
-      if (!list.length || list.length > 5) { render(); return; }
+      if (!list.length) { render(); return; }
       commit('work days', function (s2) {
-        s2.meta.workDays = list;
-        RM.applyWorkWeek(s2.meta);
+        RM.changeWorkWeek(s2, { workDays: list });
       });
       return;
     }
@@ -5546,6 +5557,7 @@
   // horizontal scroll sync with the timeline
   var syncing = false;
   board.addEventListener('scroll', function () {
+    syncTodayClip();
     if (syncing) return;
     syncing = true; resBody.scrollLeft = board.scrollLeft; syncing = false;
   });
@@ -6411,11 +6423,15 @@
   // floating minimize button (or Esc) restores the full UI
   function setPresent(on) {
     presentMode = on;
-    $('#btnPresentExit').hidden = !on;
+    var pb = $('#btnPresent');
+    if (pb) {
+      pb.innerHTML = '<i data-lucide="' + (on ? 'minimize-2' : 'maximize-2') + '"></i>';
+      pb.title = on ? 'Exit expand (Esc)' : 'Expand \u2014 timeline-only view';
+      if (window.lucide) lucide.createIcons();
+    }
     render();
   }
-  $('#btnPresent').addEventListener('click', function () { setPresent(true); });
-  $('#btnPresentExit').addEventListener('click', function () { setPresent(false); });
+  $('#btnPresent').addEventListener('click', function () { setPresent(!presentMode); });
 
   // ------------------------------------------------------------ png export
   function exportModal() {
@@ -6424,7 +6440,7 @@
     for (var w = 0; w < meta.numWeeks; w++) {
       var n = RM.sprintNumForWeek(meta, w);
       if (!sprints.length || sprints[sprints.length - 1].num !== n)
-        sprints.push({ num: n, date: RM.fmtShort(RM.dayToDate(meta, w * 5)) });
+        sprints.push({ num: n, date: RM.fmtShort(RM.dayToDate(meta, w * SPW())) });
     }
     function distinct(field) {
       var seen = {}, out = [];

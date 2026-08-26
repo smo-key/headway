@@ -54,6 +54,7 @@
     var meta = state.meta;
     var wps = meta.weeksPerSprint || 2;
     var numWeeks = meta.numWeeks;
+    var S5 = RM.slotsOf(meta); // slots (working days) per index week
     var lastWeekCol = FIRST_SPRINT_COL + numWeeks - 1;
     var nextCol = lastWeekCol + 1;
     var futureCol = lastWeekCol + 2;
@@ -84,7 +85,7 @@
       var minW = null, maxW = null;
       RM.itemsInPhase(state, p.id).forEach(function (it) {
         if (it.startDay == null || it.durDays == null) return;
-        var w0 = Math.floor(it.startDay / 5), w1 = Math.floor((it.startDay + it.durDays - 1) / 5);
+        var w0 = Math.floor(it.startDay / S5), w1 = Math.floor((it.startDay + it.durDays - 1) / S5);
         if (minW == null || w0 < minW) minW = w0;
         if (maxW == null || w1 > maxW) maxW = w1;
       });
@@ -211,7 +212,7 @@
         var scheduled = it.startDay != null && it.durDays != null;
         if (scheduled && it.milestone) {
           // milestone: a diamond in its week, start = end = the fixed date
-          var msWk = Math.max(0, Math.min(numWeeks - 1, Math.floor(it.startDay / 5)));
+          var msWk = Math.max(0, Math.min(numWeeks - 1, Math.floor(it.startDay / S5)));
           var msCell = r.getCell(FIRST_SPRINT_COL + msWk);
           msCell.value = '◆';
           msCell.font = { color: { argb: 'FF' + color }, bold: true };
@@ -223,9 +224,9 @@
         } else if (scheduled) {
           // solid = work span; pale tint = trailing risk buffer (per WEEK)
           var totalSpan = it.durDays + (it.riskDays || 0);
-          var s0 = Math.max(0, Math.floor(it.startDay / 5));
-          var sWork = Math.min(numWeeks - 1, Math.floor((it.startDay + it.durDays - 1) / 5));
-          var s1 = Math.min(numWeeks - 1, Math.floor((it.startDay + totalSpan - 1) / 5));
+          var s0 = Math.max(0, Math.floor(it.startDay / S5));
+          var sWork = Math.min(numWeeks - 1, Math.floor((it.startDay + it.durDays - 1) / S5));
+          var s1 = Math.min(numWeeks - 1, Math.floor((it.startDay + totalSpan - 1) / S5));
           for (var sp = s0; sp <= s1; sp++) {
             var cell = r.getCell(FIRST_SPRINT_COL + sp);
             cell.fill = solid(sp > sWork ? RM.tint(color, 0.75) : color);
@@ -554,7 +555,7 @@
       var diffDaysGap = Math.round((sprintCols[1].date - sprintCols[0].date) / 86400000);
       colWeeks = Math.max(1, Math.round(diffDaysGap / 7));
     }
-    var daysPerSprint = colWeeks * 5; // working days per column
+    var daysPerSprint = colWeeks * 5; // template layouts are Mon-Fri weeks
     var meta = {
       title: 'Imported Roadmap',
       timelineStart: RM.fmtISO(sprintCols[0].date),

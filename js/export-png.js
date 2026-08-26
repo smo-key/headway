@@ -25,7 +25,7 @@
     opts = opts || {};
     var meta = state.meta;
     var weekPx = opts.weekPx || 28;
-    var dpx = weekPx / 5;
+    var dpx = weekPx / RM.slotsOf(meta);
 
     // week window from inclusive sprint numbers (anchor-aware)
     var w0 = 0, w1 = meta.numWeeks;
@@ -40,7 +40,8 @@
       }
       if (lo != null) { w0 = lo; w1 = hi; }
     }
-    var d0 = w0 * 5, d1 = w1 * 5;
+    var S = RM.slotsOf(meta);
+    var d0 = w0 * S, d1 = w1 * S;
 
     // the selected range AND the filtered content together bound the window:
     // clamp to the span of visible bars (whole weeks); nothing visible → no
@@ -55,11 +56,11 @@
     });
     if (lo == null) { w1 = w0; }
     else {
-      w0 = Math.max(w0, Math.floor(lo / 5));
-      w1 = Math.min(w1, Math.ceil(hi / 5));
+      w0 = Math.max(w0, Math.floor(lo / S));
+      w1 = Math.min(w1, Math.ceil(hi / S));
     }
-    d0 = w0 * 5;
-    d1 = w1 * 5;
+    d0 = w0 * S;
+    d1 = w1 * S;
 
     function visibleIn(it, a, b) {
       if (it.startDay == null) return false;
@@ -125,7 +126,7 @@
       if (last && last.num === num) last.w += weekPx;
       else sprints.push({
         num: num, label: 'S' + num, x: LEFT_W + (wk - w0) * weekPx, w: weekPx,
-        date: RM.fmtShort(RM.dayToDate(meta, wk * 5))
+        date: RM.fmtShort(RM.dayToDate(meta, wk * RM.slotsOf(meta)))
       });
     }
 
@@ -134,7 +135,8 @@
     var weeks = [];
     for (var w2 = w0; w2 < w1; w2++) {
       var all = true;
-      for (var d = w2 * 5; d < w2 * 5 + 5; d++) if (!hset[d]) { all = false; break; }
+      var S2 = RM.slotsOf(meta);
+      for (var d = w2 * S2; d < w2 * S2 + S2; d++) if (!hset[d]) { all = false; break; }
       weeks.push({ x: LEFT_W + (w2 - w0) * weekPx, holiday: all });
     }
 

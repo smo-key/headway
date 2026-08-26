@@ -586,10 +586,12 @@ eq(sMsStory.items[0].stories[0].custom.c1, 'v', 'story custom fields survive nor
 // ------------------------------------------------------------- work week & costs
 section('work week & costs');
 var sWw = mkState([{ num: 1, feature: 'x' }]);
-sWw.meta.workDays = [1, 2, 3, 4]; // Mon-Thu
+sWw.meta.workDays = [1, 2, 3, 4]; // Mon-Thu -> 4 slots per index week
 sWw.meta.weekHours = 32;
-eq(RM.workInSpan(sWw.meta, 0, 5), 4, 'a 4-day week holds 4 working days per index week');
-eq(RM.stretchSpan(sWw.meta, 0, 5), 6, '5 work days stretch across the off slot');
+eq(RM.slotsOf(sWw.meta), 4, 'a 4-day week has 4 slots per index week');
+eq(RM.workInSpan(sWw.meta, 0, 4), 4, 'one index week holds exactly its working days');
+eq(RM.stretchSpan(sWw.meta, 0, 5), 5, 'no phantom off slots — 5 work days = 5 slots');
+eq(RM.fmtISO(RM.dayToDate(sWw.meta, 4)), '2026-08-03', 'slot 4 = the second week Monday (Mon-Thu week)');
 eq(RM.hoursPerDay(sWw.meta), 8, '32 h over 4 days = 8 h/day');
 eq(RM.memberHoursForWeek(sWw.meta, {}, 0), 32, 'default member week = the project full-time week');
 sWw.team = [{ id: 't1', name: 'A', type: 'Development', capacity: 1, weekHours: {} }];

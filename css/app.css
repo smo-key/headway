@@ -287,9 +287,12 @@ body[data-view="scoping"] #todayLine { display: none !important; }
 #todayLine {
   position: absolute; top: 0; bottom: 0; width: 0;
   border-left: 2px solid var(--blue);
-  z-index: 6; pointer-events: none;
+  /* above the header rows (z20) and phase lane so today reads everywhere */
+  z-index: 25; pointer-events: none;
   opacity: .85;
 }
+/* hide while scrolled under the frozen left pane */
+#todayLine.under-left { visibility: hidden; }
 #todayLine span {
   position: sticky; top: var(--hdr-h);
   display: inline-block;
@@ -415,7 +418,7 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .row:hover .row-left { background: var(--paper-2); }
 .row.selected .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--blue); }
 .row.link-source .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--c-mixed); }
-.row.done input.r-name { text-decoration: line-through; color: var(--ink-3); }
+.row.done input.r-name { text-decoration: line-through; }
 
 .r-grip {
   width: 18px; align-self: stretch; flex: 0 0 18px;
@@ -619,7 +622,7 @@ body.cap-off .hc-lab { display: none !important; }
   border-left: 1px solid var(--line-2);
 }
 .st-title { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
-.st-title.done { text-decoration: line-through; color: var(--ink-3); }
+.st-title.done { text-decoration: line-through; }
 .st-del { opacity: 0; border: 0; background: transparent; color: var(--ink-3); font-size: 11px; padding: 0 7px; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
@@ -731,7 +734,9 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .bar.locked { cursor: default; }
 .bar.locked .b-h { display: none; }
-.bar.done-bar { opacity: .45; }
+/* done: the fill mutes but the label and checkmark stay fully readable */
+.bar.done-bar { filter: saturate(.5); }
+.bar.done-bar .b-label, .bar.done-bar .b-done { opacity: 1; }
 
 .ghost-pill {
   position: sticky; left: calc(var(--left-w) + 10px);
@@ -1296,21 +1301,13 @@ body.no-cap .hdr-cap { display: none; }
 
 /* distraction-free preview: chrome hidden everywhere; the frozen left pane
    only drops away on the planning timeline (scoping/budgeting need it) */
-body.present #topbar, body.present #panel, body.present #resPanel,
+body.present #panel, body.present #resPanel,
 body.present #leftRz, body.present #leftRzLine { display: none !important; }
 body.present[data-view="planning"] .hdr-left,
 body.present[data-view="planning"] .row-left,
 body.present[data-view="budget"] .hdr-left,
 body.present[data-view="budget"] .row-left { display: none !important; }
 body.present #board { padding: 12px 14px; }
-#btnPresentExit {
-  position: fixed; top: 10px; right: 14px; z-index: 300;
-  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2);
-  border-radius: 8px; padding: 6px 7px; cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .14);
-}
-#btnPresentExit:hover { color: var(--blue); }
-#btnPresentExit svg { width: 14px; height: 14px; display: block; }
 body[data-view="scoping"] .row.item { height: auto; min-height: 72px; } /* grows with content */
 /* left-pane children all center within one 26px first-line strip, matched to
    the first text line of the sc-cell textareas */
@@ -1647,20 +1644,29 @@ body.chrome-win #topbar { padding-right: 0; }
 }
 #titleEdit:hover { color: var(--ink); background: rgba(var(--ink-rgb), .06); box-shadow: none; transform: none; }
 
-#filterCell { position: relative; }
+#filterCell { position: relative; display: flex; align-items: center; }
 #rowFilter {
-  width: 100%; margin-bottom: 3px; height: 28px;
+  width: 100%; height: 30px;
   border: 1px solid var(--line-2); border-radius: 6px;
-  padding: 3px 34px 3px 8px; font: inherit; font-size: 12px;
+  padding: 5px 8px 5px 28px; font: inherit; font-size: 12px;
   background: var(--surface); color: var(--ink);
 }
 #rowFilter:focus { outline: none; border-color: var(--blue); }
-/* ⌘F shortcut chip inside the input's right edge; hides while typing */
+.filter-ico {
+  position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; color: var(--ink-3); pointer-events: none;
+}
+.filter-ico svg { width: 13px; height: 13px; }
+/* ⌘F chip on the input's right edge — gone on focus or once text is typed,
+   so the native clear button gets the far-right spot to itself */
+#rowFilter:placeholder-shown:not(:focus) { padding-right: 40px; }
 .filter-kbd {
-  position: absolute; right: 12px; top: 50%; transform: translateY(calc(-50% - 1px));
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
   pointer-events: none;
 }
-#rowFilter:focus ~ .filter-kbd { display: none; }
+#rowFilter:focus ~ .filter-kbd,
+#rowFilter:not(:placeholder-shown) ~ .filter-kbd { display: none; }
+#rowFilter::-webkit-search-cancel-button { margin-left: 4px; }
 /* scoping hides the phase lane but keeps the line so the filter stays put */
 body[data-view="scoping"] .hdr-phases { display: flex !important; height: 34px !important; }
 body[data-view="scoping"] .hdr-phases .hdr-lane { visibility: hidden; }
@@ -1775,7 +1781,7 @@ body.chrome-mac #startBar { padding-left: 96px; }
   /* screen-space X squeeze AFTER the rotate keeps the height, narrows the width */
   transform: translate(-50%, -50%) scaleX(.72) rotate(45deg);
   background: transparent;
-  border: 1.6px solid var(--bar-c, var(--c-product));
+  border: 2.4px solid var(--bar-c, var(--c-product));
   border-radius: 2.5px;
 }
 .bar.ms.selected { outline: none; }
@@ -1790,12 +1796,12 @@ body.chrome-mac #startBar { padding-left: 96px; }
   display: inline-flex; align-items: center;
   flex: 0 0 auto;
   color: var(--ok);
-  margin-right: 5px;
+  margin-right: 1px;
 }
 .r-doneck svg { width: 13px; height: 13px; stroke-width: 2.4; }
 .bar .b-done {
   display: inline-flex; align-items: center;
-  margin: 0 -3px 0 7px;
+  margin: 0 4px 0 0;
   pointer-events: none;
 }
 .bar .b-done svg { width: 12px; height: 12px; stroke-width: 2.6; }
@@ -2010,7 +2016,9 @@ body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
 #zoomCtl button + button { border-top: 1px solid var(--line); }
 #zoomCtl #btnPresent { border-top: 1px solid var(--line-2); }
 #zoomCtl svg.lucide { width: 14px; height: 14px; }
-body:not(.no-cap) #zoomCtl { bottom: 14px; }
+/* on Planning the cluster sits above the Resources panel, not over it */
+body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px); }
+body.present #zoomCtl { bottom: 14px; }
 #resPanel:not(.collapsed) ~ #zoomCtl { bottom: 14px; }
 
 /* budget chips follow the scoping grid language: full-height rectangular
