@@ -310,16 +310,27 @@
     return ((state.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.png';
   };
 
-  EX.download = function (state, opts) {
+  // render to a PNG blob; the caller decides where it goes
+  EX.toBlob = function (state, opts) {
     var canvas = EX.render(state, opts);
-    var name = EX.fileName(state);
-    canvas.toBlob(function (blob) {
+    return new Promise(function (resolve, reject) {
+      canvas.toBlob(function (blob) {
+        if (blob) resolve({ blob: blob, name: EX.fileName(state) });
+        else reject(new Error('Could not render the PNG'));
+      }, 'image/png');
+    });
+  };
+
+  // plain-browser fallback: a regular download
+  EX.download = function (state, opts) {
+    return EX.toBlob(state, opts).then(function (r) {
       var a = root.document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = name;
+      a.href = URL.createObjectURL(r.blob);
+      a.download = r.name;
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
-    }, 'image/png');
+      return null;
+    });
   };
 
   root.RM_EXPORT = EX;

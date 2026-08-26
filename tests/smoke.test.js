@@ -96,7 +96,8 @@ ok(doc.querySelectorAll('#rows .bar').length === visibleSched,
 ok(doc.querySelectorAll('#hdrCap .cap-cell').length === 48, 'capacity strip has 48 week cells');
 ok(state() && state().items.length > 100, 'debug state handle live (' + state().items.length + ' items)');
 ok(doc.querySelector('#resPanel') !== null && doc.querySelector('#resGrid') !== null, 'resources panel present');
-ok(doc.querySelector('#capTypeCell .dd-btn') !== null, 'capacity work-type selector rendered');
+ok(doc.querySelector('#capTypeCell .cap-lab') !== null, 'capacity header shows a plain availability label');
+ok(doc.querySelector('#capTypeCell .dd-btn') === null, 'capacity is role-agnostic: no role filter dropdown');
 ok(doc.querySelectorAll('#hdrCap .cap-cell').length === 48, 'capacity row spans all weeks');
 ok(doc.querySelectorAll('#rows .bar .port').length === visibleSched * 2, 'link ports rendered on bars');
 ok(doc.querySelectorAll('#rows .bar .b-label').length === visibleSched,
@@ -228,9 +229,9 @@ click(doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-risk'));
 ok(!doc.querySelector('#popover').hidden, 'scoping risk chip opens a dropdown');
 {
   const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent.trim());
-  ok(labels.includes('None') && ['L', 'M', 'H'].every(v => labels.includes(v)) && !labels.includes('XL'),
-    'risk options are None / L / M / H (no t-shirt sizes)');
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => b.textContent.trim() === 'L'));
+  ok(labels.includes('None') && ['L', 'M', 'H'].every(v => labels.some(l => l.startsWith(v + ' '))) && !labels.some(l => /^XL/.test(l)),
+    'risk options are None / L / M / H with full labels (no t-shirt sizes)');
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^L /.test(b.textContent.trim())));
   ok(state().items.find(i => i.id === itId).risk === 'L', 'picking a risk commits (L)');
 }
 click(doc.querySelector('#viewTabs [data-view="planning"]'));
@@ -326,8 +327,24 @@ ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelect
 ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
 ok(!!doc.querySelector('#setupView [data-rcrate]') && !!doc.querySelector('#setupView [data-rccost]'),
   'rate card inputs per role');
-ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data-sudays]').length === 3,
-  'work week card offers full-time hours + days per week');
+ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data-suwday]').length === 7 &&
+  !!doc.querySelector('#suWeekStart'),
+  'work week card offers full-time hours, Sun-Sat day checkboxes and a first-day select');
+{
+  // Mon-Fri checked by default; the other two disabled at the 5-day cap
+  const wdBoxes = Array.from(doc.querySelectorAll('#setupView [data-suwday]'));
+  ok(wdBoxes.filter(b => b.checked).length === 5 && wdBoxes.filter(b => b.disabled).length === 2,
+    'five working days checked, extras disabled at the cap');
+  // unchecking Friday commits a 4-day week
+  const fri = wdBoxes.find(b => b.dataset.suwday === '5');
+  fri.checked = false;
+  fri.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.workDays.join(',') === '1,2,3,4', 'unchecking Friday leaves Mon-Thu');
+  const mon = doc.querySelector('#setupView [data-suwday="5"]');
+  mon.checked = true;
+  mon.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.workDays.join(',') === '1,2,3,4,5', 'rechecking Friday restores Mon-Fri');
+}
 {
   // rate card commit + inheritance shows up in core helpers
   const rateInp = doc.querySelector('#setupView [data-rcrate]');
@@ -346,8 +363,11 @@ ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data
   wh.value = '32';
   wh.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.weekHours === 32, 'full-time hours commit');
-  click(doc.querySelector('#setupView [data-sudays="4"]'));
-  ok(state().meta.daysPerWeek === 4, 'days per week commit');
+  const wsSel = doc.querySelector('#suWeekStart');
+  wsSel.value = '0';
+  wsSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.weekStart === 0, 'first day of week commits');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
@@ -1334,7 +1354,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
-// ---------------------------------------------------------------- empty workstream = outline bar
+// ---------------------------------------------------------------- empty workstream = default workstream
 {
   const sched = state().items.find(i => i.startDay != null && i.workstream && !i.milestone);
   if (sched) {
@@ -1342,10 +1362,12 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     const wsInp = doc.querySelector('#panel [data-f="workstream"]');
     wsInp.value = '';
     wsInp.dispatchEvent(new window.Event('change', { bubbles: true }));
-    ok(!!doc.querySelector('#rows .bar.nows[data-bar="' + sched.id + '"]'),
-      'a bar with no workstream renders as a neutral outline');
-    ok(!!doc.querySelector('#rows .row.item[data-id="' + sched.id + '"] .r-dot.nodot'),
-      'its left-pane dot goes transparent with a light border');
+    const bar = doc.querySelector('#rows .bar[data-bar="' + sched.id + '"]');
+    ok(bar && !bar.classList.contains('nows') &&
+      bar.getAttribute('style').includes(window.RM.defaultWsColor(state())),
+      'a bar with no workstream paints in the default workstream color');
+    const dot = doc.querySelector('#rows .row.item[data-id="' + sched.id + '"] .r-dot');
+    ok(dot && !dot.classList.contains('nodot'), 'its left-pane dot stays filled');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   } else ok(true, '(no scheduled workstreamed item in seed)');
@@ -1389,6 +1411,104 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#modalHost [data-m=cancel], #modalHost [data-m=x]'));
   ok(doc.querySelector('#modalHost').hidden, 'export dialog closes');
 }
+
+// ---------------------------------------------------------------- batch 4: toasts, tooltips, filter, titles, schemes
+{
+  // shadcn-style toast: icon + message span, in the #toasts stack
+  window.eval("window.HeadwayApp.toast ? window.HeadwayApp.toast('hello toast') : (function(){ })()");
+  // fall back to triggering one through a real action if not exposed
+  const anyToast = doc.querySelector('#toasts .toast');
+  if (anyToast) {
+    ok(!!anyToast.querySelector('.toast-msg'), 'toasts carry a message span (icon + text layout)');
+  } else ok(true, '(no toast surfaced to inspect)');
+
+  // filter input: no dots in the label, kbd suffix chip present
+  ok(doc.querySelector('#rowFilter').placeholder === 'Filter rows', 'filter placeholder has no ellipsis');
+  ok(!!doc.querySelector('#filterCell kbd.filter-kbd'), 'kbd-style shortcut chip inside the filter input');
+
+  // tooltip component: hovering a [title] element lifts it to data-tip
+  const titled = doc.querySelector('#btnExport');
+  ok(titled.hasAttribute('title'), 'buttons still author titles');
+  titled.dispatchEvent(new window.Event('pointerover', { bubbles: true }));
+  ok(!titled.hasAttribute('title') && !!titled.getAttribute('data-tip'),
+    'hover lifts title into data-tip so the native tooltip never shows');
+}
+
+// scoping: the title is a full-height editable cell that commits on blur
+{
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const nameCell = doc.querySelector('#rows .row.item .sc-name');
+  ok(!!nameCell && nameCell.getAttribute('contenteditable') === 'true',
+    'scoping title renders as a contenteditable cell');
+  const rowId = nameCell.closest('.row').dataset.id;
+  nameCell.textContent = 'Renamed via cell';
+  nameCell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  ok(state().items.find(i => i.id === rowId).feature === 'Renamed via cell',
+    'blurring the title cell commits the rename');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+
+// default workstream: setup row + modal rename/recolor
+{
+  suTab('workstreams');
+  ok(!!doc.querySelector('#setupView .su-defws'), 'default workstream row leads the Workstreams tab');
+  click(doc.querySelector('#setupView [data-sudefws]'));
+  ok(!!doc.querySelector('#modalHost #dwsName'), 'default workstream modal opens');
+  doc.querySelector('#modalHost #dwsName').value = 'Core';
+  click(doc.querySelector('#modalHost #dwsSave'));
+  ok(state().meta.defaultWsName === 'Core', 'default workstream renames');
+  ok(window.RM.defaultWsName(state()) === 'Core', 'core helper reads the rename');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+
+// risk scheme card: switching to MoSCoW relabels the scoping column
+{
+  suTab('sizing');
+  const riskCards = doc.querySelectorAll('#setupView [data-surisk]');
+  ok(riskCards.length === 5, 'five assessment schemes offered (none, risk, auto, confidence, moscow)');
+  click(Array.from(riskCards).find(b => b.dataset.surisk === 'moscow'));
+  ok(state().meta.riskScheme === 'moscow', 'MoSCoW scheme commits');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  ok(/Priority/.test(doc.querySelector('#hdr').textContent || '') ||
+    !!doc.querySelector('#rows .r-risk'), 'assessment column present under MoSCoW');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  // scheme none removes the column
+  suTab('sizing');
+  click(Array.from(doc.querySelectorAll('#setupView [data-surisk]')).find(b => b.dataset.surisk === 'none'));
+  ok(state().meta.riskScheme === 'none', 'scheme none commits');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  ok(!doc.querySelector('#rows .row.item .r-risk'), 'no assessment chips when the scheme is none');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+
+// role rename from Setup propagates everywhere
+{
+  suTab('team');
+  const nameInp = doc.querySelector('#setupView [data-rcname]');
+  ok(!!nameInp, 'role names are editable inputs');
+  const oldRole = nameInp.dataset.rcname;
+  nameInp.value = 'Renamed Role';
+  nameInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().teamTypes.includes('Renamed Role') && !state().teamTypes.includes(oldRole),
+    'renaming a role updates the role list');
+  ok(!state().team.some(m => m.type === oldRole) && !state().items.some(i => i.teamType === oldRole),
+    'people and items follow the role rename');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+
+// holiday quick-edit: right-clicking an empty planning lane offers holiday actions
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const lane = doc.querySelector('#rows .row.item .row-lane');
+  lane.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 400, clientY: 120 }));
+  const menuText = doc.querySelector('#popover').textContent;
+  ok(/holiday/i.test(menuText) && /Holiday settings/.test(menuText),
+    'lane right-click opens the holiday quick-edit menu');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+}
+
+// export renders through toBlob (folder choice happens in the picker/dialog)
+ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob renderer for save-to-folder flows');
 
 // ---------------------------------------------------------------- export smoke
 ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',

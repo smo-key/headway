@@ -148,6 +148,27 @@
       });
     },
 
+    // PNG export: ask where via the native dialog, write, then OPEN the file
+    savePngAndOpen: function (blob, suggestedName) {
+      return dialog.save({
+        defaultPath: suggestedName,
+        filters: [{ name: 'PNG image', extensions: ['png'] }]
+      }).then(function (p) {
+        if (!p) return null;
+        if (!/\.png$/i.test(p)) p += '.png';
+        return blob.arrayBuffer().then(function (buf) {
+          return fs.writeFile(p, new Uint8Array(buf));
+        }).then(function () {
+          var op = window.__TAURI__.opener;
+          if (op && op.openPath) {
+            // best-effort: the export succeeded even if opening doesn't
+            return op.openPath(p).then(function () { return p; }, function () { return p; });
+          }
+          return p;
+        });
+      });
+    },
+
     // open a known path (start page recents) — rejects if unreadable
     openPath: function (p) {
       return fs.readFile(p).then(function (bytes) {

@@ -129,9 +129,8 @@ function codes(state, i) { return (v.byItem[state.items[i].id] || []).map(functi
 ok(codes(sV, 1).indexOf('DEP_ORDER') !== -1, 'DEP_ORDER: starts before dep ends');
 ok(codes(sV, 2).indexOf('NO_SIZE') !== -1, 'NO_SIZE flagged');
 ok(codes(sV, 3).indexOf('UNKNOWN_DEP') !== -1, 'UNKNOWN_DEP flagged');
-ok(v.global.some(function (g) { return g.code === 'OVER_CAP' && /Data/.test(g.msg); }),
-  'role-level WIP overload flagged (a 2-focus item vs 1 Data person)');
 ok(v.global.some(function (g) { return g.code === 'OVER_CAP'; }), 'OVER_CAP: weekly WIP over what the team can focus on');
+ok(!v.global.some(function (g) { return /Data/.test(g.msg); }), 'capacity messages are role-agnostic now');
 ok(v.counts.warn > 0, 'counts aggregated');
 
 var vClean = RM.validate(mkState([{ num: 1, feature: 'solo', startDay: 0, durDays: 5, size: 'M' }]));
@@ -473,9 +472,12 @@ var sHr = mkState([
 });
 eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 0), 20, 'explicit week hours read back');
 eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 1), 40, 'unlisted weeks default to 40');
-eq(RM.availForWeek(sHr, 0).byType['Development'], 0.5, '20h = 0.5 parallel Development items');
-eq(RM.availForWeek(sHr, 0).total, 1.5, 'total people-equivalents');
-ok(RM.capacity(sHr).weeks[0].over, 'a 1-focus Development item vs 0.5 available is over');
+eq(RM.availForWeek(sHr, 0).total, 1.5, 'total people-equivalents (20h counts as 0.5)');
+ok(!RM.capacity(sHr).weeks[0].over, 'capacity is role-agnostic: 1 focus unit vs 1.5 people is fine');
+var sHrSolo = mkState([
+  { num: 1, feature: 'w', startDay: 0, durDays: 10, teamType: 'Development' }
+], { team: [{ id: 'h1', name: 'Ada', type: 'Development', weekHours: { '2026-07-27': 20 } }] });
+ok(RM.capacity(sHrSolo).weeks[0].over, 'a 1-focus item vs 0.5 available people is over');
 // legacy offWeeks migrate to zero-hour weeks
 var sOffMig = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p' }], items: [],
@@ -584,7 +586,7 @@ eq(sMsStory.items[0].stories[0].custom.c1, 'v', 'story custom fields survive nor
 // ------------------------------------------------------------- work week & costs
 section('work week & costs');
 var sWw = mkState([{ num: 1, feature: 'x' }]);
-sWw.meta.daysPerWeek = 4;
+sWw.meta.workDays = [1, 2, 3, 4]; // Mon-Thu
 sWw.meta.weekHours = 32;
 eq(RM.workInSpan(sWw.meta, 0, 5), 4, 'a 4-day week holds 4 working days per index week');
 eq(RM.stretchSpan(sWw.meta, 0, 5), 6, '5 work days stretch across the off slot');
@@ -595,6 +597,33 @@ eq(RM.availForWeek(sWw, 0).total, 1, '32 h at a 32 h full-time week = 1 person')
 var sWw5 = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, weekHours: 32, daysPerWeek: 4 }, phases: [{ id: 'p' }], items: [] });
 eq(sWw5.meta.weekHours, 32, 'weekHours survives normalize');
 eq(sWw5.meta.daysPerWeek, 4, 'daysPerWeek survives normalize');
+eq(sWw5.meta.workDays.join(','), '1,2,3,4', 'legacy daysPerWeek 4 migrates to Mon-Thu');
+eq(sWw5.meta.weekStart, 1, 'week starts Monday by default');
+
+// which weekdays work + first day of week
+var sWd = RM.normalizeState({
+  meta: { timelineStart: '2026-07-28', numWeeks: 8, weekStart: 0, workDays: [0, 1, 2, 3, 4] },
+  phases: [{ id: 'p' }], items: []
+});
+eq(sWd.meta.timelineStart, '2026-07-26', 'timeline start snaps back to the first day of the week (Sunday)');
+eq(RM.fmtISO(RM.dayToDate(sWd.meta, 0)), '2026-07-26', 'slot 0 = Sunday');
+eq(RM.fmtISO(RM.dayToDate(sWd.meta, 4)), '2026-07-30', 'slot 4 = Thursday (Sun-Thu week)');
+eq(RM.dateToDay(sWd.meta, RM.parseISO('2026-07-31')), 4, 'a non-working Friday maps back to the last working slot');
+var sWd2 = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, workDays: [2, 3, 4, 5, 6] }, // Tue-Sat
+  phases: [{ id: 'p' }], items: []
+});
+eq(RM.fmtISO(RM.dayToDate(sWd2.meta, 0)), '2026-07-28', 'Tue-Sat week: slot 0 lands on Tuesday');
+eq(RM.fmtISO(RM.dayToDate(sWd2.meta, 4)), '2026-08-01', 'Tue-Sat week: slot 4 lands on Saturday');
+// a holiday that falls on a non-working weekday is ignored
+var sWd3 = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, workDays: [1, 2, 3, 4], holidaysV2026: true,
+    holidayRanges: [{ name: 'F', start: '2026-07-31', end: '2026-07-31' }, { name: 'T', start: '2026-07-28', end: '2026-07-28' }] },
+  phases: [{ id: 'p' }], items: []
+});
+var wd3set = RM.holidayDaySet(sWd3.meta);
+ok(!wd3set[4], 'a Friday holiday in a Mon-Thu week does not exist in the index space');
+ok(wd3set[1], 'a Tuesday holiday registers on its slot');
 
 var sCst = mkState([{ num: 1, feature: 'x' }]);
 sCst.costs = [
@@ -953,3 +982,64 @@ function finish() {
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
+
+// ------------------------------------------------------------- risk schemes
+section('risk schemes');
+var sRs = mkState([{ num: 1, feature: 'a' }]);
+eq(RM.riskSchemeOf(sRs), 'none', 'new documents track no assessment column');
+ok(!RM.riskEnabled(sRs), 'riskEnabled false when none');
+var sRs2 = mkState([{ num: 1, feature: 'a', risk: 'H' }]);
+eq(RM.riskSchemeOf(sRs2), 'risk', 'legacy docs that used Risk keep the risk scheme');
+eq(sRs2.items[0].risk, 'H', 'risk value survives');
+RM.setRiskScheme(sRs2, 'moscow');
+eq(sRs2.items[0].risk, null, 'switching schemes clears values the new scheme does not know');
+eq(RM.riskColLabel(sRs2), 'Priority', 'MoSCoW relabels the column Priority');
+eq(RM.riskOrderOf(sRs2).join(''), 'MSCW', 'MoSCoW options');
+var sRs3 = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, riskScheme: 'confidence', holidaysV2026: true },
+  phases: [{ id: 'p' }], items: [{ num: 1, feature: 'a', risk: 'H' }, { num: 2, feature: 'b', risk: 'W' }]
+});
+eq(sRs3.items[0].risk, 'H', 'confidence keeps H');
+eq(sRs3.items[1].risk, null, 'a value outside the scheme is dropped');
+eq(RM.riskColLabel(sRs3), 'Confidence', 'confidence label');
+
+// ------------------------------------------------------------- default workstream
+section('default workstream');
+var sDw = mkState([{ num: 1, feature: 'a' }]);
+eq(RM.defaultWsName(sDw), 'General', 'default workstream is General');
+eq(RM.colorForWs(sDw, ''), RM.PALETTE.product, 'null workstream paints the default blue');
+sDw.meta.defaultWsName = 'Core';
+sDw.meta.defaultWsColor = '08875B';
+eq(RM.defaultWsName(sDw), 'Core', 'default workstream renames');
+eq(RM.colorForWs(sDw, ''), '08875B', 'default workstream color follows the setting');
+var sDwN = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, defaultWsColor: 'nope', holidaysV2026: true }, phases: [{ id: 'p' }], items: [] });
+eq(sDwN.meta.defaultWsColor, RM.PALETTE.product, 'bad default color falls back to blue');
+
+// ------------------------------------------------------------- role rename
+section('role rename');
+var sRr = mkState([{ num: 1, feature: 'a', teamType: 'Development' }], {
+  team: [{ name: 'Ada', type: 'Development' }]
+});
+sRr.meta.rateCard = { Development: { rate: 200, cost: 90 } };
+ok(RM.renameRole(sRr, 'Development', 'Engineer'), 'rename succeeds');
+eq(sRr.teamTypes.indexOf('Engineer') !== -1, true, 'role list renamed');
+eq(sRr.team[0].type, 'Engineer', 'people follow the rename');
+eq(sRr.items[0].teamType, 'Engineer', 'items follow the rename');
+eq(sRr.meta.rateCard.Engineer.rate, 200, 'rate card key follows the rename');
+ok(!RM.renameRole(sRr, 'Engineer', 'Data'), 'rename refuses an existing name');
+eq(RM.DEFAULT_TEAM_TYPES[0], 'Software Engineer', 'default roles use real role names');
+
+// ------------------------------------------------------------- rigid chain drag
+section('rigid chain shift');
+var sRg = mkState([
+  { num: 1, feature: 'root', startDay: 0, durDays: 5 },
+  { num: 2, feature: 'mid', deps: [1], startDay: 20, durDays: 5 },
+  { num: 3, feature: 'leaf', deps: [2], startDay: 40, durDays: 5 },
+  { num: 4, feature: 'pin', deps: [1], startDay: 30, durDays: 5, milestone: true }
+]);
+eq(RM.shiftDependents(sRg, sRg.items[0].id, 5, { rigid: true }), 3, 'rigid push moves the whole chain, slack or not');
+eq(sRg.items[1].startDay, 25, 'direct dependent moved by the full delta');
+eq(sRg.items[2].startDay, 45, 'transitive dependent moved by the full delta');
+eq(sRg.items[3].startDay, 35, 'milestones ride along under a rigid drag');
+RM.shiftDependents(sRg, sRg.items[0].id, -5, { rigid: true });
+eq(sRg.items[2].startDay, 40, 'rigid pull brings the chain back');

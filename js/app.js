@@ -64,7 +64,6 @@
   var groupEpic = false;     // …and/or by epic (nested under workstream)
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
-  var capType = 'Development'; // work type the header capacity row counts ('' = all)
   var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
@@ -105,7 +104,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, capType: capType, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen };
   }
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
@@ -122,7 +121,6 @@
     autoOrder = ui.autoOrder !== false; // default true
     showCrit = ui.showCrit !== false;   // default true
     showCap = ui.showCap !== false;     // default true
-    capType = ui.capType != null ? ui.capType : 'Development';
     resPanelH = ui.resPanelH > 40 ? ui.resPanelH : 150;
     panelSec = ui.panelSec && typeof ui.panelSec === 'object' ? ui.panelSec : {};
     leftWPlan = ui.leftWPlan > 200 ? ui.leftWPlan : 538;
@@ -233,14 +231,73 @@
   }
 
   // ------------------------------------------------------------ toasts, popover, modal
+  // shadcn-style toasts: surface card + icon, bottom-center of the screen
   function toast(msg, kind) {
     var el = document.createElement('div');
     el.className = 'toast' + (kind === 'err' ? ' err' : '');
-    el.textContent = msg;
+    el.innerHTML =
+      '<i data-lucide="' + (kind === 'err' ? 'circle-alert' : 'circle-check') + '"></i>' +
+      '<span class="toast-msg"></span>';
+    el.querySelector('.toast-msg').textContent = msg;
     $('#toasts').appendChild(el);
-    setTimeout(function () { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 3400);
+    if (window.lucide) lucide.createIcons();
+    setTimeout(function () { el.classList.add('gone'); }, 3400);
     setTimeout(function () { el.remove(); }, 3800);
   }
+
+  // ---- tooltips: one styled component for EVERY hint in the app. Titles
+  // are lifted to data-tip on first hover (so the native browser tooltip
+  // never renders) and shown in a fixed, positioned element after a delay.
+  var uiTip = null, uiTipTimer = null, uiTipFor = null;
+  function hideUiTip() {
+    clearTimeout(uiTipTimer);
+    uiTipTimer = null;
+    uiTipFor = null;
+    if (uiTip) uiTip.hidden = true;
+  }
+  document.addEventListener('pointerover', function (e) {
+    if (!e.target.closest) return;
+    var t = e.target.closest('[title], [data-tip]');
+    if (!t) { if (uiTipFor) hideUiTip(); return; }
+    if (t.hasAttribute && t.hasAttribute('title')) {
+      var tv = t.getAttribute('title');
+      t.removeAttribute('title');
+      if (tv) t.setAttribute('data-tip', tv);
+    }
+    var text = t.getAttribute && t.getAttribute('data-tip');
+    if (!text || drag) { hideUiTip(); return; }
+    if (uiTipFor === t) return;
+    uiTipFor = t;
+    clearTimeout(uiTipTimer);
+    uiTipTimer = setTimeout(function () {
+      if (uiTipFor !== t || !document.contains(t) || drag) return;
+      if (!uiTip) {
+        uiTip = document.createElement('div');
+        uiTip.id = 'uiTip';
+        document.body.appendChild(uiTip);
+      }
+      uiTip.textContent = t.getAttribute('data-tip');
+      uiTip.hidden = false;
+      uiTip.style.left = '0px';
+      uiTip.style.top = '0px';
+      var r = t.getBoundingClientRect();
+      var tr = uiTip.getBoundingClientRect();
+      var x = Math.min(Math.max(6, r.left + r.width / 2 - tr.width / 2), innerWidth - tr.width - 6);
+      var y = r.top - tr.height - 7;
+      if (y < 6) y = r.bottom + 7;
+      uiTip.style.left = x + 'px';
+      uiTip.style.top = y + 'px';
+    }, 420);
+  });
+  document.addEventListener('pointerout', function (e) {
+    if (!uiTipFor) return;
+    if (e.target === uiTipFor || (uiTipFor.contains && uiTipFor.contains(e.target))) {
+      if (!(e.relatedTarget && uiTipFor.contains && uiTipFor.contains(e.relatedTarget))) hideUiTip();
+    }
+  });
+  document.addEventListener('pointerdown', hideUiTip, true);
+  document.addEventListener('scroll', hideUiTip, true);
+  window.addEventListener('blur', hideUiTip);
 
   // wire() callbacks attach delegated listeners to the host — swap in a clean
   // clone on every open so listeners never accumulate across opens
@@ -381,13 +438,28 @@
     ['workstream', 'Workstream', 130, 80],
     ['epic', 'Epic', 150, 80]
   ];
-  // fixed columns follow the project's feature switches
+  // fixed columns follow the project's feature switches; the assessment
+  // column's label follows its scheme (Risk / Confidence / Priority)
   function scopeFixedCols() {
     return SCOPE_FIXED.filter(function (c) {
       if (c[0] === 'size') return RM.sizingEnabled(state);
+      if (c[0] === 'risk') return RM.riskEnabled(state);
       if (c[0] === 'workstream') return state.meta.workstreamsEnabled;
       return true;
+    }).map(function (c) {
+      if (c[0] !== 'risk') return c;
+      return [c[0], RM.riskColLabel(state), c[2], c[3]];
     });
+  }
+  // human labels for the assessment column's one-letter values, per scheme
+  var RISK_VALUE_LABELS = {
+    risk: { L: 'Low', M: 'Medium', H: 'High' },
+    confidence: { H: 'High', M: 'Medium', L: 'Low' },
+    moscow: { M: 'Must', S: 'Should', C: 'Could', W: 'Won\u2019t' }
+  };
+  function riskValueLabel(v) {
+    var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
+    return mp[v] || v || '';
   }
   function allScopeCols() { return scopeFixedCols().concat(scopeCols()); }
   function scopeCols() {
@@ -580,7 +652,7 @@
     var maxCost = 1;
     rep.rows.forEach(function (r) { if (r.cost > maxCost) maxCost = r.cost; });
     var wsBars = rep.rows.map(function (r) {
-      var col = '#' + RM.colorForWs(state, r.key === '(no workstream)' ? '' : r.key);
+      var col = '#' + RM.colorForWs(state, r.key === RM.defaultWsName(state) ? '' : r.key);
       return barRow(r.key, r.cost / maxCost,
         fmtMoney(r.cost) + ' · ' + (Math.round(r.days / 5 * 10) / 10) + 'w', col);
     }).join('') || '<div class="p-none">Nothing scheduled or sized yet.</div>';
@@ -745,8 +817,8 @@
     var cap = validation.capacity;
     for (var w = 0; w < meta.numWeeks; w++) {
       var cell = cap.weeks[w];
-      var avail = capType ? (cell.capByType[capType] || 0) : cell.cap;
-      var demand = capType ? (cell.demandByType[capType] || 0) : cell.demand;
+      var avail = cell.cap;
+      var demand = cell.demand;
       var hn = RM.holidaysInWeek(meta, w, hset);
       var cls, txt2 = '', title;
       if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
@@ -756,7 +828,7 @@
         var over = demand > avail + 1e-9;
         cls = over ? 'over' : (avail > 0 && demand / avail > 0.85 ? 'mid' : (demand === 0 ? 'idle' : 'ok'));
         txt2 = weekPx >= 20 ? fmtPe(avail) : '';
-        title = fmtPe(avail) + ' ' + (capType || '') + ' available' +
+        title = fmtPe(avail) + ' available' +
           (over ? ' — looks like too much concurrent work (' + fmtPe(demand) + ' focus units in flight)'
             : demand ? ' · ' + fmtPe(demand) + ' focus units in flight' : '');
       }
@@ -791,7 +863,7 @@
     var phLine = $('#hdrPhases').parentNode;
     // the line stays visible even with no phase spans, keeping the header
     // heights stable
-    phLine.style.height = (phLanes.length ? phLanes.length * PH_H + 4 : 22) + 'px';
+    phLine.style.height = Math.max(34, phLanes.length ? phLanes.length * PH_H + 4 : 0) + 'px';
     phLine.style.display = '';
     $('#hdrPhases').innerHTML = phCells.join('');
     $('#hdrPhases').style.width = laneW + 'px';
@@ -799,8 +871,8 @@
     $('#hdrSprints').innerHTML = hs.join('');
     $('#hdrSprints').style.width = laneW + 'px';
     $('#hdrCap').innerHTML = hc.join('');
-    $('#capTypeCell').innerHTML = ddButton('captype',
-      'available: ' + (capType ? esc(capType) : 'all roles'), null, 'Which role the availability row counts');
+    $('#capTypeCell').innerHTML =
+      '<span class="cap-lab" title="People available each week (fractional) vs size-weighted work in flight">available</span>';
     if (window.lucide) lucide.createIcons();
   }
 
@@ -886,17 +958,6 @@
   });
   $('#hdrPhases').addEventListener('mouseout', function (e) {
     if (!e.relatedTarget || !e.relatedTarget.closest('.ph-cell')) phTip.hidden = true;
-  });
-
-  // capacity-row work-type filter dropdown
-  $('#capTypeCell').addEventListener('click', function (e) {
-    var dd = e.target.closest('[data-dd="captype"]');
-    if (!dd) return;
-    var items = [{ label: 'All roles', checked: !capType, fn: function () { capType = ''; saveLocal(); render(); } }];
-    state.teamTypes.forEach(function (t) {
-      items.push({ label: esc(t), checked: capType === t, fn: function () { capType = t; saveLocal(); render(); } });
-    });
-    openDropdown(dd, items);
   });
 
   // click a capacity cell to toggle that week as a holiday week
@@ -1006,14 +1067,12 @@
       '<span class="port p-out" data-port="out" title="Drag to another bar: it depends on this"></span>';
     var doneCk = it.done
       ? '<span class="b-done" title="Done"><i data-lucide="circle-check"></i></span>' : '';
-    // no workstream (while the feature is on): neutral outline instead of color
-    var noWs = state.meta.workstreamsEnabled && !it.workstream && !it.colorOverride;
     if (isScheduled(it) && it.milestone) {
       // milestone: a diamond pinned to its fixed date, label at its right
       var msTip = it.feature + '  ·  ' + RM.fmtShort(RM.dayToDate(meta, it.startDay)) + '  ·  milestone' +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       laneInner =
-        '<div class="bar ms' + (noWs ? ' nows' : '') + (selectedId === it.id && !selStory ? ' selected' : '') +
+        '<div class="bar ms' + (selectedId === it.id && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -1041,7 +1100,7 @@
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
       laneInner =
-        '<div class="bar' + (noWs ? ' nows' : '') + (selectedId === it.id ? ' selected' : '') +
+        '<div class="bar' + (selectedId === it.id ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -1062,15 +1121,30 @@
         size: it.milestone
           ? '<span class="r-size" title="Milestone — no size">—</span>'
           : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
-        risk: '<span class="r-risk rk-' + rk.level + (it.risk ? ' has-risk' : '') + '" tabindex="0" role="button" data-act="risk" title="' + esc(riskTitle) + '">' +
-          (it.risk || (rk.level === 'none' ? '' : rk.level.charAt(0).toUpperCase())) + '</span>',
+        risk: (function () {
+          var sch = RM.riskSchemeOf(state);
+          if (sch === 'auto') {
+            // computed straight from the dependency graph — read-only
+            var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
+              : 'Dependency risk ' + rk.level + ':\n\u00B7 ' + rk.reasons.join('\n\u00B7 ');
+            return '<span class="r-risk rk-' + rk.level + '" tabindex="0" title="' + esc(autoTitle) + '">' +
+              (rk.level === 'none' ? '' : rk.level.charAt(0).toUpperCase()) + '</span>';
+          }
+          var hintLevel = sch === 'risk' ? rk.level : 'none'; // graph hint only for risk
+          var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) + ' \u2014 click to change' +
+            (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '');
+          return '<span class="r-risk rk-' + hintLevel + (it.risk ? ' has-risk' : '') +
+            '" tabindex="0" role="button" data-act="risk" title="' + esc(chipTitle) + '">' +
+            (it.risk || (hintLevel === 'none' ? '' : hintLevel.charAt(0).toUpperCase())) + '</span>';
+        })(),
         duration: it.milestone
           ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
           : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit">' +
             (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '') + '</span>',
         workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream — click to change">' +
-          (it.workstream ? '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
-            esc(shorten(it.workstream, 18)) : '') + '</span>',
+          '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+          (it.workstream ? esc(shorten(it.workstream, 18))
+            : '<i class="dws">' + esc(shorten(RM.defaultWsName(state), 18)) + '</i>') + '</span>',
         epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic — click to change">' +
           (epIco2 ? '<i data-lucide="' + epIco2 + '"></i>' : '') +
           (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>'
@@ -1097,11 +1171,15 @@
       '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
       (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>' +
       '<span class="r-num">' + it.num + '</span>' +
-      (noWs ? '<span class="r-dot nodot"></span>' : '<span class="r-dot" style="background:' + color + '"></span>') +
+      '<span class="r-dot" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
-      '<input class="r-name" data-rowname spellcheck="false" value="' + esc(it.feature) + '" placeholder="(untitled)" title="' + esc(it.feature + (it.description ? '\n' + RM.htmlToText(it.description) : '')) + '">' +
+      (view === 'scoping'
+        // scoping: the title is a full-height editable cell in the tab ring,
+        // top-aligned and wrapping like every other cell
+        ? '<div class="r-name sc-name" contenteditable="true" spellcheck="false" aria-label="Feature title">' + esc(it.feature) + '</div>'
+        : '<input class="r-name" data-rowname spellcheck="false" value="' + esc(it.feature) + '" placeholder="(untitled)" title="' + esc(it.feature + (it.description ? '\n' + RM.htmlToText(it.description) : '')) + '">') +
       (it.epic && !groupEpic ? '<span class="r-epic" title="' + esc(it.epic) + '">' +
         (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
         esc(it.epic) + '</span>' : '') +
@@ -1206,7 +1284,7 @@
             '" data-ws="' + esc(key) + '">' +
             '<div class="row-left">' +
             '<span class="r-dot" style="background:#' + RM.colorForWs(state, key) + '"></span>' +
-            '<span class="eb-name">' + (key ? esc(key) : '<i>no workstream</i>') +
+            '<span class="eb-name">' + (key ? esc(key) : esc(RM.defaultWsName(state)) + ' <i style="font-weight:400">default</i>') +
             '</span><span class="band-count">' + wg.by[key].length + '</span></div>' +
             '<div class="row-lane"></div></div>');
           if (groupEpic) epicBands(wg.by[key], true);
@@ -1397,10 +1475,10 @@
       return '<button data-f="size" data-v="' + esc(s) + '"' + (it.size === s ? ' class="on"' : '') +
         ' title="' + fmtDays(RM.sizeDays(state, s)) + '">' + esc(s) + '</button>';
     }).join('');
-    var riskBtns = ['<button data-f="riskSize" data-v=""' + (!it.risk ? ' class="on"' : '') + ' title="No risk">None</button>']
-      .concat(RM.RISK_ORDER.map(function (s) {
+    var riskBtns = ['<button data-f="riskSize" data-v=""' + (!it.risk ? ' class="on"' : '') + ' title="Not set">None</button>']
+      .concat(RM.riskOrderOf(state).map(function (s) {
         return '<button data-f="riskSize" data-v="' + s + '"' + (it.risk === s ? ' class="on"' : '') +
-          ' title="' + (s === 'L' ? 'Low' : s === 'M' ? 'Medium' : 'High') + ' risk">' + s + '</button>';
+          ' title="' + esc(riskValueLabel(s)) + '">' + s + '</button>';
       })).join('');
 
     var scheduleInfo = '';
@@ -1441,7 +1519,19 @@
         '</div>';
     }
 
-    var riskInfo = '<div class="seg">' + riskBtns + '</div>';
+    // assessment block follows the project's scheme: hidden when off,
+    // read-only when auto-computed
+    var riskInfo = '';
+    if (RM.riskSchemeOf(state) === 'auto') {
+      var rkP = RM.depRisk(state, it);
+      riskInfo = '<label class="p-lab" style="margin-top:10px">Risk (auto)</label>' +
+        '<div class="m-hint" style="margin-top:2px">' +
+        (rkP.level === 'none' ? 'No dependency risk detected.'
+          : esc(rkP.level.toUpperCase()) + ' \u2014 ' + esc(rkP.reasons.join('; '))) + '</div>';
+    } else if (RM.riskEnabled(state)) {
+      riskInfo = '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state)) + '</label>' +
+        '<div class="seg">' + riskBtns + '</div>';
+    }
 
     var depChips = it.deps.map(function (n) {
       var d = RM.itemByNum(state, n);
@@ -1514,7 +1604,7 @@
           '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
           '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>') +
         scheduleInfo +
-        '<label class="p-lab" style="margin-top:10px">Risk buffer</label>' + riskInfo +
+        riskInfo +
         '<div class="p-row" style="margin-top:10px">' +
         '<label class="p-check fixed"><input type="checkbox" data-f="locked"' + (it.locked ? ' checked' : '') + '> Locked</label>' +
         '<label class="p-check fixed"><input type="checkbox" data-f="done"' + (it.done ? ' checked' : '') + '> Done</label>' +
@@ -1736,6 +1826,50 @@
             }
             if (picked) s.epicIcons[name2] = picked;
             else delete s.epicIcons[name2];
+          });
+        };
+      });
+  }
+
+  // edit the DEFAULT workstream (what a null workstream means): name + color
+  function defaultWsModal() {
+    var cur = '#' + RM.defaultWsColor(state);
+    var setting = state.meta.defaultWsColor || null;
+    var count = state.items.filter(function (x) { return !x.workstream; }).length;
+    var sw = RM.PALETTE_KEYS.map(function (k) {
+      return '<button class="swatch' + (('' + setting).toUpperCase() === RM.PALETTE[k] ? ' on' : '') +
+        '" data-esw="' + RM.PALETTE[k] + '" style="background:#' + RM.PALETTE[k] + '" title="' + k + '"></button>';
+    }).join('');
+    openModal(
+      '<div class="modal" style="width:420px">' +
+      '<div class="m-head"><h2>Default workstream</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body">' +
+      '<div class="m-sec"><label>Name</label><input id="dwsName" style="width:100%" value="' + esc(RM.defaultWsName(state)) + '">' +
+      '<div class="m-hint">Items without a workstream belong here (' + count + ' item(s) right now).</div></div>' +
+      '<div class="m-sec"><label>Color</label><div class="swatches">' + sw +
+      '<input type="color" id="dwsColor" value="' + cur + '" title="Custom color"></div></div>' +
+      '</div>' +
+      '<div class="m-foot"><button data-m="x2">Cancel</button><button id="dwsSave" class="primary">Save</button></div></div>',
+      function (host) {
+        var picked = null;
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=x2]', host).onclick = closeModal;
+        host.addEventListener('click', function (ev) {
+          var b = ev.target.closest('[data-esw]');
+          if (!b) return;
+          picked = b.dataset.esw;
+          $$('.swatch', host).forEach(function (s) { s.classList.toggle('on', s === b); });
+        });
+        $('#dwsColor', host).addEventListener('change', function (ev) {
+          picked = String(ev.target.value).replace(/^#/, '').toUpperCase();
+          $$('.swatch', host).forEach(function (s) { s.classList.remove('on'); });
+        });
+        $('#dwsSave', host).onclick = function () {
+          var nv = $('#dwsName', host).value.trim();
+          closeModal();
+          commit('default workstream', function (s) {
+            if (nv) s.meta.defaultWsName = nv;
+            if (picked) s.meta.defaultWsColor = picked;
           });
         };
       });
@@ -2259,7 +2393,7 @@
     if (dragConsumedClick) { dragConsumedClick = false; return; }
     // scoping text cells and inline editors edit in place — selecting would
     // re-render and steal their focus
-    if (e.target.closest('.sc-edit,.st-add-input,.hc-edit,input.r-name')) return;
+    if (e.target.closest('.sc-edit,.st-add-input,.hc-edit,input.r-name,.sc-name')) return;
     var act = e.target.closest('[data-act]');
     var rowEl = e.target.closest('.row');
     if (!rowEl) return;
@@ -2363,10 +2497,11 @@
           return;
         }
         case 'risk': {
+          if (RM.riskSchemeOf(state) === 'auto') return; // computed, not set
           openDropdown(act, [{ label: '<i>None</i>', checked: !it.risk, fn: function () {
             setItemRisk(itemId, null);
-          } }].concat(RM.RISK_ORDER.map(function (sz) {
-            return { label: sz, checked: it.risk === sz, fn: function () {
+          } }].concat(RM.riskOrderOf(state).map(function (sz) {
+            return { label: sz + ' \u00B7 ' + esc(riskValueLabel(sz)), checked: it.risk === sz, fn: function () {
               setItemRisk(itemId, sz);
             } };
           })));
@@ -2378,9 +2513,13 @@
         }
         case 'ws': {
           var wsList = allWorkstreams();
-          var wsItems = [{ label: '<i>— none —</i>', checked: !it.workstream, fn: function () {
-            commit('workstream', function (s) { RM.itemById(s, itemId).workstream = ''; });
-          } }];
+          var wsItems = [{
+            label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>',
+            dot: '#' + RM.defaultWsColor(state),
+            checked: !it.workstream,
+            fn: function () { commit('workstream', function (s) { RM.itemById(s, itemId).workstream = ''; }); },
+            edit: function () { defaultWsModal(); }
+          }];
           wsList.forEach(function (w) {
             wsItems.push({
               label: esc(w),
@@ -2519,9 +2658,57 @@
   rowsEl.addEventListener('mouseleave', clearPlacePreview);
 
   // right-click context menus on rows
+  // right-clicking an empty timeline slot edits the holiday list in place
+  function holidayMenuItems(day) {
+    var meta = state.meta;
+    var iso = RM.fmtISO(RM.dayToDate(meta, day));
+    var wk = Math.floor(day / 5);
+    var w0 = RM.fmtISO(RM.dayToDate(meta, wk * 5));
+    var w1 = RM.fmtISO(RM.dayToDate(meta, wk * 5 + RM.daysPerWeekOf(meta) - 1));
+    var hitIdx = -1, hitName = '';
+    (meta.holidayRanges || []).forEach(function (r, i) {
+      if (hitIdx === -1 && iso >= r.start && iso <= r.end) { hitIdx = i; hitName = r.name; }
+    });
+    var items = [];
+    if (hitIdx !== -1) {
+      var rmIdx = hitIdx;
+      items.push({ icon: 'calendar-x', label: 'Remove holiday' + (hitName ? ' \u201C' + esc(shorten(hitName, 22)) + '\u201D' : '') +
+        ' \u00B7 ' + esc(RM.fmtShort(RM.parseISO(iso))), fn: function () {
+        commit('holiday rm', function (s) { RM.removeHolidayRange(s.meta, rmIdx); });
+      } });
+    } else {
+      items.push({ icon: 'calendar-plus', label: 'Add holiday \u00B7 ' + esc(RM.fmtShort(RM.parseISO(iso))), fn: function () {
+        commit('holiday add', function (s) { RM.addHolidayRange(s.meta, '', iso, iso); });
+      } });
+    }
+    var fullWeek = RM.holidaysInWeek(meta, wk) === 5;
+    items.push(fullWeek
+      ? { icon: 'calendar-check', label: 'Make week of ' + esc(RM.fmtShort(RM.parseISO(w0))) + ' a working week', fn: function () {
+          commit('toggle holiday', function (s) { RM.clipHolidayRanges(s.meta, w0, w1); });
+        } }
+      : { icon: 'calendar-off', label: 'Mark week of ' + esc(RM.fmtShort(RM.parseISO(w0))) + ' as a holiday week', fn: function () {
+          commit('toggle holiday', function (s) { RM.addHolidayRange(s.meta, '', w0, w1); });
+        } });
+    items.push({ sep: true });
+    items.push({ icon: 'settings-2', label: 'Holiday settings\u2026', fn: function () {
+      view = 'setup';
+      setupTab = 'timeline';
+      saveLocal();
+      render();
+    } });
+    return items;
+  }
+
   rowsEl.addEventListener('contextmenu', function (e) {
     var rowEl = e.target.closest('.row');
     if (!rowEl || e.target.closest('input,textarea,select')) return;
+    if ((view === 'planning' || view === 'budget') &&
+        e.target.closest('.row-lane') && !e.target.closest('.bar,.st-bar')) {
+      e.preventDefault();
+      e.stopPropagation();
+      openContextMenu(e.clientX, e.clientY, holidayMenuItems(Math.max(0, laneDayAt(e.clientX))));
+      return;
+    }
     if (view === 'budget') return; // budget rows carry their own menu below
     e.preventDefault();
     e.stopPropagation(); // the document fallback must not replace this menu
@@ -2751,7 +2938,7 @@
     });
     var row = rowsEl.querySelector('.row[data-id="' + newId + '"]');
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
-    var inp = row && row.querySelector('input.r-name');
+    var inp = row && row.querySelector('input.r-name,.sc-name');
     if (inp) inp.focus();
   }
 
@@ -2945,17 +3132,44 @@
     if (window.lucide) lucide.createIcons();
     return scFmtBar;
   }
+  var scFmtTarget = null; // the editor the bar is anchored to
+  function placeScFmtBar() {
+    if (!scFmtTarget || !scFmtBar || scFmtBar.hidden) return;
+    var r = scFmtTarget.getBoundingClientRect();
+    scFmtBar.style.left = Math.max(4, r.left) + 'px';
+    scFmtBar.style.top = Math.max(4, r.top - 32) + 'px';
+  }
   rowsEl.addEventListener('focusin', function (e) {
     if (!e.target.classList || !e.target.classList.contains('sc-rich')) return;
-    var bar = ensureScFmtBar();
-    var r = e.target.getBoundingClientRect();
-    bar.style.left = Math.max(4, r.left) + 'px';
-    bar.style.top = Math.max(4, r.top - 32) + 'px';
-    bar.hidden = false;
+    ensureScFmtBar().hidden = false;
+    scFmtTarget = e.target;
+    placeScFmtBar();
   });
   rowsEl.addEventListener('focusout', function (e) {
     if (e.target.classList && e.target.classList.contains('sc-rich') && scFmtBar) {
       scFmtBar.hidden = true;
+      scFmtTarget = null;
+    }
+  });
+  // the bar rides along when the board scrolls under it
+  board.addEventListener('scroll', placeScFmtBar, { passive: true });
+  window.addEventListener('resize', placeScFmtBar);
+
+  // scoping title cell: plain text, commits on blur; Enter = done
+  rowsEl.addEventListener('focusout', function (e) {
+    if (!e.target.classList || !e.target.classList.contains('sc-name')) return;
+    var rowEl0 = e.target.closest('.row');
+    var rid0 = rowEl0 && rowEl0.dataset.id;
+    if (!rid0) return;
+    var nv0 = e.target.textContent.replace(/\s+/g, ' ').trim();
+    var cur0 = (RM.itemById(state, rid0) || {}).feature || '';
+    if (nv0 === cur0) return;
+    commit('rename', function (s2) { RM.itemById(s2, rid0).feature = nv0; });
+  });
+  rowsEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('sc-name')) {
+      e.preventDefault();
+      e.target.blur();
     }
   });
 
@@ -3397,6 +3611,7 @@
       dragTip.innerHTML = '<b>' + RM.fmtShort(RM.dayToDate(meta, ns)) + '</b> → ' + RM.fmtShort(endD) +
         ' · ' + fmtDays(work) + (it.size ? ' <b>(' + it.size + ')</b>' : '') +
         (nr > 0 ? ' + ' + fmtDays(riskWork) + ' risk' : '');
+      if (drag.ripple) dragTip.innerHTML += ' · moves chain';
     }
   }
 
@@ -3413,13 +3628,14 @@
       t.durDays = d.nd;
       t.riskDays = d.nr;
       if (d.ripple) {
+        // \u2318-drag moves the whole dependent chain rigidly with the bar
         var endDelta = (d.ns + d.nd + d.nr) - endBefore;
-        rippleMoved = RM.shiftDependents(s, t.id, endDelta);
+        rippleMoved = RM.shiftDependents(s, t.id, endDelta, { rigid: true });
       }
       if (vr) applyDrop(s, d.itemId, vr);
       if (autoOrder) RM.sortItemsByStart(s);
     });
-    if (rippleMoved) toast('Pushed ' + rippleMoved + ' dependent item(s) along');
+    if (rippleMoved) toast('Moved ' + rippleMoved + ' chained item(s) along');
   }
 
   // story bars: move / edge-resize, no ports, no ripple, no auto-order
@@ -4495,6 +4711,7 @@
   // right-click: budget people and cost rows get their own menus
   rowsEl.addEventListener('contextmenu', function (e) {
     if (view !== 'budget') return;
+    if (e.target.closest('.row-lane')) return; // lane = holiday quick-edit menu
     var costRow = e.target.closest('[data-cost]');
     var roleRow = e.target.closest('[data-mid]');
     if (!costRow && !roleRow) return;
@@ -4616,6 +4833,14 @@
         '<td class="hol-x"><button data-suszrm="' + esc(s2) + '" title="Remove option"><i data-lucide="x"></i></button></td>' +
         '</tr>';
     }).join('');
+    var riskRows = RM.RISK_SCHEME_ORDER.map(function (k) {
+      var rs = RM.RISK_SCHEMES[k];
+      var on = RM.riskSchemeOf(state) === k;
+      return '<button class="su-scheme' + (on ? ' on' : '') + '" data-surisk="' + k + '">' +
+        '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+        '<span class="su-scheme-main"><b>' + esc(rs.name) + '</b><span>' + esc(rs.desc) + '</span></span>' +
+        '</button>';
+    }).join('');
     var sizingCards = RM.sizingEnabled(state)
       ? '<section class="su-card"><h2>Size options</h2>' +
         '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
@@ -4639,6 +4864,18 @@
     function grip() {
       return '<span class="su-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>';
     }
+    // the default workstream (null in the data) leads the list — renamable,
+    // recolorable, not deletable and not draggable
+    var defaultWsRow = (function () {
+      var count = state.items.filter(function (x) { return !x.workstream; }).length;
+      return '<div class="su-row su-defws">' +
+        '<span class="dd-dot" style="background:#' + RM.defaultWsColor(state) + '"></span>' +
+        '<span class="su-name">' + esc(RM.defaultWsName(state)) + '</span>' +
+        '<span class="band-bucket-tag">default</span>' +
+        '<span class="band-count">' + count + '</span>' +
+        '<button data-sudefws title="Edit — items without a workstream use this name and color"><i data-lucide="pencil"></i></button>' +
+        '</div>';
+    })();
     var wsRows = allWorkstreams().map(function (w) {
       var count = state.items.filter(function (x) { return x.workstream === w; }).length;
       return '<div class="su-row" data-key="' + esc(w) + '">' + grip() +
@@ -4662,12 +4899,14 @@
 
     var typeCounts = {};
     state.team.forEach(function (mm) { typeCounts[mm.type] = (typeCounts[mm.type] || 0) + 1; });
+    var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    var firstDayName = DAY_NAMES[RM.weekStartOf(m)];
     // roles carry the RATE CARD: default hourly rate/cost that people of the
     // role inherit unless overridden on the person (Budgeting)
     var typeRows = state.teamTypes.map(function (t) {
       var rc = (m.rateCard && m.rateCard[t]) || {};
       return '<div class="su-row" data-key="' + esc(t) + '">' + grip() +
-        '<span class="su-name">' + esc(t) + '</span>' +
+        '<input class="su-name su-name-in" data-rcname="' + esc(t) + '" value="' + esc(t) + '" title="Rename role — applies to people, features and the rate card">' +
         '<span class="band-count">' + (typeCounts[t] || 0) + '</span>' +
         '<input class="su-rc" type="number" min="0" data-rccost="' + esc(t) + '" value="' + (rc.cost || '') + '" placeholder="cost/h" title="Default hourly cost for this role">' +
         '<input class="su-rc" type="number" min="0" data-rcrate="' + esc(t) + '" value="' + (rc.rate || '') + '" placeholder="rate/h" title="Default hourly bill rate for this role">' +
@@ -4696,13 +4935,13 @@
         '</section>' +
         '<section class="su-card"><h2>Timeline</h2>' +
         '<div class="p-grid2">' +
-        '<div><label class="p-lab">Start (Monday)</label><input type="date" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">Start (' + firstDayName + ')</label><input type="date" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">End (last working day)</label><input type="date" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
         '</div>' +
         '</section>' +
         '<section class="su-card"><h2>Sprint numbering</h2>' +
         '<div class="p-grid2">' +
-        '<div><label class="p-lab">Sprint starts on (Monday)</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="date" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
         '</div>' +
         '</section>' +
@@ -4727,7 +4966,8 @@
         '<section class="su-card"><h2>Workstreams</h2>' +
         '<label class="p-check" title="Color-codes items and enables workstream grouping"><input type="checkbox" id="suWsEnable"' + (m.workstreamsEnabled ? ' checked' : '') + '> Use workstreams in this project</label>' +
         (m.workstreamsEnabled
-          ? '<div class="su-rows" style="margin-top:10px" data-sulist="ws">' + (wsRows || '<div class="m-hint">none yet</div>') + '</div>' +
+          ? '<div class="su-rows" style="margin-top:10px">' + defaultWsRow + '</div>' +
+            '<div class="su-rows" data-sulist="ws">' + (wsRows || '') + '</div>' +
             '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>'
           : '<div class="m-hint">Workstreams are off — items keep a neutral color and the Scoping column is hidden.</div>') +
         '</section>' +
@@ -4745,12 +4985,19 @@
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Full-time hours per week</label>' +
         '<input type="number" id="suWeekHours" min="1" max="80" value="' + m.weekHours + '" style="width:100%"></div>' +
-        '<div><label class="p-lab">Working days per week</label>' +
-        '<div class="seg">' + [3, 4, 5].map(function (dd2) {
-          return '<button data-sudays="' + dd2 + '"' + (m.daysPerWeek === dd2 ? ' class="on"' : '') + '>' + dd2 + ' days</button>';
-        }).join('') + '</div></div>' +
+        '<div><label class="p-lab">First day of week</label>' +
+        '<select id="suWeekStart" style="width:100%">' + DAY_NAMES.map(function (dn, di) {
+          return '<option value="' + di + '"' + (RM.weekStartOf(m) === di ? ' selected' : '') + '>' + dn + '</option>';
+        }).join('') + '</select></div>' +
         '</div>' +
-        '<div class="m-hint">Defines what one full-time person means. Days beyond the work week count as non-working time on the grid.</div>' +
+        '<div style="margin-top:12px"><label class="p-lab">Working days</label>' +
+        '<div class="su-wdays">' + DAY_NAMES.map(function (dn, di) {
+          var onDay = RM.workDaysOf(m).indexOf(di) !== -1;
+          var full = !onDay && RM.workDaysOf(m).length >= 5;
+          return '<label class="p-check wd' + (full ? ' off' : '') + '"><input type="checkbox" data-suwday="' + di + '"' +
+            (onDay ? ' checked' : '') + (full ? ' disabled' : '') + '> ' + dn.slice(0, 3) + '</label>';
+        }).join('') + '</div></div>' +
+        '<div class="m-hint">Defines what one full-time person means — up to 5 working days per week; the rest count as non-working time on the grid.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Capacity</h2>' +
         '<label class="p-check" title="Roster limits scheduling and validation; shows the availability row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
@@ -4759,7 +5006,11 @@
       sizing:
         '<section class="su-card"><h2>Approach</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
-        '</section>' + sizingCards,
+        '</section>' + sizingCards +
+        '<section class="su-card"><h2>Risk &amp; priority column</h2>' +
+        '<div class="su-schemes">' + riskRows + '</div>' +
+        '<div class="m-hint">Adds an assessment column to Scoping. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
+        '</section>',
       appearance:
         '<section class="su-card">' + personalFieldsHtml('appearance') +
         '<div class="m-hint">System follows your OS.</div>' +
@@ -4840,6 +5091,38 @@
     if (t.id === 'suWeekHours') {
       var wh2 = Math.max(1, Math.min(80, parseFloat(t.value) || RM.WEEK_HOURS));
       commit('week hours', function (s2) { s2.meta.weekHours = wh2; });
+      return;
+    }
+    if (t.id === 'suWeekStart') {
+      var wsd = parseInt(t.value, 10);
+      commit('week start', function (s2) {
+        s2.meta.weekStart = wsd;
+        RM.applyWorkWeek(s2.meta);
+      });
+      return;
+    }
+    if (t.dataset.suwday != null) {
+      var dayN = parseInt(t.dataset.suwday, 10);
+      var list = RM.workDaysOf(state.meta).slice();
+      if (t.checked) { if (list.indexOf(dayN) === -1) list.push(dayN); }
+      else list = list.filter(function (x) { return x !== dayN; });
+      if (!list.length || list.length > 5) { render(); return; }
+      commit('work days', function (s2) {
+        s2.meta.workDays = list;
+        RM.applyWorkWeek(s2.meta);
+      });
+      return;
+    }
+    if (t.dataset.rcname != null) {
+      var oldRole = t.dataset.rcname;
+      var newRole = t.value.trim();
+      if (!newRole || newRole === oldRole) { render(); return; }
+      if (state.teamTypes.indexOf(newRole) !== -1) {
+        toast('\u201C' + newRole + '\u201D already exists', 'err');
+        render();
+        return;
+      }
+      commit('rename role', function (s2) { RM.renameRole(s2, oldRole, newRole); });
       return;
     }
     if (t.dataset.rcrate != null || t.dataset.rccost != null) {
@@ -4936,6 +5219,12 @@
       commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey); });
       return;
     }
+    if (t.dataset.surisk) {
+      var riskKey = t.dataset.surisk;
+      if (riskKey === RM.riskSchemeOf(state)) return;
+      commit('risk column', function (s2) { RM.setRiskScheme(s2, riskKey); });
+      return;
+    }
     if (t.id === 'suSzAdd') {
       commit('add size', function (s2) {
         var lbl = 'New', n2 = 2;
@@ -4958,13 +5247,9 @@
       return;
     }
     if (t.dataset.suwsedit) { wsEditModal(t.dataset.suwsedit); return; }
+    if (t.dataset.sudefws != null) { defaultWsModal(); return; }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }
     if (t.dataset.suepdel) { deleteEpicConfirm(t.dataset.suepdel); return; }
-    if (t.dataset.sudays) {
-      var dpw = parseInt(t.dataset.sudays, 10);
-      commit('work week', function (s2) { s2.meta.daysPerWeek = dpw; });
-      return;
-    }
     if (t.dataset.suphedit) { phaseModal(t.dataset.suphedit); return; }
     if (t.dataset.suphdel) { deletePhaseConfirm(t.dataset.suphdel); return; }
     if (t.id === 'suTypeAddBtn') {
@@ -6005,10 +6290,10 @@
       updateSaveBtn();
       selectedId = null;
       enterEditor(); // opening a file always lands in the editor
-      if (!quiet) {
-        toast(r.source === 'tool'
-          ? 'Loaded “' + name + '” (full tool state)'
-          : 'Parsed “' + name + '” from the template layout');
+      // a clean tool-state load needs no announcement; parsing a foreign
+      // template layout is worth a note
+      if (!quiet && r.source !== 'tool') {
+        toast('Parsed “' + name + '” from the template layout');
       }
     });
   }
@@ -6188,7 +6473,7 @@
         $('[data-m=x]', host).onclick = closeModal;
         $('[data-m=cancel]', host).onclick = closeModal;
         $('#exGo', host).onclick = function () {
-          RM_EXPORT.download(state, {
+          var exOpts = {
             fromSprint: parseInt($('#exFrom', host).value, 10),
             toSprint: parseInt($('#exTo', host).value, 10),
             ws: $('#exWs', host).value || null,
@@ -6196,12 +6481,47 @@
             phaseId: $('#exPhase', host).value || null,
             scale: parseInt($('#exScale', host).value, 10),
             arrows: $('#exArrows', host).checked
-          });
+          };
           closeModal();
+          exportPngTo(exOpts);
         };
       });
   }
   $('#btnExport').addEventListener('click', exportModal);
+
+  // Where the PNG lands: desktop asks for a destination via the native save
+  // dialog and OPENS the file afterwards; browsers with a save-file picker
+  // let the user choose the folder; anything else falls back to a download.
+  function exportPngTo(exOpts) {
+    RM_EXPORT.toBlob(state, exOpts).then(function (r) {
+      if (window.HeadwayDesktop && window.HeadwayDesktop.savePngAndOpen) {
+        return window.HeadwayDesktop.savePngAndOpen(r.blob, r.name).then(function (p) {
+          if (p) toast('Exported ' + p.replace(/^.*[\\/]/, ''));
+        });
+      }
+      if (window.showSaveFilePicker) {
+        return window.showSaveFilePicker({
+          suggestedName: r.name,
+          types: [{ description: 'PNG image', accept: { 'image/png': ['.png'] } }]
+        }).then(function (handle) {
+          return handle.createWritable().then(function (w) {
+            return w.write(r.blob).then(function () { return w.close(); });
+          }).then(function () { toast('Exported ' + handle.name); });
+        }).catch(function (err) {
+          if (err && err.name === 'AbortError') return; // user canceled
+          throw err;
+        });
+      }
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(r.blob);
+      a.download = r.name;
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      toast('Exported ' + r.name);
+    }).catch(function (err) {
+      toast('Export failed: ' + (err && err.message || err), 'err');
+    });
+  }
 
   // ------------------------------------------------------------ boot
   function boot() {

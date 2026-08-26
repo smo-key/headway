@@ -282,6 +282,8 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   background: repeating-linear-gradient(-55deg,
     rgba(var(--ink-rgb), .055) 0 5px, transparent 5px 11px);
 }
+/* scoping has no time axis — the today marker means nothing there */
+body[data-view="scoping"] #todayLine { display: none !important; }
 #todayLine {
   position: absolute; top: 0; bottom: 0; width: 0;
   border-left: 2px solid var(--blue);
@@ -1063,25 +1065,65 @@ table.roster .rm { width: 30px; }
 .size-grid input { width: 100%; text-align: center; font-family: var(--mono); }
 .bw-chip { font-family: var(--mono); font-size: 11px; }
 
+/* Setup: Sun-Sat working-day checkboxes */
+.su-wdays { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.su-wdays .p-check { font-size: 12.5px; }
+.su-wdays .p-check.off { opacity: .45; }
+
+/* Setup: role rename input sits flush in its row */
+.su-row input.su-name-in {
+  border-color: transparent; background: transparent;
+  padding: 3px 6px; margin-left: -6px; flex: 1; min-width: 0;
+}
+.su-row input.su-name-in:hover { border-color: var(--line-2); background: var(--surface); }
+.su-row input.su-name-in:focus { border-color: var(--blue); background: var(--surface); }
+
+/* Setup: the default-workstream row leads the list */
+.su-row.su-defws { background: var(--paper-2); }
+
+/* scoping chip: the default workstream shows as a quiet italic name */
+.sc-chip i.dws, .r-ws i.dws { color: var(--ink-3); font-style: italic; }
+
+/* shadcn-style toasts, bottom-center */
 #toasts {
-  position: fixed; left: 16px; bottom: 16px; z-index: 120;
-  display: flex; flex-direction: column; gap: 8px;
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  z-index: 120;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  pointer-events: none;
 }
 .toast {
-  background: var(--band); color: var(--band-ink);
-  border-radius: 9px; padding: 9px 15px;
-  font-size: 12.5px;
+  display: flex; align-items: flex-start; gap: 9px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: 10px;
+  padding: 11px 16px;
+  font-size: 13px; line-height: 1.45;
   box-shadow: var(--shadow-2);
   animation: toastIn .18s ease-out;
-  max-width: 420px;
+  transition: opacity .3s, transform .3s;
+  min-width: 240px; max-width: 460px;
+  pointer-events: auto;
 }
-.toast.err { background: #6E1D15; }
+.toast svg.lucide { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--ok, #0A8754); }
+.toast.err svg.lucide { color: var(--bad, #C6402F); }
+.toast.gone { opacity: 0; transform: translateY(6px); }
 @keyframes toastIn { from { transform: translateY(8px); opacity: 0; } }
 
 .kbd {
   font-family: var(--mono); font-size: 10px;
   border: 1px solid var(--line-2); border-bottom-width: 2px;
   border-radius: 4px; padding: 0 4px; background: var(--surface); color: var(--ink-2);
+}
+
+/* the one tooltip component — fed by [title] lifted to data-tip on hover */
+#uiTip {
+  position: fixed; z-index: 130;
+  background: var(--band); color: var(--band-ink);
+  border-radius: 7px; padding: 6px 10px;
+  font-size: 11.5px; line-height: 1.5;
+  max-width: 340px; white-space: pre-line;
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+  animation: toastIn .12s ease-out;
 }
 
 body.dragging-x { cursor: ew-resize !important; }
@@ -1257,7 +1299,9 @@ body.no-cap .hdr-cap { display: none; }
 body.present #topbar, body.present #panel, body.present #resPanel,
 body.present #leftRz, body.present #leftRzLine { display: none !important; }
 body.present[data-view="planning"] .hdr-left,
-body.present[data-view="planning"] .row-left { display: none !important; }
+body.present[data-view="planning"] .row-left,
+body.present[data-view="budget"] .hdr-left,
+body.present[data-view="budget"] .row-left { display: none !important; }
 body.present #board { padding: 12px 14px; }
 #btnPresentExit {
   position: fixed; top: 10px; right: 14px; z-index: 300;
@@ -1276,11 +1320,29 @@ body[data-view="scoping"] .row.item .row-left { align-items: flex-start; padding
 body[data-view="scoping"] .row.item .row-left .r-chev { visibility: hidden; pointer-events: none; }
 body[data-view="scoping"] .row.item .row-left .r-chev,
 body[data-view="scoping"] .row.item .row-left .r-grip,
-body[data-view="scoping"] .row.item .row-left .r-warn,
-body[data-view="scoping"] .row.item .row-left .r-main {
+body[data-view="scoping"] .row.item .row-left .r-warn {
   height: 26px; align-self: flex-start;
   display: flex; align-items: center;
 }
+/* the title is a full-height cell like the rest of the scoping grid */
+body[data-view="scoping"] .row.item .row-left { align-items: stretch; padding-bottom: 0; }
+body[data-view="scoping"] .row.item .row-left .r-main {
+  align-self: stretch; flex: 1; min-width: 0;
+  display: flex; align-items: flex-start;
+}
+body[data-view="scoping"] .row.item .row-left .r-lock,
+body[data-view="scoping"] .row.item .row-left .r-doneck { margin-top: 6px; }
+.sc-name {
+  flex: 1; min-width: 0; align-self: stretch;
+  font: inherit; color: var(--ink);
+  border-radius: 4px;
+  padding: 4px 6px; margin-left: -5px;
+  white-space: normal; overflow-wrap: anywhere;
+  line-height: 1.45; font-size: 12.5px;
+  cursor: text;
+}
+.sc-name:hover { background: var(--paper-2); }
+.sc-name:focus { background: var(--surface); outline: 2px solid rgba(0, 87, 184, .4); }
 body[data-view="scoping"] .row.item .row-left .r-num { line-height: 26px; }
 body[data-view="scoping"] .row.item .row-left .r-dot { margin-top: 9px; }
 body[data-view="scoping"] .row.item .row-lane { background: var(--surface); }
@@ -1585,17 +1647,26 @@ body.chrome-win #topbar { padding-right: 0; }
 }
 #titleEdit:hover { color: var(--ink); background: rgba(var(--ink-rgb), .06); box-shadow: none; transform: none; }
 
+#filterCell { position: relative; }
 #rowFilter {
-  width: 100%; margin-bottom: 3px;
+  width: 100%; margin-bottom: 3px; height: 28px;
   border: 1px solid var(--line-2); border-radius: 6px;
-  padding: 3px 8px; font: inherit; font-size: 11.5px;
+  padding: 3px 34px 3px 8px; font: inherit; font-size: 12px;
   background: var(--surface); color: var(--ink);
 }
 #rowFilter:focus { outline: none; border-color: var(--blue); }
+/* ⌘F shortcut chip inside the input's right edge; hides while typing */
+.filter-kbd {
+  position: absolute; right: 12px; top: 50%; transform: translateY(calc(-50% - 1px));
+  pointer-events: none;
+}
+#rowFilter:focus ~ .filter-kbd { display: none; }
 /* scoping hides the phase lane but keeps the line so the filter stays put */
-body[data-view="scoping"] .hdr-phases { display: flex !important; height: 30px !important; }
+body[data-view="scoping"] .hdr-phases { display: flex !important; height: 34px !important; }
 body[data-view="scoping"] .hdr-phases .hdr-lane { visibility: hidden; }
 body[data-view="budget"] #rowFilter, body[data-view="setup"] #rowFilter { display: none; }
+body[data-view="budget"] .filter-kbd, body[data-view="setup"] .filter-kbd,
+body[data-view="reports"] .filter-kbd { display: none; }
 
 /* Save button once the doc matches its file */
 #btnSave[data-mode="saved"] { opacity: .8; }
@@ -1812,17 +1883,7 @@ body.chrome-mac #startBar { padding-left: 96px; }
 
 /* ------------------------------------------------- batch-2 components */
 /* no-workstream items: neutral outline instead of a workstream color */
-.bar.nows {
-  background: transparent;
-  border: 1px solid var(--line-3);
-  color: var(--ink);
-  box-shadow: none;
-}
-.bar.nows .b-label { text-shadow: none; }
-.bar.nows .b-hc { background: var(--hover); color: var(--ink-2); }
-.bar.nows .b-h:hover { background: rgba(var(--ink-rgb), .08); }
-.bar.nows.ms { border: 0; }
-.bar.nows .ms-diamond { border-color: var(--line-3); }
+/* (items without a workstream now paint in the default workstream color) */
 .r-dot.nodot {
   background: transparent !important;
   border: 1px solid var(--line-3);

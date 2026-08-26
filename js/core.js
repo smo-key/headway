@@ -91,8 +91,47 @@
     m.sizeScheme = 'custom';
   };
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
-  RM.DEFAULT_TEAM_TYPES = ['Development', 'Design', 'Product', 'Data', 'QA'];
-  RM.DEFAULT_WORK_TYPE = 'Development';
+
+  // Assessment ("Risk") column schemes. Most projects track nothing here —
+  // 'none' is the default for new documents. The alternatives mirror common
+  // PM practice: RAID-log style risk severity (probability × impact rolled
+  // into L/M/H), estimation confidence (planning-poker style H/M/L),
+  // MoSCoW prioritization (Must/Should/Could/Won't), and an auto-computed
+  // dependency risk read straight off the graph (cycles, fan-in, slack).
+  RM.RISK_SCHEMES = {
+    none: { name: 'None', label: 'Risk', desc: 'No assessment column.' },
+    risk: { name: 'Risk (manual)', label: 'Risk', order: ['L', 'M', 'H'],
+      desc: 'RAID-style severity — probability × impact rolled into Low / Medium / High.' },
+    auto: { name: 'Risk (auto)', label: 'Risk', auto: true,
+      desc: 'Computed from the dependency graph: cycles, unscheduled or many dependencies, zero slack, deep chains.' },
+    confidence: { name: 'Confidence', label: 'Confidence', order: ['H', 'M', 'L'],
+      desc: 'Estimation confidence, planning-poker style — High / Medium / Low.' },
+    moscow: { name: 'MoSCoW', label: 'Priority', order: ['M', 'S', 'C', 'W'],
+      desc: 'Must / Should / Could / Won’t — classic scope-negotiation priority.' }
+  };
+  RM.RISK_SCHEME_ORDER = ['none', 'risk', 'auto', 'confidence', 'moscow'];
+  RM.riskSchemeOf = function (state) {
+    var s = state && state.meta && state.meta.riskScheme;
+    return RM.RISK_SCHEMES[s] ? s : 'none';
+  };
+  RM.riskEnabled = function (state) { return RM.riskSchemeOf(state) !== 'none'; };
+  RM.riskOrderOf = function (state) {
+    return (RM.RISK_SCHEMES[RM.riskSchemeOf(state)].order || []).slice();
+  };
+  RM.riskColLabel = function (state) {
+    return RM.RISK_SCHEMES[RM.riskSchemeOf(state)].label;
+  };
+  RM.setRiskScheme = function (state, key) {
+    if (!RM.RISK_SCHEMES[key]) return;
+    state.meta.riskScheme = key;
+    var order = RM.RISK_SCHEMES[key].order || [];
+    state.items.forEach(function (it) {
+      if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
+    });
+  };
+
+  RM.DEFAULT_TEAM_TYPES = ['Software Engineer', 'Product Designer', 'Product Manager', 'Data Scientist', 'QA Engineer'];
+  RM.DEFAULT_WORK_TYPE = 'Software Engineer';
   RM.WEEK_HOURS = 40; // one person's full week
   RM.ANY_TYPE = '';
 
@@ -150,8 +189,19 @@
     }
     return null;
   }
+  // The DEFAULT workstream: what a null/empty workstream means. It is a
+  // real, renamable workstream with its own color (blue unless changed).
+  RM.defaultWsName = function (state) {
+    var m = state && state.meta;
+    return (m && typeof m.defaultWsName === 'string' && m.defaultWsName.trim()) || 'General';
+  };
+  RM.defaultWsColor = function (state) {
+    var m = state && state.meta;
+    return (m && resolveColor(m.defaultWsColor)) || RM.PALETTE.product;
+  };
   RM.colorForWs = function (state, ws) {
-    var c = state && state.wsColors && ws ? resolveColor(state.wsColors[ws]) : null;
+    if (!ws) return RM.defaultWsColor(state);
+    var c = state && state.wsColors ? resolveColor(state.wsColors[ws]) : null;
     return c || RM.PALETTE.product;
   };
   RM.colorForItem = function (state, it) {
@@ -212,11 +262,65 @@
     return d;
   };
 
+  // ---- which weekdays work: meta.weekStart (0=Sun…6=Sat, default Monday)
+  // is the first day of each week column; meta.workDays lists the working
+  // weekdays (1–5 of them). The index space stays 5 slots per week — slot i
+  // is the i-th working weekday, trailing slots read as non-working.
+  RM.weekStartOf = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    var w = m && m.weekStart;
+    return isFinite(+w) && +w >= 0 && +w <= 6 ? Math.round(+w) : 1;
+  };
+  RM.workDaysOf = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    var wd = m && m.workDays;
+    if (Array.isArray(wd)) {
+      var seen = {}, out = [];
+      wd.forEach(function (d) {
+        d = Math.round(+d);
+        if (isFinite(d) && d >= 0 && d <= 6 && !seen[d]) { seen[d] = true; out.push(d); }
+      });
+      if (out.length >= 1 && out.length <= 5) return out;
+    }
+    return [1, 2, 3, 4, 5]; // Mon–Fri
+  };
+  // day-offsets (0–6 from the week's first day) of each working slot, ascending
+  RM.workOffsets = function (meta) {
+    var ws = RM.weekStartOf(meta);
+    return RM.workDaysOf(meta)
+      .map(function (d) { return ((d - ws) + 7) % 7; })
+      .sort(function (a, b) { return a - b; });
+  };
+
+  // Re-establish the work-week invariants after ANY weekStart/workDays edit:
+  // workDays sorted in week order, daysPerWeek in sync, and the timeline
+  // start snapped back to the week's first day. Normalize and the Setup
+  // handlers both go through this.
+  RM.applyWorkWeek = function (m) {
+    m.weekStart = RM.weekStartOf(m);
+    var ws = m.weekStart;
+    m.workDays = RM.workDaysOf(m).sort(function (a, b) {
+      return (((a - ws) + 7) % 7) - (((b - ws) + 7) % 7);
+    });
+    m.daysPerWeek = m.workDays.length; // kept in sync for older readers
+    var d = RM.parseISO(m.timelineStart);
+    if (d && isFinite(d.getTime())) {
+      var back = ((d.getUTCDay() - ws) + 7) % 7;
+      if (back) {
+        d.setUTCDate(d.getUTCDate() - back);
+        m.timelineStart = RM.fmtISO(d);
+      }
+    }
+    // endDate is left alone: normalize derives numWeeks from it, and a
+    // snapped-back start only widens the window by part of a week
+  };
+
   RM.dayToDate = function (meta, day) {
     var week = Math.floor(day / 5);
     var dow = ((day % 5) + 5) % 5;
+    var offs = RM.workOffsets(meta);
     var d = RM.parseISO(meta.timelineStart);
-    d.setUTCDate(d.getUTCDate() + week * 7 + dow);
+    d.setUTCDate(d.getUTCDate() + week * 7 + offs[Math.min(dow, offs.length - 1)]);
     return d;
   };
 
@@ -231,9 +335,11 @@
     var start = RM.parseISO(meta.timelineStart);
     var diff = Math.floor((date.getTime() - start.getTime()) / 86400000);
     var week = Math.floor(diff / 7);
-    var dow = diff - week * 7;
-    if (dow > 4) dow = 4; // weekend -> Friday of that week
-    return week * 5 + dow;
+    var rem = diff - week * 7;
+    var offs = RM.workOffsets(meta);
+    var slot = 0;
+    for (var i = 0; i < offs.length; i++) if (offs[i] <= rem) slot = i;
+    return week * 5 + slot; // non-working weekday -> previous working slot
   };
 
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -245,7 +351,8 @@
   // index space — the trailing slot(s) simply count as non-working days.
   RM.daysPerWeekOf = function (metaOrState) {
     var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
-    var d = m && m.daysPerWeek;
+    if (m && Array.isArray(m.workDays)) return RM.workDaysOf(m).length;
+    var d = m && m.daysPerWeek; // pre-workDays documents
     return isFinite(+d) && +d >= 1 && +d <= 5 ? Math.round(+d) : 5;
   };
   RM.weekHoursOf = function (metaOrState) {
@@ -263,11 +370,15 @@
   // (a 4-day week's Fridays, say) read as non-working via offDay().
   RM.holidayDaySet = function (meta) {
     var set = {};
+    var ws = RM.weekStartOf(meta);
+    var offs = RM.workOffsets(meta);
     (meta.holidays || []).forEach(function (iso) {
       var d = RM.parseISO(iso);
       if (!d || !isFinite(d.getTime())) return;
-      var dow = (d.getUTCDay() + 6) % 7;
-      if (dow > 4) return;
+      // only dates that fall ON a working weekday count — others don't
+      // exist in the index space
+      var off = ((d.getUTCDay() - ws) + 7) % 7;
+      if (offs.indexOf(off) === -1) return;
       var day = RM.dateToDay(meta, d);
       if (day != null) set[day] = true;
     });
@@ -457,6 +568,13 @@
     var m = state.meta;
     m.title = m.title || 'Roadmap';
     m.timelineStart = m.timelineStart || '2026-07-27';
+    // work week shape: first day of week + which weekdays work (≤5).
+    // Legacy daysPerWeek (3/4/5 from Monday) migrates to an explicit list.
+    m.weekStart = RM.weekStartOf(m);
+    if (!Array.isArray(m.workDays)) {
+      m.workDays = [1, 2, 3, 4, 5].slice(0, RM.daysPerWeekOf(m));
+    }
+    RM.applyWorkWeek(m);
     m.numWeeks = m.numWeeks || (m.numSprints ? m.numSprints * (m.weeksPerSprint || 2) : 48);
     m.weeksPerSprint = m.weeksPerSprint || 2;
     // capacity feature switch — roster-based scheduling constraints and the
@@ -569,6 +687,19 @@
     });
     // workstream feature switch — ON unless the project turned it off
     m.workstreamsEnabled = m.workstreamsEnabled !== false;
+    // the default (null) workstream: user-visible name + color
+    m.defaultWsName = typeof m.defaultWsName === 'string' && m.defaultWsName.trim()
+      ? m.defaultWsName.trim() : 'General';
+    m.defaultWsColor = (function () {
+      var hex = String(m.defaultWsColor || '').replace(/^#/, '').toUpperCase();
+      return /^[0-9A-F]{6}$/.test(hex) ? hex : RM.PALETTE.product;
+    })();
+    // assessment column scheme — docs that predate schemes keep their Risk
+    // column only if they actually used it; new docs start without one
+    if (!RM.RISK_SCHEMES[m.riskScheme]) {
+      m.riskScheme = (state.items || []).some(function (it) { return it && it.risk; })
+        ? 'risk' : 'none';
+    }
     // work week: full-time hours + working days per week
     m.weekHours = isFinite(+m.weekHours) && +m.weekHours > 0 ? Math.min(80, +m.weekHours) : RM.WEEK_HOURS;
     m.daysPerWeek = isFinite(+m.daysPerWeek) && +m.daysPerWeek >= 1 && +m.daysPerWeek <= 5
@@ -608,6 +739,9 @@
     state.phases.forEach(function (p) { phaseIds[p.id] = true; });
     var fallbackPhase = state.phases[0].id;
 
+    var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
+    var firstType = state.teamTypes && state.teamTypes.length
+      ? state.teamTypes[0] : RM.DEFAULT_WORK_TYPE;
     state.items = (state.items || []).map(function (it) {
       return {
         id: it.id || RM.uid('i'),
@@ -624,19 +758,21 @@
         depsText: it.depsText || [],
         extDeps: it.extDeps || '',
         size: it.size && RM.SIZE_ORDER.indexOf(it.size) !== -1 ? it.size : (it.size || null),
-        // risk is a severity (None/L/M/H); legacy t-shirt values migrate:
-        // XS/S → L, M → M, XL → H ('L' is low in both readings and stays L)
+        // assessment value — validated against the active scheme's options;
+        // legacy t-shirt risk values migrate: XS/S → L, XL → H
         risk: (function () {
           var rv = it.risk ? String(it.risk).toUpperCase() : null;
           if (!rv) return null;
-          if (RM.RISK_ORDER.indexOf(rv) !== -1) return rv;
-          if (rv === 'XS' || rv === 'S') return 'L';
-          if (rv === 'XL') return 'H';
+          if (riskOrder.indexOf(rv) !== -1) return rv;
+          if (riskOrder === RM.RISK_ORDER || riskOrder.indexOf('L') !== -1) {
+            if (rv === 'XS' || rv === 'S') return 'L';
+            if (rv === 'XL') return 'H';
+          }
           return null;
         })(),
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
-        // every work item defaults to 1 × Development
-        teamType: it.teamType != null && it.teamType !== '' ? it.teamType : RM.DEFAULT_WORK_TYPE,
+        // role is descriptive metadata (capacity is role-agnostic)
+        teamType: it.teamType != null && it.teamType !== '' ? it.teamType : firstType,
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
         startDay: it.startDay != null && isFinite(it.startDay) ? it.startDay : null,
@@ -965,15 +1101,13 @@
   // Roster availability for one week, in PEOPLE-EQUIVALENTS (hours ÷ the
   // project's full-time week): the fractional headcount actually available.
   RM.availForWeek = function (state, week) {
-    var total = 0, byType = {};
+    var total = 0;
     var full = RM.weekHoursOf(state.meta);
     state.team.forEach(function (m) {
       var pe = (RM.memberHoursForWeek(state.meta, m, week) / full) * (m.capacity != null ? m.capacity : 1);
-      if (pe <= 0) return;
-      total += pe;
-      byType[m.type] = (byType[m.type] || 0) + pe;
+      if (pe > 0) total += pe;
     });
-    return { total: total, byType: byType };
+    return { total: total };
   };
 
   // How much team focus one active item consumes, in "focus units".
@@ -997,17 +1131,14 @@
     var meta = state.meta;
     var weeks = [];
     var teamTotal = state.team.length;
-    var typeCounts = {};
-    state.team.forEach(function (m) { typeCounts[m.type] = (typeCounts[m.type] || 0) + 1; });
     var w;
     for (w = 0; w < meta.numWeeks; w++) {
       var avail = RM.availForWeek(state, w);
       weeks.push({
-        demand: 0, demandByType: {}, items: [],
+        demand: 0, items: [],
         cap: teamTotal > 0 ? avail.total : Infinity,
-        capByType: teamTotal > 0 ? avail.byType : typeCounts,
         blackout: RM.isBlackoutWeek(meta, w),
-        over: false, overTypes: []
+        over: false
       });
     }
     state.items.forEach(function (it) {
@@ -1020,23 +1151,12 @@
         if (cell.blackout) continue;
         cell.demand += wt;
         cell.items.push(it.id);
-        if (it.teamType) {
-          cell.demandByType[it.teamType] = (cell.demandByType[it.teamType] || 0) + wt;
-        }
       }
     });
     weeks.forEach(function (cell) {
       if (cell.demand > cell.cap + 1e-9) cell.over = true;
-      if (teamTotal > 0) {
-        Object.keys(cell.demandByType).forEach(function (t) {
-          if (cell.demandByType[t] > (cell.capByType[t] || 0) + 1e-9) {
-            cell.over = true;
-            cell.overTypes.push(t);
-          }
-        });
-      }
     });
-    return { weeks: weeks, teamTotal: teamTotal, typeCounts: typeCounts };
+    return { weeks: weeks, teamTotal: teamTotal };
   };
 
   // ------------------------------------------------------------ dependency risk
@@ -1218,9 +1338,7 @@
       if (!state.meta.capacityEnabled || !cell.over) return;
       var d = RM.weekStartDate(state.meta, w);
       function r1(x) { return Math.round(x * 10) / 10; }
-      var what = cell.overTypes.length
-        ? cell.overTypes.map(function (t) { return t + ' ' + r1(cell.demandByType[t]) + ' vs ' + r1(cell.capByType[t] || 0); }).join(', ')
-        : r1(cell.demand) + ' focus units vs ' + r1(cell.cap) + ' people available';
+      var what = r1(cell.demand) + ' focus units vs ' + r1(cell.cap) + ' people available';
       global.push({
         level: 'warn', code: 'OVER_CAP', week: w,
         msg: 'Week of ' + RM.fmtShort(d) + ' looks like too much concurrent work (' + what + ')',
@@ -1262,11 +1380,8 @@
 
     // capacity ledger (capacity feature off → schedule by dependencies only)
     var teamTotal = state.meta.capacityEnabled ? state.team.length : 0;
-    var typeCounts = {};
-    state.team.forEach(function (m) { typeCounts[m.type] = (typeCounts[m.type] || 0) + 1; });
     var HORIZON_WEEKS = meta.numWeeks + 104; // allow spill; UI can extend the grid
     var ledgerTotal = new Array(HORIZON_WEEKS);
-    var ledgerType = {};
     for (var w = 0; w < HORIZON_WEEKS; w++) ledgerTotal[w] = 0;
 
     function occupy(it, startDay, durDays) {
@@ -1276,13 +1391,6 @@
       for (var wk = w0; wk <= w1 && wk < HORIZON_WEEKS; wk++) {
         if (RM.isBlackoutWeek(meta, wk)) continue;
         ledgerTotal[wk] += wWt;
-        if (it.teamType) {
-          if (!ledgerType[it.teamType]) {
-            ledgerType[it.teamType] = new Array(HORIZON_WEEKS);
-            for (var z = 0; z < HORIZON_WEEKS; z++) ledgerType[it.teamType][z] = 0;
-          }
-          ledgerType[it.teamType][wk] += wWt;
-        }
       }
     }
     fixed.forEach(function (it) { occupy(it, it.startDay, it.durDays); });
@@ -1297,11 +1405,6 @@
         if (RM.isBlackoutWeek(meta, wk)) continue;
         var avail = RM.availForWeek(state, wk);
         if (ledgerTotal[wk] + wWt > avail.total + 1e-9) return false;
-        if (it.teamType) {
-          var typeCap = avail.byType[it.teamType] || 0;
-          var used = ledgerType[it.teamType] ? ledgerType[it.teamType][wk] : 0;
-          if (used + wWt > typeCap + 1e-9) return false;
-        }
       }
       return true;
     }
@@ -1341,26 +1444,20 @@
     var maxDay = 0;
 
     // An item that can NEVER fit the roster — WIP weight above the PEAK
-    // weekly availability (hours-based people-equivalents, total or for its
-    // type) — must not trigger an endless capacity walk. Peaks are
-    // hours-aware, so a roster of part-time roles counts fractionally.
-    var peakTotal = 0, peakType = {};
+    // weekly availability (hours-based people-equivalents) — must not
+    // trigger an endless capacity walk. Peaks are hours-aware, so a roster
+    // of part-time people counts fractionally.
+    var peakTotal = 0;
     if (teamTotal > 0) {
       for (var pw = 0; pw < HORIZON_WEEKS; pw++) {
         var pa = RM.availForWeek(state, pw);
         if (pa.total > peakTotal) peakTotal = pa.total;
-        Object.keys(pa.byType).forEach(function (tk) {
-          if (pa.byType[tk] > (peakType[tk] || 0)) peakType[tk] = pa.byType[tk];
-        });
         if (pw > meta.numWeeks && pa.total === peakTotal) break; // hours settle after overrides end
       }
     }
     function infeasible(it) {
       if (teamTotal === 0) return false;
-      var wWt = RM.wipWeight(state, it);
-      if (wWt > peakTotal + 1e-9) return true;
-      if (it.teamType && wWt > (peakType[it.teamType] || 0) + 1e-9) return true;
-      return false;
+      return RM.wipWeight(state, it) > peakTotal + 1e-9;
     }
 
     function place(it) {
@@ -1459,16 +1556,10 @@
     if (!it) return { state: state, changed: 0, note: null };
     var meta = state.meta;
     var teamTotal = state.meta.capacityEnabled ? state.team.length : 0;
-    var typeCounts = {};
-    state.team.forEach(function (m) { typeCounts[m.type] = (typeCounts[m.type] || 0) + 1; });
 
     var snapWt = RM.wipWeight(state, it);
-    if (teamTotal > 0 && (snapWt > teamTotal ||
-      (it.teamType && snapWt > (typeCounts[it.teamType] || 0)))) {
-      var what = it.teamType
-        ? 'more ' + it.teamType + ' focus than the roster has (' + (typeCounts[it.teamType] || 0) + ')'
-        : 'more focus than the roster of ' + teamTotal + ' can give';
-      return { state: state, changed: 0, note: 'Needs ' + what + ' — no slot can ever fit. Left unchanged.' };
+    if (teamTotal > 0 && snapWt > teamTotal) {
+      return { state: state, changed: 0, note: 'Needs more focus than the roster of ' + teamTotal + ' can give — no slot can ever fit. Left unchanged.' };
     }
 
     var stash = { startDay: it.startDay, durDays: it.durDays, riskDays: it.riskDays || 0 };
@@ -1490,13 +1581,9 @@
       for (var wk = w0; wk <= w1; wk++) {
         if (RM.isBlackoutWeek(meta, wk)) continue;
         var cell = wk < capData.weeks.length ? capData.weeks[wk] : null;
-        var avail = cell ? { total: cell.cap, byType: cell.capByType } : RM.availForWeek(state, wk);
+        var availTotal = cell ? cell.cap : RM.availForWeek(state, wk).total;
         var demand = cell ? cell.demand : 0;
-        if (demand + snapWt > avail.total + 1e-9) return false;
-        if (it.teamType) {
-          var used = cell ? (cell.demandByType[it.teamType] || 0) : 0;
-          if (used + snapWt > (avail.byType[it.teamType] || 0) + 1e-9) return false;
-        }
+        if (demand + snapWt > availTotal + 1e-9) return false;
       }
       return true;
     }
@@ -1560,8 +1647,31 @@
     });
   };
 
-  RM.shiftDependents = function (state, itemId, delta) {
+  // Rename a role everywhere it appears: the role list, people, items and
+  // the rate card. Returns false when the new name is empty or taken.
+  RM.renameRole = function (state, oldName, newName) {
+    newName = String(newName || '').trim();
+    if (!newName || newName === oldName) return false;
+    if (state.teamTypes.indexOf(newName) !== -1) return false;
+    var i = state.teamTypes.indexOf(oldName);
+    if (i === -1) return false;
+    state.teamTypes[i] = newName;
+    state.team.forEach(function (m) { if (m.type === oldName) m.type = newName; });
+    state.items.forEach(function (it) { if (it.teamType === oldName) it.teamType = newName; });
+    if (state.meta.rateCard && state.meta.rateCard[oldName]) {
+      state.meta.rateCard[newName] = state.meta.rateCard[oldName];
+      delete state.meta.rateCard[oldName];
+    }
+    return true;
+  };
+
+  // opts.rigid (⌘-drag): every transitive dependent moves by the SAME delta
+  // as the dragged item — no slack absorption, pull and push alike.
+  // Milestones ride along too (the drag is an explicit date change); locked
+  // and done items stay put either way.
+  RM.shiftDependents = function (state, itemId, delta, opts) {
     if (!delta) return 0;
+    var rigid = !!(opts && opts.rigid);
     var childrenBy = {};
     RM.depEdges(state).forEach(function (e) {
       (childrenBy[e[0].id] = childrenBy[e[0].id] || []).push(e[1]);
@@ -1574,7 +1684,21 @@
       var cur = q.shift();
       /* eslint-disable no-loop-func */
       (childrenBy[cur.id] || []).forEach(function (ch) {
-        if (ch.startDay == null || ch.locked || ch.done || ch.milestone) return;
+        if (ch.startDay == null || ch.locked || ch.done) return;
+        if (rigid) {
+          if (pulled[ch.id]) return; // visited once — rigid moves are absolute
+          pulled[ch.id] = true;
+          var rt = Math.max(0, ch.startDay + delta);
+          var rApplied = rt - ch.startDay;
+          if (rApplied) {
+            ch.startDay = rt;
+            RM.shiftStories(ch, rApplied);
+            moved[ch.id] = true;
+          }
+          q.push({ id: ch.id, d: delta });
+          return;
+        }
+        if (ch.milestone) return;
         // never start before any scheduled dependency's buffered end
         var floor = 0;
         ch.deps.forEach(function (n) {
@@ -1746,14 +1870,14 @@
     state.items.forEach(function (it) {
       var info = RM.itemEffortInfo(state, it);
       var key = mode === 'phase' ? phaseName[it.phaseId]
-        : mode === 'phase-ws' ? phaseName[it.phaseId] + ' · ' + (it.workstream || '(no workstream)')
-        : (it.workstream || '(no workstream)');
+        : mode === 'phase-ws' ? phaseName[it.phaseId] + ' · ' + (it.workstream || RM.defaultWsName(state))
+        : (it.workstream || RM.defaultWsName(state));
       var b = bucket(key);
       b.items += 1; b.days += info.days; b.hours += info.hours; b.cost += info.cost;
     });
     if (mode === 'workstream') {
       state.team.forEach(function (m) {
-        var b = bucket(m.workstream || '(no workstream)');
+        var b = bucket(m.workstream || RM.defaultWsName(state));
         var h = RM.roleTotalHours(state, m);
         b.roleHours = (b.roleHours || 0) + h;
         b.roleCost = (b.roleCost || 0) + h * RM.memberCost(state, m);
