@@ -1751,6 +1751,36 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- batch 8: story rows fill out
+{
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const stRow8 = doc.querySelector('#rows .row.story[data-story]');
+  // start and deadline are the story's own, always editable
+  ok(!!stRow8.querySelector('[data-act="st-startd"]'), 'story Start chip is always editable (no roll-up)');
+  ok(!!stRow8.querySelector('[data-act="st-dl"]'), 'story Deadline chip is its own field');
+  ok(!stRow8.querySelector('.sc-cell[data-col="start"].sc-na') && !stRow8.querySelector('.sc-cell[data-col="deadline"].sc-na'),
+    'start/deadline story cells are not grayed out');
+  // the left-pane title edits in place; the delete button is gone
+  const stName = stRow8.querySelector('.st-name');
+  ok(!!stName && stName.getAttribute('contenteditable') === 'true', 'story title is editable in the left pane');
+  ok(!stRow8.querySelector('.row-left .st-del'), 'no delete button in the story left pane');
+  stName.textContent = 'Renamed story inline';
+  stName.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const stP8 = state().items.find(i => i.id === stRow8.dataset.id);
+  ok(stP8.stories.find(s2 => s2.id === stRow8.dataset.story).title === 'Renamed story inline',
+    'story title edit commits');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  // story deadline commits through the calendar
+  click(doc.querySelector('#rows .row.story[data-story] [data-act="st-dl"]'));
+  const calDay8 = doc.querySelector('#calPop .cal-day:not(.out)');
+  const iso8 = calDay8.dataset.iso;
+  click(calDay8);
+  const stP8b = state().items.find(i => i.id === stRow8.dataset.id);
+  ok(stP8b.stories.find(s2 => s2.id === stRow8.dataset.story).deadline === iso8, 'story deadline commits');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- export smoke
 ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   'save uses the exact project title as the filename (no slug, no date)');

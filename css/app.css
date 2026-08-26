@@ -623,7 +623,7 @@ body.cap-off .hc-lab { display: none !important; }
 .row.story { height: var(--story-h); }
 .row.story .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
 .row.story .row-lane { border-bottom-color: transparent; }
-.st-pad { width: 76px; flex: 0 0 76px; position: relative; }
+.st-pad { width: 96px; flex: 0 0 96px; position: relative; }
 .st-pad::before {
   content: ''; position: absolute; left: 44px; top: 0; bottom: 0;
   border-left: 1px solid var(--line-2);
@@ -2345,11 +2345,28 @@ input.cal-in:focus { outline: none; border-color: var(--blue); }
 .p-dl-late { color: var(--err); font-weight: 600; text-transform: none; letter-spacing: 0; }
 
 /* ------------------------------------------------------------ scoping stories */
-/* story rows are double-height in the scoping grid and their editors agree */
+/* story rows are double-height in the scoping grid; every field fills its
+   cell — fixed chips inherit the feature rows' stretch, editors fill the row */
 body[data-view="scoping"] .row.story { height: auto; min-height: calc(var(--story-h) * 2); }
-body[data-view="scoping"] .row.story .row-left { align-items: flex-start; padding-top: 5px; }
-body[data-view="scoping"] .row.story .sc-edit { height: 46px; min-height: 46px; }
-body[data-view="scoping"] .row.story .sc-cell.sc-fix { display: flex; align-items: center; justify-content: center; }
+body[data-view="scoping"] .row.story .row-left { align-items: stretch; }
+/* the done check rides the title's first line instead of centering mid-row */
+body[data-view="scoping"] .row.story .st-doneck {
+  align-self: flex-start; height: 26px;
+  display: inline-flex; align-items: center;
+}
+/* the add-story row stays a single quiet line */
+body[data-view="scoping"] .row.story.story-add { min-height: var(--story-h); }
+body[data-view="scoping"] .row.story.story-add .row-left { align-items: center; }
+body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; }
+/* the story title edits in place, full height like the feature titles */
+.st-name {
+  flex: 1; min-width: 0; align-self: stretch;
+  white-space: normal; overflow-wrap: anywhere; overflow: visible; text-overflow: clip;
+  border-radius: 4px; padding: 5px 6px; margin-right: 6px;
+  line-height: 1.45; cursor: text;
+}
+.st-name:hover { background: var(--paper-2); }
+.st-name:focus { background: var(--surface); outline: 2px solid rgba(0, 87, 184, .4); color: var(--ink); }
 /* values that roll up from the feature: present, but clearly not the story's */
 .sc-roll {
   display: inline-flex; align-items: center; gap: 4px;

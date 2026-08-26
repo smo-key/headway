@@ -517,7 +517,7 @@
   document.addEventListener('keydown', function (e) {
     if (e.key !== ' ') return;
     var ed = e.target.closest && e.target.closest('[contenteditable="true"]');
-    if (!ed || ed.classList.contains('sc-name')) return;
+    if (!ed || ed.classList.contains('sc-name') || ed.classList.contains('st-name')) return;
     var sel = window.getSelection();
     if (!sel || !sel.rangeCount || !sel.isCollapsed) return;
     var r = sel.getRangeAt(0);
@@ -1863,8 +1863,10 @@
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"></span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
-          '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>' +
-          '<button class="st-del" data-act="st-del" title="Delete story"><i data-lucide="x"></i></button>' +
+          (view === 'scoping'
+            // scoping: the story title edits in place like the feature titles
+            ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
+            : '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>') +
           '</div>' +
           (view === 'scoping'
             // scoping: stories share the grid — text columns, Size, Assignees,
@@ -1899,15 +1901,20 @@
                   return stFix('<span class="r-wk editable" tabindex="0" role="button" data-act="st-wk" title="Story duration — click to edit; empty clears it">' +
                     (st.durDays != null ? totalWeeks(st) : '') + '</span>');
                 }
-                if (key === 'start' && st.startDay != null) {
-                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start — click to edit">' +
-                    esc(RM.fmtShort(RM.dayToDate(state.meta, st.startDay))) + '</span>');
+                if (key === 'start') {
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start — click to edit; empty takes it off the timeline">' +
+                    (st.startDay != null ? esc(RM.fmtShort(RM.dayToDate(state.meta, st.startDay))) : '') + '</span>');
+                }
+                if (key === 'deadline') {
+                  var stLate = RM.pastDeadline(state.meta, st);
+                  return stFix('<span class="r-ws sc-chip dl-chip' + (stLate ? ' late' : '') +
+                    '" tabindex="0" role="button" data-act="st-dl" title="' +
+                    esc('Story deadline — click to edit' + (stLate ? '\nThe story runs past its deadline' : '')) + '">' +
+                    (st.deadline ? esc(RM.fmtShort(RM.parseISO(st.deadline))) : '') + '</span>');
                 }
                 // rolled up from the feature — shown dimmed and italic
                 var roll = key === 'workstream' ? esc(it.workstream || RM.defaultWsName(state))
                   : key === 'epic' ? esc(it.epic || '')
-                  : key === 'start' ? (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(state.meta, it.startDay))) : '')
-                  : key === 'deadline' ? (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '')
                   : key === 'risk' ? (it.risk ? levelGlyph(it.risk) : '')
                   : '';
                 return '<div class="sc-cell sc-fix sc-na" data-col="' + key + '" style="width:' + w +
@@ -3178,7 +3185,7 @@
     if (dragConsumedClick) { dragConsumedClick = false; return; }
     // scoping text cells and inline editors edit in place — selecting would
     // re-render and steal their focus
-    if (e.target.closest('.sc-edit,.st-add-input,.hc-edit,input.r-name,.sc-name')) return;
+    if (e.target.closest('.sc-edit,.st-add-input,.hc-edit,input.r-name,.sc-name,.st-name')) return;
     var act = e.target.closest('[data-act]');
     var rowEl = e.target.closest('.row');
     if (!rowEl) return;
@@ -3211,13 +3218,7 @@
     var storyEl = e.target.closest('[data-story]');
     if (storyEl && act) {
       var stId = storyEl.dataset.story;
-      if (act.dataset.act === 'st-del') {
-        commit('delete story', function (s) {
-          var t = RM.itemById(s, itemId);
-          t.stories = t.stories.filter(function (st) { return st.id !== stId; });
-          if (selStory === stId) selStory = null;
-        });
-      } else if (act.dataset.act === 'st-open') {
+      if (act.dataset.act === 'st-open') {
         selectStory(itemId, stId);
       } else if (act.dataset.act === 'st-size') {
         openDropdown(act, [{ label: '<i>no size</i>', checked: !(storyById(it, stId) || {}).size, fn: function () {
@@ -3311,11 +3312,21 @@
               if (st2.durDays == null) st2.durDays = SPW();
             });
           }, { allowClear: true, clearLabel: 'Unschedule' });
+      } else if (act.dataset.act === 'st-dl') {
+        var stObjL = storyById(it, stId);
+        openCalendar(act, (stObjL && stObjL.deadline) || '', function (iso) {
+          commit('story deadline', function (s) {
+            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+            if (st2) st2.deadline = iso || null;
+          });
+        }, { allowClear: true, clearLabel: 'Remove deadline' });
       }
       return;
     }
-    // clicking a story's left pane or bar opens the story panel
+    // clicking a story's left pane or bar opens the story panel — but not
+    // when the click lands in the editable title (scoping renames in place)
     if (storyEl && (e.target.closest('.row-left') || e.target.closest('[data-stbar]'))) {
+      if (e.target.closest('[contenteditable="true"]')) return;
       selectStory(itemId, storyEl.dataset.story);
       return;
     }
@@ -4127,6 +4138,27 @@
   });
   rowsEl.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('sc-name')) {
+      e.preventDefault();
+      e.target.blur();
+    }
+  });
+
+  // scoping story title: same in-place rename, committed to the story
+  rowsEl.addEventListener('focusout', function (e) {
+    if (!e.target.classList || !e.target.classList.contains('st-name')) return;
+    var stRow0 = e.target.closest('.row.story[data-story]');
+    if (!stRow0) return;
+    var pid0 = stRow0.dataset.id, sid0 = stRow0.dataset.story;
+    var nv1 = e.target.textContent.replace(/\s+/g, ' ').trim();
+    var cur1 = (storyById(RM.itemById(state, pid0) || {}, sid0) || {}).title || '';
+    if (nv1 === cur1) return;
+    commit('rename story', function (s2) {
+      var st2 = storyById(RM.itemById(s2, pid0) || {}, sid0);
+      if (st2) st2.title = nv1;
+    });
+  });
+  rowsEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('st-name')) {
       e.preventDefault();
       e.target.blur();
     }

@@ -371,3 +371,24 @@ final report.
   gained assignee and size buttons.
 - **Fix**: `.filter-ico` sizes the element itself (lucide replaces the `<i>` with
   an `<svg>` carrying the class, so descendant selectors missed it).
+
+## 15. Batch 8 (2026-08-26, later still)
+
+- **Story cells fill their area**: the batch-7 centering override on story fixed
+  cells is gone — story chips inherit the feature rows' stretch (`.sc-cell.sc-fix
+  > [data-act]` fills the cell), and story text editors run 50px tall inside the
+  54px row (autoGrow min 46). The add-story row stays a single quiet line.
+- **Start and Deadline are per-story fields**: neither rolls up. The Start chip is
+  always editable (calendar; picking a date schedules with a default 1-week
+  duration, clearing unschedules) and stories gained their own `st.deadline`
+  (ISO, normalize-validated) with a calendar chip that reads red via
+  `RM.pastDeadline` when the story's own span runs past it. Only workstream,
+  epic, and risk still roll up (dimmed + italic).
+- **In-place story titles on Scoping**: the left-pane title is a contenteditable
+  `.st-name` (full-height, wraps) committing on blur/Enter — mirrors the feature
+  `.sc-name` flow with its own focusout handler; the click-to-open-story-panel
+  branch and row-drag start both skip editable targets, and the auto-list
+  keydown ignores it. Planning keeps the click-to-open span.
+- **Left pane cleanup**: story indent grew (`.st-pad` 76 → 96px) and the per-row
+  “delete story” × button is gone (delete lives in the panel's story list); the
+  done check aligns with the title's first line.

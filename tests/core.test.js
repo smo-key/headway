@@ -1123,8 +1123,8 @@ var sSf = RM.normalizeState({
   meta: sSfMeta,
   phases: [{ id: 'p1', name: 'Alpha', bucket: false }],
   items: [{ num: 1, feature: 'a', stories: [
-    { title: 's1', priority: 'h', assignees: ['ghost'], durDays: 5 },
-    { title: 's2', priority: 'zz' }
+    { title: 's1', priority: 'h', assignees: ['ghost'], durDays: 5, deadline: '2026-09-04' },
+    { title: 's2', priority: 'zz', deadline: 'soonish' }
   ] }],
   team: [{ id: 'tm1', name: 'Ada', type: 'Development' }],
   teamTypes: ['Development']
@@ -1133,6 +1133,8 @@ eq(sSf.items[0].stories[0].priority, 'H', 'story priority validated + uppercased
 eq(sSf.items[0].stories[1].priority, null, 'unknown story priority dropped');
 eq(sSf.items[0].stories[0].assignees, [], 'story assignees validated against the roster');
 eq(sSf.items[0].stories[0].durDays, 5, 'unscheduled story keeps its duration');
+eq(sSf.items[0].stories[0].deadline, '2026-09-04', 'story deadline kept');
+eq(sSf.items[0].stories[1].deadline, null, 'junk story deadline dropped');
 var sSf2 = mkState([{ num: 1, feature: 'a', assignees: ['tm1'], stories: [{ title: 's', assignees: ['tm1', 'tm1', 'nope'] }] }], {
   team: [{ id: 'tm1', name: 'Ada', type: 'Development' }]
 });

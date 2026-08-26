@@ -1035,6 +1035,8 @@
             priority: s.priority && prioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
+            // stories carry their own hard deadline, same shape as items
+            deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
             // rich-text (sanitized HTML) story body + acceptance criteria
             description: typeof s.description === 'string' ? s.description : '',
             ac: typeof s.ac === 'string' ? s.ac : '',
