@@ -498,30 +498,63 @@ eq(sEd2.meta.endDate, '2026-10-16', 'endDate normalizes to that week\'s Friday')
 section('scope columns');
 var sSc = mkState([{ num: 1, feature: 'a' }]);
 eq(sSc.meta.scopeCols.map(function (c) { return c.key; }),
-  ['description', 'enables', 'outOfScope', 'extDeps', 'notes'], 'description leads the default columns');
+  ['description'], 'new documents start with Description only');
+// legacy docs without a saved column list surface built-ins that hold content
+var sScLegacy = mkState([{ num: 1, feature: 'a', enables: 'x', notes: 'y' }]);
+eq(sScLegacy.meta.scopeCols.map(function (c) { return c.key; }),
+  ['description', 'enables', 'notes'], 'legacy content infers its columns');
 var ck = RM.addScopeCol(sSc, 'Owner');
-eq(sSc.meta.scopeCols.length, 6, 'custom column appended');
-eq(RM.scopeColLabel(sSc.meta.scopeCols[5]), 'Owner', 'custom label kept');
+eq(sSc.meta.scopeCols.length, 2, 'custom column appended');
+eq(RM.scopeColLabel(sSc.meta.scopeCols[1]), 'Owner', 'custom label kept');
 RM.setScopeValue(sSc.items[0], ck, 'Rita');
 eq(RM.scopeValue(sSc.items[0], ck), 'Rita', 'custom value stored in item.custom');
 RM.setScopeValue(sSc.items[0], 'notes', 'n1');
 eq(sSc.items[0].notes, 'n1', 'built-in key routes to the item field');
-RM.moveScopeCol(sSc, ck, -2);
-eq(sSc.meta.scopeCols[3].key, ck, 'column moved by two');
+RM.addScopeCol(sSc, null, 'notes');
+RM.moveScopeCol(sSc, ck, 1);
+eq(sSc.meta.scopeCols[2].key, ck, 'column moved');
 RM.removeScopeCol(sSc, 'description');
-eq(sSc.meta.scopeCols.length, 5, 'built-in column removable');
+eq(sSc.meta.scopeCols.length, 2, 'Description is removable like any column');
 RM.addScopeCol(sSc, null, 'description');
-eq(sSc.meta.scopeCols[5].key, 'description', 'hidden built-in re-added');
+eq(sSc.meta.scopeCols[2].key, 'description', 'hidden built-in re-added');
 RM.addScopeCol(sSc, null, 'description');
-eq(sSc.meta.scopeCols.length, 6, 're-adding a visible built-in is a no-op');
+eq(sSc.meta.scopeCols.length, 3, 're-adding a visible built-in is a no-op');
 RM.removeScopeCol(sSc, ck);
-eq(sSc.meta.scopeCols.length, 5, 'column removed');
+eq(sSc.meta.scopeCols.length, 2, 'column removed');
 eq(RM.scopeValue(sSc.items[0], ck), '', 'custom values cleaned up on remove');
+RM.renameScopeCol(sSc, 'notes', 'Field notes');
+eq(RM.scopeColLabel(sSc.meta.scopeCols[0]), 'Field notes', 'built-in columns are renamable');
 var sSc2 = RM.normalizeState(sSc);
 eq(sSc2.meta.scopeCols.map(function (c) { return c.key; }),
   sSc.meta.scopeCols.map(function (c) { return c.key; }), 'scopeCols survive normalize');
+eq(RM.scopeColLabel(sSc2.meta.scopeCols[0]), 'Field notes', 'built-in rename survives normalize');
+RM.renameScopeCol(sSc, 'notes', '');
+eq(RM.scopeColLabel(sSc.meta.scopeCols[0]), 'Notes', 'clearing a rename restores the canonical name');
 RM.setScopeValue(sSc.items[0], 'x9', 'keep');
 eq(RM.normalizeState(sSc).items[0].custom.x9, 'keep', 'custom values survive normalize');
+
+// ------------------------------------------------------------- milestones
+section('milestones');
+var sMs = mkState([
+  { num: 1, feature: 'work', startDay: 0, durDays: 10 },
+  { num: 2, feature: 'launch', milestone: true, startDay: 10, durDays: 0, deps: [1] },
+  { num: 3, feature: 'after', startDay: 10, durDays: 5, deps: [2] }
+]);
+eq(sMs.items[1].milestone, true, 'milestone flag survives normalize');
+eq(sMs.items[1].durDays, 0, 'milestone keeps zero duration');
+eq(RM.itemSpan(sMs.items[1]), 0, 'milestone span is zero');
+eq(RM.itemEnd(sMs.items[1]), 10, 'milestone end equals its day');
+var vMs = RM.validate(sMs);
+var msWarns = (vMs.byItem[sMs.items[1].id] || []).map(function (v) { return v.code; });
+eq(msWarns.indexOf('NO_SIZE'), -1, 'milestone needs no size');
+var depWarns = (vMs.byItem[sMs.items[2].id] || []).map(function (v) { return v.code; });
+eq(depWarns.indexOf('DEP_ORDER'), -1, 'dependent may start on the milestone day');
+var msAuto = RM.autoSchedule(sMs);
+eq(RM.itemById(msAuto.state, sMs.items[1].id).startDay, 10, 'auto-schedule leaves milestones fixed');
+var msCap = RM.capacity(sMs);
+eq(msCap.weeks[2].demand, 1, 'milestone consumes no capacity');
+var sMsStory = mkState([{ num: 1, feature: 'a', stories: [{ title: 's', custom: { c1: 'v' } }] }]);
+eq(sMsStory.items[0].stories[0].custom.c1, 'v', 'story custom fields survive normalize');
 
 // ------------------------------------------------------------- dependency risk
 section('depRisk');

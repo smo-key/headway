@@ -272,18 +272,13 @@
           var x0 = from.x + from.w, y0 = from.y + from.h / 2;
           var x1 = to.x, y1 = to.y + to.h / 2;
           var mid = Math.max(x0 + 6, x1 - 6);
+          // plain connector — no arrowhead (matches the in-app style)
           ctx.beginPath();
           ctx.moveTo(x0, y0);
           ctx.lineTo(mid, y0);
           ctx.lineTo(mid, y1);
-          ctx.lineTo(x1 - 4, y1);
+          ctx.lineTo(x1 - 2, y1);
           ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x1 - 5, y1 - 3);
-          ctx.lineTo(x1 - 5, y1 + 3);
-          ctx.closePath();
-          ctx.fill();
         });
       });
     }

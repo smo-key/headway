@@ -158,7 +158,10 @@ ok(doc.querySelector('#panel .p-name').value.length > 0, 'panel shows the featur
   nameInp.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'row title rename commits');
 }
-ok(doc.querySelector('#panel [data-f=description]') !== null, 'panel has a description field');
+ok(doc.querySelector('#panel .wz-ed[data-f="col:description"]') !== null, 'panel has a description field');
+ok(doc.querySelector('#panel .p-sec[data-sec="fields"]').classList.contains('open'), 'Fields section is open by default');
+ok(doc.querySelector('#panel .p-actions') === null, 'footer Duplicate/Delete buttons are gone');
+ok(doc.querySelector('#panel .p-more') !== null, 'panel has a … actions button');
 ok(doc.querySelector('#panel [data-dd=epic]') !== null, 'epic is a dropdown button');
 click(doc.querySelector('#panel [data-dd=epic]'));
 ok(!doc.querySelector('#popover').hidden && doc.querySelectorAll('#popover .menu-list [data-mi]').length > 2, 'epic dropdown opens the shared list UI');
@@ -167,17 +170,20 @@ doc.querySelector('#popover').hidden = true;
 ok(doc.querySelector('#panel [data-f=riskSize]') !== null, 'risk size segment present');
 ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" checkbox is gone');
 
-// description commit
-const descTa = doc.querySelector('#panel [data-f=description]');
-descTa.value = 'A crisp description';
-descTa.dispatchEvent(new window.Event('change', { bubbles: true }));
-ok(state().items.find(i => i.id === itId).description === 'A crisp description', 'description saves');
+// description commit (rich editor — commits on blur)
+{
+  const descEd0 = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  descEd0.focus();
+  descEd0.innerHTML = 'A crisp description';
+  descEd0.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  ok(state().items.find(i => i.id === itId).description === 'A crisp description', 'description saves');
+}
 
 // Backspace while typing in the rich description edits text — it must not
 // trigger the delete-item shortcut (Mac delete key sends "Backspace")
 {
   const before = state().items.length;
-  const descEd = doc.querySelector('#panel .wz-ed[data-f=description]');
+  const descEd = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
   ok(!!descEd && descEd.getAttribute('contenteditable') === 'true', 'panel description is a rich contenteditable editor');
   descEd.focus();
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
@@ -543,8 +549,9 @@ const enIdx = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')
 ok(descIdx !== -1 && enIdx !== -1 && descIdx < enIdx, 'Description sits left of Enables');
 ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 10, 'column resize handles present');
 const cell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="notes"]');
-cell.value = 'noted in the grid';
-cell.dispatchEvent(new window.Event('change', { bubbles: true }));
+ok(cell.getAttribute('contenteditable') === 'true', 'scoping cells are rich editors');
+cell.innerHTML = 'noted in the grid';
+cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
 ok(state().items.find(i => i.id === itId).notes === 'noted in the grid', 'scoping cell edit commits');
 
 // column management: remove the Description built-in via its column menu…
@@ -574,8 +581,8 @@ ok(!!ownerCol, 'custom column added to the document');
 const ownerCell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="' + (ownerCol && ownerCol.key) + '"]');
 ok(!!ownerCell, 'custom column cells rendered');
 if (ownerCell) {
-  ownerCell.value = 'Rita';
-  ownerCell.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ownerCell.innerHTML = 'Rita';
+  ownerCell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
   ok(state().items.find(i => i.id === itId).custom[ownerCol.key] === 'Rita', 'custom cell edit commits to item.custom');
 }
 click(doc.querySelector('#hdrSprints [data-colmenu="' + ownerCol.key + '"]'));
@@ -880,13 +887,19 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   ok(doc.querySelectorAll('#rows .bar.crit').length === critOn, 'toggle back on restores it');
 }
 
-// ---------------------------------------------------------------- lane click deselects
+// ---------------------------------------------------------------- lane click selects
 {
   click(doc.querySelector('#rows .row.item .r-num'));
   ok(!doc.querySelector('#panel').hidden, 'clicking a row number opens the panel');
-  // re-query: selection re-rendered the rows
-  click(doc.querySelector('#rows .row.item .row-lane'));
-  ok(doc.querySelector('#panel').hidden, 'clicking empty lane space deselects');
+  // any part of the row selects it — empty lane space included
+  const laneRow = doc.querySelectorAll('#rows .row.item')[1];
+  const laneRowId = laneRow.dataset.id;
+  click(laneRow.querySelector('.row-lane'));
+  ok(!doc.querySelector('#panel').hidden, 'clicking lane space keeps the panel open');
+  ok(doc.querySelector('#rows .row.item.selected') &&
+    doc.querySelector('#rows .row.item.selected').dataset.id === laneRowId,
+    'clicking lane space selects that row');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }
 
 // ---------------------------------------------------------------- story add keeps focus
@@ -955,9 +968,9 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
     ok(!!addRow.querySelector('.st-add-ico') &&
       !/\+/.test(addRow.querySelector('.st-add-input').placeholder),
       'story add row leads with a lucide plus icon');
-    // scoping shows no story information even while expanded
+    // scoping shows story rows too while expanded
     click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-    ok(!doc.querySelector('#rows .row.story'), 'scoping renders no story rows');
+    ok(!!doc.querySelector('#rows .row.story[data-story="' + stId + '"]'), 'scoping renders story rows too');
     click(doc.querySelector('#viewTabs [data-view="planning"]'));
     window.eval("document.querySelector('[data-menu=\"view\"]').click()");
     click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Collapse all features/.test(b.textContent)));
@@ -1019,12 +1032,8 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // ---------------------------------------------------------------- insert above/below stays inline
 {
-  // deselect first (click a scheduled row's empty lane) so the panel is shut
-  const schedRow = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => {
-    const i = state().items.find(x => x.id === r.dataset.id);
-    return i && i.startDay != null;
-  });
-  if (schedRow) click(schedRow.querySelector('.row-lane'));
+  // deselect first (Escape) so the panel is shut
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   const anchorRow = doc.querySelectorAll('#rows .row.item')[2];
   const anchorId = anchorRow.dataset.id;
   const before = state().items.length;
@@ -1066,28 +1075,45 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(!doc.querySelector('#panel').hidden, 'panel opens for a storied item');
 
   // feature description is a WYSIWYG editor committing sanitized HTML
-  const ed = doc.querySelector('#panel .wz-ed[data-f="description"]');
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
   ok(!!ed && ed.getAttribute('contenteditable') === 'true', 'feature description is a rich editor');
   ed.innerHTML = 'Hello <i>world</i><script>evil()</script>';
   ed.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
   ok(state().items.find(i => i.id === withStories.id).description === 'Hello <i>world</i>',
     'rich description commits sanitized on blur');
 
-  // stories: edit affordance opens a modal with rich Description + AC
+  // stories: the edit affordance opens the story panel with rich fields
   const stBtn = doc.querySelector('#panel [data-pst-edit]');
   ok(!!stBtn, 'panel stories offer an edit affordance');
   click(stBtn);
-  ok(!doc.querySelector('#modalHost').hidden, 'story editor modal opens');
-  const sd = doc.querySelector('#modalHost .wz-ed[data-f="stDesc"]');
-  const sa = doc.querySelector('#modalHost .wz-ed[data-f="stAc"]');
+  ok(!!doc.querySelector('#panel .p-crumb'), 'story panel opens with a parent breadcrumb');
+  ok(!!doc.querySelector('#panel .p-rollup'), 'story panel shows rolled-up workstream/epic');
+  const sd = doc.querySelector('#panel .wz-ed[data-f="stcol:description"]');
+  const sa = doc.querySelector('#panel .wz-ed[data-f="stac"]');
   ok(!!sd && !!sa && sd.getAttribute('contenteditable') === 'true' && sa.getAttribute('contenteditable') === 'true',
-    'story modal has rich Description and Acceptance Criteria editors');
+    'story panel has rich Description and Acceptance Criteria editors');
   sd.innerHTML = 'Does <b>things</b>';
-  sa.innerHTML = '<ul><li>works offline</li></ul>';
-  click(doc.querySelector('#modalHost [data-m=save]'));
+  sd.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  // the commit re-rendered the panel — re-query the AC editor
+  const sa2 = doc.querySelector('#panel .wz-ed[data-f="stac"]');
+  sa2.innerHTML = '<ul><li>works offline</li></ul>';
+  sa2.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
   const st0 = state().items.find(i => i.id === withStories.id).stories[0];
   ok(st0.description === 'Does <b>things</b>', 'story description saves');
   ok(st0.ac === '<ul><li>works offline</li></ul>', 'story acceptance criteria save');
+  // a custom scope column edits into st.custom
+  const scEd = doc.querySelector('#panel .wz-ed[data-f^="stcol:"]:not([data-f="stcol:description"])');
+  if (scEd) {
+    scEd.innerHTML = 'story-scoped value';
+    scEd.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+    const key = scEd.dataset.f.slice(6);
+    ok(state().items.find(i => i.id === withStories.id).stories[0].custom[key] === 'story-scoped value',
+      'story custom field commits to st.custom');
+  }
+  // breadcrumb returns to the parent item
+  click(doc.querySelector('#panel .p-crumb'));
+  ok(!doc.querySelector('#panel .p-crumb') && !!doc.querySelector('#panel .p-num'),
+    'breadcrumb returns to the item panel');
 
   // scoping description cell renders/edits the rich value (column added on demand)
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));

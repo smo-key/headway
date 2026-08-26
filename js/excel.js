@@ -194,11 +194,13 @@
         r.getCell(2).value = it.workstream || null;
         r.getCell(3).value = it.epic || null;
         r.getCell(4).value = it.feature;
-        r.getCell(5).value = it.enables || null;
-        r.getCell(6).value = it.outOfScope || null;
-        r.getCell(7).value = it.notes || null;
+        // scope fields hold rich HTML — the sheet gets flattened plain text
+        // (the hidden tool sheet keeps the formatted version losslessly)
+        r.getCell(5).value = RM.htmlToText(it.enables || '') || null;
+        r.getCell(6).value = RM.htmlToText(it.outOfScope || '') || null;
+        r.getCell(7).value = RM.htmlToText(it.notes || '') || null;
         r.getCell(8).value = depCellText(it);
-        r.getCell(9).value = it.extDeps || null;
+        r.getCell(9).value = RM.htmlToText(it.extDeps || '') || null;
         r.getCell(10).value = it.size || null;
         r.getCell(11).value = it.risk || null;
         [4, 5, 6, 7, 9].forEach(function (c) {
@@ -207,7 +209,18 @@
 
         var color = RM.colorForItem(state, it);
         var scheduled = it.startDay != null && it.durDays != null;
-        if (scheduled) {
+        if (scheduled && it.milestone) {
+          // milestone: a diamond in its week, start = end = the fixed date
+          var msWk = Math.max(0, Math.min(numWeeks - 1, Math.floor(it.startDay / 5)));
+          var msCell = r.getCell(FIRST_SPRINT_COL + msWk);
+          msCell.value = '◆';
+          msCell.font = { color: { argb: 'FF' + color }, bold: true };
+          msCell.alignment = { horizontal: 'center' };
+          r.getCell(extraCols.start).value = RM.dayToDate(meta, it.startDay);
+          r.getCell(extraCols.start).numFmt = 'm/d/yy';
+          r.getCell(extraCols.end).value = RM.dayToDate(meta, it.startDay);
+          r.getCell(extraCols.end).numFmt = 'm/d/yy';
+        } else if (scheduled) {
           // solid = work span; pale tint = trailing risk buffer (per WEEK)
           var totalSpan = it.durDays + (it.riskDays || 0);
           var s0 = Math.max(0, Math.floor(it.startDay / 5));
@@ -450,7 +463,10 @@
         if (!it) continue;
         FIELDS.forEach(function (f) {
           var v = cellText(row.getCell(f[0]));
-          if (norm(v) !== norm(it[f[1]])) it[f[1]] = norm(v);
+          // rich fields export flattened — only a real Excel-side edit (vs the
+          // flattened text) replaces the stored value, as plain text
+          var stored = f[1] === 'feature' ? it[f[1]] : RM.htmlToText(it[f[1]] || '');
+          if (norm(v) !== norm(stored)) it[f[1]] = norm(v);
         });
       }
     }

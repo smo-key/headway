@@ -162,8 +162,20 @@
     },
 
     currentPath: function () { return currentPath; },
-    basename: basename
+    basename: basename,
+    appVersion: '' // filled asynchronously below
   };
+
+  // app version (start page footer)
+  if (window.__TAURI__.app && window.__TAURI__.app.getVersion) {
+    window.__TAURI__.app.getVersion().then(function (v) {
+      window.HeadwayDesktop.appVersion = v || '';
+      // refresh the footer if the start page is already showing
+      if (document.body.classList.contains('start') && app() && app().renderStartPage) {
+        app().renderStartPage();
+      }
+    }).catch(function () { /* fine without it */ });
+  }
 
   // ------------------------------------------------------- window chrome
   // The header doubles as the titlebar. macOS: native titlebar hidden with
@@ -293,9 +305,15 @@
           accelerator: accel(m.kbd),
           action: function () { fireItem(m); }
         };
-        return ('checked' in m)
-          ? menu.CheckMenuItem.new(Object.assign({ checked: !!m.checked }, opts))
-          : menu.MenuItem.new(opts);
+        if ('checked' in m) {
+          return menu.CheckMenuItem.new(Object.assign({ checked: !!m.checked }, opts));
+        }
+        // macOS template icons where the app names one; plain item otherwise
+        if (m.nativeIcon && menu.IconMenuItem && menu.NativeIcon && menu.NativeIcon[m.nativeIcon]) {
+          return menu.IconMenuItem.new(Object.assign({ icon: menu.NativeIcon[m.nativeIcon] }, opts))
+            .catch(function () { return menu.MenuItem.new(opts); });
+        }
+        return menu.MenuItem.new(opts);
       }));
     }
 
@@ -321,11 +339,13 @@
     function buildMenu() {
       var M = window.HeadwayApp.menuItems;
       return Promise.all([
-        predefined(['Hide', 'HideOthers', 'ShowAll', 'Separator', 'Quit']).then(function (items) {
-          return menu.Submenu.new({ text: 'Headway', items: items });
-        }),
-        toNative(M('file')).then(function (items) {
-          return menu.Submenu.new({ text: 'File', items: items });
+        // the app menu carries the file actions (New/Open/Save/Export/Help),
+        // then the standard Hide/Quit block — there is no File submenu on mac
+        Promise.all([
+          toNative(M('macApp')),
+          predefined(['Separator', 'Hide', 'HideOthers', 'ShowAll', 'Separator', 'Quit'])
+        ]).then(function (parts) {
+          return menu.Submenu.new({ text: 'Headway', items: parts[0].concat(parts[1]) });
         }),
         buildEdit(M('edit')),
         toNative(M('view')).then(function (items) {
@@ -344,7 +364,7 @@
     var sig = '', building = false, dirty = false, timer = null;
     function specSig() {
       var M = window.HeadwayApp.menuItems;
-      return JSON.stringify(['file', 'edit', 'view'].map(function (n) {
+      return JSON.stringify(['macApp', 'edit', 'view'].map(function (n) {
         return M(n).map(function (m) {
           return m.sep ? '-' : [m.label, !!m.disabled, !!m.checked, m.kbd || ''];
         });

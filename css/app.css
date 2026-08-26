@@ -714,7 +714,6 @@ body.cap-off .hc-lab { display: none !important; }
 .bar.link-target { outline: 2px solid var(--blue); outline-offset: 2px; }
 #tempLink {
   fill: none; stroke: var(--blue); stroke-width: 2; stroke-dasharray: 6 4;
-  marker-end: url(#arrowhead-temp);
   pointer-events: none;
 }
 .bar.warnbar::after {
@@ -757,29 +756,19 @@ body.cap-off .hc-lab { display: none !important; }
   fill: none;
   stroke: var(--arrow);
   stroke-width: 1.3;
-  marker-end: url(#arrowhead);
   opacity: .75;
 }
-/* every arrowhead matches its line's color */
-#arrows #arrowhead path { fill: var(--arrow); }
-#arrows #arrowhead-crit path { fill: var(--c-data); }
-#arrows #arrowhead-hot path { fill: var(--err); }
-#arrows #arrowhead-viol path { fill: var(--warn); }
-#arrows #arrowhead-sel path { fill: var(--blue); }
-#arrows #arrowhead-temp path { fill: var(--blue); }
 #arrows path.hit {
   fill: none; stroke: transparent; stroke-width: 11;
   pointer-events: stroke; cursor: pointer;
 }
 #arrows g.edge.crit path.vis {
   stroke: var(--c-data); stroke-width: 2.2; opacity: 1;
-  marker-end: url(#arrowhead-crit);
 }
-#arrows g.edge.viol path.vis { stroke: var(--warn); stroke-dasharray: 5 3; opacity: 1; marker-end: url(#arrowhead-viol); }
-#arrows g.edge.sel-related path.vis { stroke: var(--blue); opacity: 1; stroke-width: 1.8; marker-end: url(#arrowhead-sel); }
+#arrows g.edge.viol path.vis { stroke: var(--warn); stroke-dasharray: 5 3; opacity: 1; }
+#arrows g.edge.sel-related path.vis { stroke: var(--blue); opacity: 1; stroke-width: 1.8; }
 #arrows g.edge.hot path.vis, #arrows g.edge:hover path.vis {
   stroke: var(--err); stroke-width: 2; opacity: 1;
-  marker-end: url(#arrowhead-hot);
 }
 
 /* drag tooltip */
@@ -844,15 +833,16 @@ body.cap-off .hc-lab { display: none !important; }
   margin-bottom: 5px;
 }
 
-/* collapsible panel section cards */
+/* collapsible panel sections — flat: hierarchy comes from spacing and
+   heading weight, not boxes */
 .p-sec.c {
-  margin-top: 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 0 13px;
+  margin-top: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
-.p-sec.c:first-of-type { margin-top: 12px; }
+.p-sec.c:first-of-type { margin-top: 10px; }
 .p-sechead {
   display: flex; align-items: center; gap: 7px;
   width: 100%;
@@ -874,8 +864,11 @@ body.cap-off .hc-lab { display: none !important; }
 .p-sechead:hover > svg { color: var(--ink); }
 .p-sec.c .p-secbody { display: none; }
 .p-sec.c.open .p-secbody { display: block; padding: 0 0 12px; }
-.p-sec.c.open > .p-sechead { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.p-sec.c.open > .p-sechead { margin-bottom: 4px; }
 .p-sec.c .p-text, .p-sec.c input:not([type="checkbox"]), .p-sec.c .dd-btn { background: var(--surface); }
+/* dropdowns size to their content and sit flush left */
+.p-sec.c .dd-btn { width: auto; max-width: 100%; }
+.p-sec.c .dd-btn .dd-label { flex: 0 1 auto; }
 .p-fld + .p-fld { margin-top: 8px; }
 .p-none { color: var(--ink-3); font-size: 12px; }
 .p-row { display: flex; gap: 8px; align-items: center; }
@@ -883,14 +876,22 @@ body.cap-off .hc-lab { display: none !important; }
 .p-row .fixed { flex: 0 0 auto; }
 .p-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12.5px; }
-.seg { display: flex; border: 1px solid var(--line-2); border-radius: 7px; overflow: hidden; }
-.seg button {
-  flex: 1; border: 0; border-radius: 0; padding: 5px 0;
-  font-family: var(--mono); font-size: 11px; font-weight: 700;
-  background: var(--surface); color: var(--ink-2);
+/* shadcn-style segmented control: recessed track, floating active chip */
+.seg {
+  display: flex; gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--well);
+  padding: 3px;
 }
-.seg button + button { border-left: 1px solid var(--line); }
-.seg button.on { background: var(--ink); color: var(--ink-inverse); }
+.seg button {
+  flex: 1; border: 0; border-radius: 6px; padding: 4px 0;
+  font-size: 12.5px; font-weight: 600;
+  background: transparent; color: var(--ink-2);
+  box-shadow: none;
+}
+.seg button:hover { color: var(--ink); box-shadow: none; }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
 .stepper { display: flex; align-items: center; border: 1px solid var(--line-2); border-radius: 7px; overflow: hidden; }
 .stepper button { border: 0; border-radius: 0; padding: 5px 12px; font-weight: 700; }
 .stepper .val { flex: 1; text-align: center; font-family: var(--mono); font-weight: 700; }
@@ -908,8 +909,31 @@ textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12
 .dep-chip.unknown { background: var(--err-bg); border-color: var(--err-line); }
 .dep-chip .x { border: 0; background: transparent; padding: 0 4px; color: var(--ink-3); font-size: 11px; cursor: pointer; }
 .dep-chip .x:hover { color: var(--err); }
-.p-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
-.p-check input { accent-color: var(--blue); }
+.p-check { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink); cursor: pointer; }
+
+/* shadcn-style checkbox — full-size box, blue fill with a white check */
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 16px; height: 16px; flex: 0 0 16px;
+  margin: 0; padding: 0;
+  border: 1px solid var(--line-3);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  display: inline-grid; place-content: center;
+  transition: background .12s, border-color .12s;
+}
+input[type="checkbox"]:hover { border-color: var(--ink-3); }
+input[type="checkbox"]:checked { background: var(--blue); border-color: var(--blue); }
+input[type="checkbox"]:checked::before {
+  content: '';
+  width: 10px; height: 10px;
+  background: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"%3E%3Cpath d="M20 6 9 17l-5-5"/%3E%3C/svg%3E') center / contain no-repeat;
+}
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 87, 184, .22);
+}
 /* epic-band icon slot (item rows carry the icon inside the .r-epic chip) */
 .r-ico {
   display: inline-flex; align-items: center; justify-content: center;
@@ -989,12 +1013,13 @@ textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12
 .m-head h2 { margin: 0; font-size: 15.5px; }
 .m-body { padding: 4px 18px 16px; overflow-y: auto; }
 .m-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 15px; border-top: 1px solid var(--line); }
-.m-sec { margin-bottom: 16px; }
-/* section headings sit a clear level above field labels (.p-lab) */
+.m-sec { margin-bottom: 18px; }
+/* sub-headings (e.g. "Theme") sit a clear level above field labels — normal
+   case, one step under the card heading */
 .m-sec > label, .m-sec > .m-label {
   display: block;
-  font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
-  color: var(--ink); margin-bottom: 7px;
+  font-size: 13px; font-weight: 650; letter-spacing: 0; text-transform: none;
+  color: var(--ink); margin-bottom: 8px;
 }
 .m-hint { font-size: 11.5px; color: var(--ink-3); margin-top: 5px; line-height: 1.45; }
 
@@ -1438,9 +1463,13 @@ body.present #repPanel { display: none !important; }
   padding: 14px 16px 15px;
   box-shadow: var(--shadow-1);
 }
+.su-page {
+  font-size: 19px; font-weight: 650; letter-spacing: -.01em;
+  margin: 0 0 2px;
+}
 .su-card h2 {
-  font-size: 12px; font-weight: 700; letter-spacing: .02em;
-  margin: 0 0 10px;
+  font-size: 15px; font-weight: 650; letter-spacing: 0;
+  margin: 0 0 12px;
 }
 .su-rows { display: flex; flex-direction: column; position: relative; }
 .su-grip {
@@ -1657,3 +1686,123 @@ body.chrome-mac #startBar { padding-left: 86px; }
 }
 #scFmtBar button:hover { background: rgba(var(--ink-rgb), .07); color: var(--ink); transform: none; }
 #scFmtBar svg.lucide { width: 13px; height: 13px; }
+
+/* ------------------------------------------------------------- milestones */
+/* zero-width anchor at the fixed date; the diamond centers on it */
+.bar.ms {
+  width: 0 !important;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.bar.ms:hover { filter: none; }
+.bar.ms .ms-diamond {
+  position: absolute; left: 0; top: 50%;
+  width: 14px; height: 14px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--bar-c, var(--c-product));
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(24, 36, 48, .3);
+}
+.bar.ms.selected { outline: none; }
+.bar.ms.selected .ms-diamond { outline: 2px solid var(--ink); outline-offset: 1.5px; }
+.bar.ms .b-label.out { left: 12px; }
+.bar.ms .port.p-in { left: -26px; }
+.bar.ms .port.p-out { right: -26px; }
+.bar.ms.crit .ms-diamond { outline: 2px solid var(--c-data); outline-offset: 1px; }
+
+/* ------------------------------------------------------- done checkmarks */
+.r-doneck {
+  display: inline-flex; align-items: center;
+  flex: 0 0 auto;
+  color: var(--ok);
+  margin-right: 5px;
+}
+.r-doneck svg { width: 13px; height: 13px; stroke-width: 2.4; }
+.bar .b-done {
+  display: inline-flex; align-items: center;
+  margin: 0 -3px 0 7px;
+  pointer-events: none;
+}
+.bar .b-done svg { width: 12px; height: 12px; stroke-width: 2.6; }
+.bar .b-label.out .b-done { color: var(--ok); margin: 0 2px 0 0; }
+.bar .b-label .b-done { vertical-align: -2px; }
+.st-doneck { margin-right: 2px; }
+.st-doneck svg { width: 12px; height: 12px; }
+
+/* ------------------------------------------------------- panel header row */
+.p-more {
+  border: 0; background: transparent; padding: 4px 6px;
+  color: var(--ink-3);
+  margin-left: auto;
+}
+.p-more:hover { color: var(--ink); box-shadow: none; }
+.p-top .p-close { margin-left: 0; }
+.p-mschip {
+  font-size: 10.5px; font-weight: 700;
+  color: var(--blue);
+  background: var(--blue-soft);
+  border: 1px solid var(--blue-line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.p-crumb {
+  border: 0; background: transparent;
+  padding: 3px 6px 3px 0;
+  color: var(--ink-2); font-size: 12px;
+  max-width: 70%;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.p-crumb:hover { color: var(--blue); box-shadow: none; }
+.p-crumb svg.lucide { width: 13px; height: 13px; }
+.p-rollup { display: flex; gap: 6px; flex-wrap: wrap; }
+.p-rollup .sc-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line-2); background: var(--surface);
+  border-radius: 999px; padding: 3px 10px;
+  font-size: 12px;
+}
+.p-rollup .sc-chip svg.lucide { width: 12px; height: 12px; color: var(--ink-3); }
+.p-rollup .sc-chip i { color: var(--ink-3); }
+
+/* stories are clickable rows (they open in the panel) */
+.st-title { cursor: pointer; }
+.row.story .row-left { cursor: pointer; }
+.row.story.selected .row-left { background: var(--blue-soft); }
+.row.story.selected .st-title { color: var(--ink); }
+
+/* -------------------------------------------------- interaction polish */
+/* dragging bars/rows must never select text; editors opt back in */
+#rows, #hdr { user-select: none; -webkit-user-select: none; }
+#rows input, #rows textarea, #rows [contenteditable="true"] {
+  user-select: text; -webkit-user-select: text;
+}
+
+/* Save keeps one width across Save / Saving… / Saved and is disabled while
+   saving or already saved */
+#btnSave { min-width: 96px; }
+#btnSave:disabled { opacity: .65; cursor: default; transform: none; }
+
+/* start page footer */
+.sp-version {
+  margin-top: 28px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* settings surfaces: shadcn-style input sizing + focus ring */
+.su-content input:not([type="checkbox"]), .su-content select,
+.modal .m-body input:not([type="checkbox"]), .modal .m-body select {
+  min-height: 32px;
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+.su-content input:focus, .su-content select:focus,
+.modal .m-body input:focus, .modal .m-body select:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(0, 87, 184, .18);
+}

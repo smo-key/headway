@@ -222,6 +222,9 @@
     return (it.feature || '').toLowerCase().indexOf(q) !== -1 ||
       (it.epic || '').toLowerCase().indexOf(q) !== -1 ||
       (it.workstream || '').toLowerCase().indexOf(q) !== -1 ||
+      state.meta.scopeCols.some(function (c) {
+        return RM.htmlToText(RM.scopeValue(it, c.key)).toLowerCase().indexOf(q) !== -1;
+      }) ||
       (it.stories || []).some(function (st) {
         return (st.title || '').toLowerCase().indexOf(q) !== -1;
       });
@@ -313,6 +316,14 @@
     return out === '<br>' ? '' : out;
   }
 
+  // display a stored scope value as rich HTML; legacy plain-text values keep
+  // their line breaks
+  function richDisplay(v) {
+    if (!v) return '';
+    if (/<[a-z][\s\S]*>/i.test(v)) return sanitizeHtml(v);
+    return esc(v).replace(/\n/g, '<br>');
+  }
+
   // WYSIWYG editor block; the host wires the commit (blur / Save)
   function wysHtml(field, html, placeholder) {
     function btn(cmd, title, label) {
@@ -379,7 +390,7 @@
   // panel sections: key -> collapsed override (persisted in UI_KEY);
   // unlisted keys fall back to the defaults below
   var panelSec = {};
-  var PANEL_SEC_CLOSED = { stories: 1, scope: 1 };
+  var PANEL_SEC_CLOSED = { stories: 1 };
   function secOpen(key) { return panelSec[key] != null ? !panelSec[key] : !PANEL_SEC_CLOSED[key]; }
   function scopeColWidth(c) { return Math.max(c[3] || 120, scopeColW[c[0]] || c[2]); }
   function scopeW() {
@@ -870,7 +881,24 @@
     var laneInner = '';
     var ports = '<span class="port p-in" data-port="in" title="Drag to another bar: this depends on it"></span>' +
       '<span class="port p-out" data-port="out" title="Drag to another bar: it depends on this"></span>';
-    if (isScheduled(it)) {
+    var doneCk = it.done
+      ? '<span class="b-done" title="Done"><i data-lucide="circle-check"></i></span>' : '';
+    if (isScheduled(it) && it.milestone) {
+      // milestone: a diamond pinned to its fixed date, label at its right
+      var msTip = it.feature + '  ·  ' + RM.fmtShort(RM.dayToDate(meta, it.startDay)) + '  ·  milestone' +
+        (it.description ? '\n' + RM.htmlToText(it.description) : '');
+      laneInner =
+        '<div class="bar ms' + (selectedId === it.id && !selStory ? ' selected' : '') +
+        (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') +
+        (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
+        '" data-bar="' + it.id + '"' +
+        ' style="left:' + (it.startDay * dayPx()) + 'px;--bar-c:' + color + '"' +
+        ' title="' + esc(msTip) + '">' +
+        '<span class="ms-diamond"></span>' +
+        '<span class="b-label out">' + doneCk + esc(it.feature) + '</span>' +
+        ports +
+        '</div>';
+    } else if (isScheduled(it)) {
       var left = it.startDay * dayPx();
       var workW = Math.max(6, it.durDays * dayPx());
       var riskW = (it.riskDays || 0) * dayPx();
@@ -878,8 +906,8 @@
       var hcTag = (state.meta.capacityEnabled && it.headcount > 1 && width > 90) ? '<span class="b-hc">×' + it.headcount + '</span>' : '';
       // label rides inside the bar when it fits (~6.3px/char at 10.5px bold);
       // otherwise it sits just right of the bar in ink
-      var labelW = it.feature.length * 6.3 + 16 + (hcTag ? 30 : 0);
-      var label = '<span class="b-label' + (labelW <= width ? '' : ' out') + '">' + esc(it.feature) + '</span>';
+      var labelW = it.feature.length * 6.3 + 16 + (hcTag ? 30 : 0) + (it.done ? 16 : 0);
+      var label = '<span class="b-label' + (labelW <= width ? '' : ' out') + '">' + doneCk + esc(it.feature) + '</span>';
       var dates = RM.fmtShort(RM.dayToDate(meta, it.startDay)) + ' → ' +
         RM.fmtShort(RM.spanEndDate(meta, it.startDay, RM.itemSpan(it)));
       var tip = it.feature + '  ·  ' + dates + (it.size ? '  ·  ' + it.size : '') +
@@ -906,12 +934,16 @@
       var cells = ['<div class="sc-row">'];
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
-        size: '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="T-shirt size — click to change">' + (it.size || '·') + '</span>',
+        size: it.milestone
+          ? '<span class="r-size" title="Milestone — no size">—</span>'
+          : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="T-shirt size — click to change">' + (it.size || '·') + '</span>',
         risk: '<span class="r-risk rk-' + rk.level + (it.risk ? ' has-risk' : '') + '" tabindex="0" role="button" data-act="risk" title="' + esc(riskTitle) + '">' +
           (it.risk || (rk.level === 'none' ? '·' : rk.level.charAt(0).toUpperCase())) + '</span>',
-        duration: (isScheduled(it)
-          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Weeks — click to edit">' + totalWeeks(it) + '</span>'
-          : '<span class="r-wk" title="Estimated weeks from size">' + totalWeeks(it) + '</span>'),
+        duration: it.milestone
+          ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
+          : (isScheduled(it)
+            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Weeks — click to edit">' + totalWeeks(it) + '</span>'
+            : '<span class="r-wk" title="Estimated weeks from size">' + totalWeeks(it) + '</span>'),
         workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream — click to change">' +
           '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
           (it.workstream ? esc(shorten(it.workstream, 18)) : '·') + '</span>',
@@ -924,12 +956,10 @@
           fixedContent[c[0]] + '</div>');
       });
       scopeCols().forEach(function (c) {
+        // every scope column holds rich text — edit it in place as such
         var sv = RM.scopeValue(it, c[0]);
         cells.push('<div class="sc-cell" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
-          (c[0] === 'description'
-            // description holds rich text — edit it in place as such
-            ? '<div class="sc-edit sc-rich" contenteditable="true" data-scope="description">' + sanitizeHtml(sv) + '</div>'
-            : '<textarea class="sc-edit" data-scope="' + c[0] + '">' + esc(sv) + '</textarea>') + '</div>');
+          '<div class="sc-edit sc-rich" contenteditable="true" data-scope="' + c[0] + '">' + richDisplay(sv) + '</div></div>');
       });
       cells.push('</div>');
       laneInner = cells.join('');
@@ -946,31 +976,35 @@
       '<span class="r-dot" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
+      (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
       '<input class="r-name" data-rowname spellcheck="false" value="' + esc(it.feature) + '" placeholder="(untitled)" title="' + esc(it.feature + (it.description ? '\n' + RM.htmlToText(it.description) : '')) + '">' +
       (it.epic && !groupEpic ? '<span class="r-epic" title="' + esc(it.epic) + '">' +
         (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
         esc(it.epic) + '</span>' : '') +
       '</div>' +
-      (view === 'scoping' ? '' :
-        '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="T-shirt size — click to change">' + (it.size || '·') + '</span>' +
-        (isScheduled(it)
-          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Weeks — click to edit">' + totalWeeks(it) + '</span>'
-          : '<span class="r-wk" title="Estimated weeks from size">' + totalWeeks(it) + '</span>') +
-        (state.meta.capacityEnabled
-          ? '<span class="r-hc' + (it.headcount > 1 ? ' multi' : '') + '" tabindex="0" role="button" data-act="hc" title="Headcount — click to edit">×' + it.headcount + '</span>'
-          : '')) +
+      (view === 'scoping' ? '' : (it.milestone
+        ? '<span class="r-wk" title="Milestone — fixed date">◆</span>'
+        : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="T-shirt size — click to change">' + (it.size || '·') + '</span>' +
+          (isScheduled(it)
+            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Weeks — click to edit">' + totalWeeks(it) + '</span>'
+            : '<span class="r-wk" title="Estimated weeks from size">' + totalWeeks(it) + '</span>') +
+          (state.meta.capacityEnabled
+            ? '<span class="r-hc' + (it.headcount > 1 ? ' multi' : '') + '" tabindex="0" role="button" data-act="hc" title="Headcount — click to edit">×' + it.headcount + '</span>'
+            : ''))) +
       warnBadge(it) +
       '</div>' +
       '<div class="row-lane">' + laneInner + '</div>' +
       '</div>');
 
-    if (expanded[it.id] && view !== 'scoping') {
+    if (expanded[it.id]) {
       it.stories.forEach(function (st) {
         var stSched = st.startDay != null && st.durDays != null;
         html.push(
-          '<div class="row story" data-story="' + st.id + '" data-id="' + it.id + '">' +
+          '<div class="row story' + (selStory === st.id ? ' selected' : '') +
+          '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"></span>' +
-          '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-title">' + esc(st.title) + '</span>' +
+          (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
+          '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>' +
           '<button class="st-del" data-act="st-del" title="Delete story"><i data-lucide="x"></i></button>' +
           '</div>' +
           '<div class="row-lane"' + (!stSched && view === 'planning' ? ' title="Double-click to add a timeline"' : '') + '>' +
@@ -1164,8 +1198,10 @@
   }
 
   // ------------------------------------------------------------ selection & panel
+  var selStory = null; // story id when the panel shows a story (selectedId = its item)
   function select(id, scrollTo) {
     selectedId = id;
+    selStory = null;
     selectedEdge = null;
     render();
     if (scrollTo && id) {
@@ -1181,11 +1217,25 @@
       }
     }
   }
+  function selectStory(itemId, stId) {
+    selectedId = itemId;
+    selStory = stId;
+    selectedEdge = null;
+    render();
+  }
 
   function renderPanel() {
     var panel = $('#panel');
     var it = selectedId ? RM.itemById(state, selectedId) : null;
     if (!it) { panel.hidden = true; panel.innerHTML = ''; return; }
+    if (selStory) {
+      var stSel = storyById(it, selStory);
+      if (!stSel) { selStory = null; } else {
+        panel.hidden = false;
+        renderStoryPanel(panel, it, stSel);
+        return;
+      }
+    }
     panel.hidden = false;
     var meta = state.meta;
     var res = RM.resolveDeps(state, it);
@@ -1210,7 +1260,19 @@
 
     var scheduleInfo = '';
     var startD = isScheduled(it) ? RM.dayToDate(meta, it.startDay) : null;
-    if (isScheduled(it)) {
+    if (it.milestone) {
+      scheduleInfo = isScheduled(it)
+        ? '<div><label class="p-lab">Fixed date</label>' +
+          '<input type="date" data-f="startDate" value="' + RM.fmtISO(startD) + '" style="width:100%"></div>' +
+          '<div class="p-row" style="margin-top:8px">' +
+          '<button data-f="snap" title="Earliest date after dependencies">Snap earliest</button>' +
+          '<button data-f="unschedule">Unschedule</button>' +
+          '</div>'
+        : '<div class="p-row" style="margin-top:8px">' +
+          '<button data-f="schedule-now" class="primary">Place on timeline</button>' +
+          '<button data-f="snap">Snap earliest</button>' +
+          '</div>';
+    } else if (isScheduled(it)) {
       scheduleInfo =
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Start</label>' +
@@ -1269,27 +1331,23 @@
         '</button><div class="p-secbody">' + body + '</div></div>';
     }
 
-    var customCols = state.meta.scopeCols.filter(function (c) { return !RM.SCOPE_BUILTIN_LABELS[c.key]; });
+    // every scope column (Description included) edits as rich text in one
+    // always-available Fields section, in the document's column order
+    var fieldEds = state.meta.scopeCols.map(function (c) {
+      return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
+        wysHtml('col:' + c.key, RM.scopeValue(it, c.key), '') + '</div>';
+    }).join('') || '<div class="p-none">No columns — add one in the Scoping view.</div>';
 
     panel.innerHTML =
       '<div id="panelRz" title="Drag to resize"></div>' +
       '<div class="p-top"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
       '" title="Item # — an invalid or taken number picks the next available one"></span>' +
+      (it.milestone ? '<span class="p-mschip" title="Milestone — fixed date">◆ Milestone</span>' : '') +
+      '<button class="p-more" data-f="more" title="Duplicate, convert, delete…"><i data-lucide="ellipsis"></i></button>' +
       '<button class="p-close" data-f="close" title="Close (Esc)"><i data-lucide="x"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
-      sec('desc', 'Description', '',
-        wysHtml('description', it.description, 'What is this feature?')) +
-
-      sec('scope', 'Scope', '',
-        '<div class="p-fld"><label class="p-lab">Enables</label><textarea class="p-text" data-f="enables">' + esc(it.enables) + '</textarea></div>' +
-        '<div class="p-fld"><label class="p-lab">Out of scope</label><textarea class="p-text" data-f="outOfScope">' + esc(it.outOfScope) + '</textarea></div>' +
-        '<div class="p-fld"><label class="p-lab">Notes</label><textarea class="p-text" data-f="notes">' + esc(it.notes) + '</textarea></div>' +
-        '<div class="p-fld"><label class="p-lab">External dependencies</label><textarea class="p-text" data-f="extDeps">' + esc(it.extDeps) + '</textarea></div>' +
-        customCols.map(function (c) {
-          return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
-            '<textarea class="p-text" data-cf="' + c.key + '">' + esc(RM.scopeValue(it, c.key)) + '</textarea></div>';
-        }).join('')) +
+      sec('fields', 'Fields', '', fieldEds) +
 
       sec('details', 'Details', '',
         '<div class="p-grid2">' +
@@ -1299,10 +1357,11 @@
         '</div>' +
         '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>') +
 
-      sec('schedule', 'Size &amp; schedule', '',
-        '<label class="p-lab">Size</label>' +
-        '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
-        '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>' +
+      sec('schedule', it.milestone ? 'Schedule' : 'Size &amp; schedule', '',
+        (it.milestone ? '' :
+          '<label class="p-lab">Size</label>' +
+          '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
+          '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>') +
         scheduleInfo +
         '<label class="p-lab" style="margin-top:10px">Risk buffer</label>' + riskInfo +
         '<div class="p-row" style="margin-top:10px">' +
@@ -1338,14 +1397,67 @@
           }).join('') + '</div>')
         : '') +
 
-      '<div class="p-actions">' +
-      '<button data-f="duplicate">Duplicate</button>' +
-      '<button data-f="delete" class="danger">Delete</button>' +
-      '</div>' +
       '<datalist id="wsList"><option>Product</option><option>Data</option><option>Process</option><option>Product / Process</option><option>All</option></datalist>';
     if (window.lucide) lucide.createIcons();
     var pn = $('.p-name', panel);
     if (pn) { pn.style.height = 'auto'; pn.style.height = pn.scrollHeight + 'px'; }
+  }
+
+  // story detail panel: same scope columns as items; workstream/epic roll up
+  function renderStoryPanel(panel, it, st) {
+    var epIco = RM.iconForEpic(state, it.epic);
+    var fieldEds = state.meta.scopeCols.map(function (c) {
+      var v = c.key === 'description' ? st.description : ((st.custom || {})[c.key] || '');
+      return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
+        wysHtml('stcol:' + c.key, v, '') + '</div>';
+    }).join('');
+
+    var timeline;
+    if (st.startDay != null) {
+      timeline =
+        '<div class="p-grid2">' +
+        '<div><label class="p-lab">Start</label>' +
+        '<input type="date" data-stf="startDate" value="' + RM.fmtISO(RM.dayToDate(state.meta, st.startDay)) + '" style="width:100%"></div>' +
+        '<div><label class="p-lab">Weeks</label>' +
+        '<input type="number" data-stf="durWeeks" min="0.2" step="0.2" value="' + (st.durDays / 5) + '" style="width:100%"></div>' +
+        '</div>' +
+        '<div class="p-row" style="margin-top:8px"><button data-stf="untimeline">Remove timeline</button></div>';
+    } else {
+      timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
+    }
+
+    panel.innerHTML =
+      '<div id="panelRz" title="Drag to resize"></div>' +
+      '<div class="p-top">' +
+      '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
+      '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
+      '<button class="p-more" data-stf="more" title="Delete…"><i data-lucide="ellipsis"></i></button>' +
+      '<button class="p-close" data-f="close" title="Close (Esc)"><i data-lucide="x"></i></button></div>' +
+      '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
+      '<label class="p-check fixed" style="margin:6px 0 2px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
+
+      '<div class="p-sec c open"><button class="p-sechead" tabindex="-1">' +
+      '<i data-lucide="chevron-right"></i><span class="p-seclab">Rolls up to</span></button>' +
+      '<div class="p-secbody"><div class="p-rollup">' +
+      '<span class="sc-chip"><span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+      (it.workstream ? esc(it.workstream) : '<i>no workstream</i>') + '</span>' +
+      '<span class="sc-chip">' + (epIco ? '<i data-lucide="' + epIco + '"></i>' : '') +
+      (it.epic ? esc(it.epic) : '<i>no epic</i>') + '</span>' +
+      '</div><div class="m-hint">Stories inherit workstream and epic from their feature.</div></div></div>' +
+
+      sec2('fields', 'Fields', fieldEds) +
+      sec2('ac', 'Acceptance criteria', wysHtml('stac', st.ac, 'When is it done?')) +
+      sec2('schedule', 'Timeline', timeline);
+    if (window.lucide) lucide.createIcons();
+    var pn = $('.p-name', panel);
+    if (pn) { pn.style.height = 'auto'; pn.style.height = pn.scrollHeight + 'px'; }
+  }
+  // always-open section (story panel keeps things simple)
+  function sec2(key, label, body) {
+    return '<div class="p-sec c open" data-sec="st-' + key + '">' +
+      '<button class="p-sechead" tabindex="-1">' +
+      '<i data-lucide="chevron-right"></i><span class="p-seclab">' + label + '</span>' +
+      '</button><div class="p-secbody">' + body + '</div></div>';
   }
 
   // ---- shared dropdown: a button that opens the same list UI the menu bar
@@ -1594,6 +1706,34 @@
       renderPanel();
       return;
     }
+    // story-panel controls
+    var stf = e.target.closest('[data-stf]');
+    if (stf && selStory) {
+      var stfk = stf.dataset.stf;
+      if (stfk === 'up') { select(it.id); return; }
+      if (stfk === 'more') {
+        var stMoreId = selStory;
+        openDropdown(stf, [
+          { icon: 'trash-2', label: 'Delete story', fn: function () {
+            commit('delete story', function (s) {
+              var t = RM.itemById(s, it.id);
+              t.stories = t.stories.filter(function (x) { return x.id !== stMoreId; });
+              selStory = null;
+            });
+          } }
+        ]);
+        return;
+      }
+      if (stfk === 'untimeline') {
+        commit('story timeline', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, selStory);
+          if (st2) { st2.startDay = null; st2.durDays = null; }
+        });
+        return;
+      }
+      return; // title/done/dates commit on change
+    }
+
     var btn = e.target.closest('[data-f]');
     var dep = e.target.closest('[data-deprm]');
     var depTxt = e.target.closest('[data-deptxtrm]');
@@ -1601,7 +1741,7 @@
     var depGo = e.target.closest('[data-depgo]');
     var stDel = e.target.closest('[data-pst-del]');
     var stEd = e.target.closest('[data-pst-edit]');
-    if (stEd) { storyModal(it.id, stEd.dataset.pstEdit); return; }
+    if (stEd) { selectStory(it.id, stEd.dataset.pstEdit); return; }
     if (rdep) {
       // a dependent stops relying on this item
       var depId = rdep.dataset.rdep;
@@ -1660,6 +1800,17 @@
     if (!btn) return;
     var f = btn.dataset.f;
     if (f === 'close') { select(null); return; }
+    if (f === 'more') {
+      openDropdown(btn, [
+        { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
+        { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
+          label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
+          fn: function () { toggleMilestone(it.id); } },
+        { sep: true },
+        { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(it.id); } }
+      ]);
+      return;
+    }
     if (f === 'size') {
       var v = btn.dataset.v || null;
       commit('size', function (s) {
@@ -1701,8 +1852,8 @@
         var t = RM.itemById(s, it.id);
         var today = RM.dateToDay(s.meta, new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
         t.startDay = Math.max(0, Math.min(today, RM.numDays(s.meta) - 5));
-        t.durDays = RM.stretchSpan(s.meta, t.startDay, RM.effortDays(s, t));
-        t.riskDays = RM.stretchSpan(s.meta, t.startDay + t.durDays, RM.riskEffortDays(s, t));
+        t.durDays = t.milestone ? 0 : RM.stretchSpan(s.meta, t.startDay, RM.effortDays(s, t));
+        t.riskDays = t.milestone ? 0 : RM.stretchSpan(s.meta, t.startDay + t.durDays, RM.riskEffortDays(s, t));
       });
       return;
     }
@@ -1713,81 +1864,95 @@
       });
       return;
     }
-    if (f === 'duplicate') {
-      commit('duplicate', function (s) {
-        var t = RM.itemById(s, it.id);
-        var copy = RM.clone(t);
-        copy.id = RM.uid('i');
-        copy.num = RM.nextNum(s);
-        copy.feature = t.feature + ' (copy)';
-        copy.stories.forEach(function (st) { st.id = RM.uid('s'); });
-        var idx = s.items.indexOf(t);
-        s.items.splice(idx + 1, 0, copy);
-        selectedId = copy.id;
-      });
-      return;
-    }
-    if (f === 'delete') {
-      confirmBox('Delete #' + it.num + '?', esc(it.feature) +
-        '<br><br>Items depending on it will keep a dangling reference (flagged by validation).',
-        'Delete', function () {
-          commit('delete', function (s) {
-            s.items = s.items.filter(function (x) { return x.id !== it.id; });
-            selectedId = null;
-          });
-        }, true);
-      return;
-    }
   });
 
-  // story editor: title + rich Description / Acceptance Criteria
-  function storyModal(itemId, stId) {
-    var it = RM.itemById(state, itemId);
-    var st = null;
-    (it ? it.stories : []).forEach(function (x) { if (x.id === stId) st = x; });
-    if (!st) return;
-    openModal(
-      '<div class="modal" style="width:560px">' +
-      '<div class="m-head"><h2>Edit story</h2>' +
-      '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
-      '<div class="m-body">' +
-      '<div class="m-sec"><label>Title</label><input id="stTitle" style="width:100%" value="' + esc(st.title) + '"></div>' +
-      '<div class="m-sec"><label>Description</label>' + wysHtml('stDesc', st.description, 'What does this story cover?') + '</div>' +
-      '<div class="m-sec"><label>Acceptance criteria</label>' + wysHtml('stAc', st.ac, 'When is it done?') + '</div>' +
-      '</div>' +
-      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
-      '<button data-m="save" class="primary">Save</button></div></div>',
-      function (host) {
-        $('[data-m=x]', host).onclick = closeModal;
-        $('[data-m=cancel]', host).onclick = closeModal;
-        $('[data-m=save]', host).onclick = function () {
-          var title = $('#stTitle', host).value.trim() || st.title;
-          var dv = sanitizeHtml($('.wz-ed[data-f=stDesc]', host).innerHTML);
-          var av = sanitizeHtml($('.wz-ed[data-f=stAc]', host).innerHTML);
-          closeModal();
-          commit('edit story', function (s) {
-            RM.itemById(s, itemId).stories.forEach(function (x) {
-              if (x.id === stId) { x.title = title; x.description = dv; x.ac = av; }
-            });
-          });
-        };
-      });
+  // flip an item between a duration bar and a fixed-date milestone diamond
+  function toggleMilestone(itemId) {
+    commit('milestone', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (!t) return;
+      t.milestone = !t.milestone;
+      if (t.milestone) {
+        if (t.durDays != null) t.durDays = 0;
+        t.riskDays = 0;
+      } else if (t.durDays != null) {
+        // back to a bar: restore a duration from the size (else one week)
+        var days = RM.sizeDays(s, t.size) || 5;
+        t.durDays = RM.stretchSpan(s.meta, t.startDay, days);
+      }
+    });
   }
 
-  // the rich description commits on blur (contenteditable has no change event)
+  // rich editors commit on blur (contenteditable has no change event):
+  //   col:<key>   — an item's scope column
+  //   stcol:<key> — a story's scope column ('description' maps to st.description)
+  //   stac        — a story's acceptance criteria
   $('#panel').addEventListener('focusout', function (e) {
     var ed = e.target.classList && e.target.classList.contains('wz-ed') ? e.target : null;
-    if (!ed || ed.dataset.f !== 'description') return;
+    if (!ed || !ed.dataset.f) return;
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    var f = ed.dataset.f;
     var v = sanitizeHtml(ed.innerHTML);
-    if (v === it.description) return;
-    commit('description', function (s) { RM.itemById(s, it.id).description = v; });
+    if (selStory && (f === 'stac' || f.indexOf('stcol:') === 0)) {
+      var st = storyById(it, selStory);
+      if (!st) return;
+      var cur = f === 'stac' ? st.ac
+        : (f === 'stcol:description' ? st.description : ((st.custom || {})[f.slice(6)] || ''));
+      if (v === cur || v === richDisplay(cur)) return;
+      var stId = selStory;
+      commit('story field', function (s) {
+        var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+        if (!st2) return;
+        if (f === 'stac') st2.ac = v;
+        else if (f === 'stcol:description') st2.description = v;
+        else {
+          if (!st2.custom) st2.custom = {};
+          if (v) st2.custom[f.slice(6)] = v; else delete st2.custom[f.slice(6)];
+        }
+      });
+      return;
+    }
+    if (f.indexOf('col:') === 0) {
+      var key = f.slice(4);
+      if (v === RM.scopeValue(it, key)) return;
+      commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, it.id), key, v); });
+    }
   });
 
   $('#panel').addEventListener('change', function (e) {
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    var stf = e.target.dataset.stf;
+    if (stf && selStory) {
+      var stId = selStory;
+      var sval = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+      if (stf === 'startDate') {
+        if (!sval) { render(); return; }
+        var sd = RM.dateToDay(state.meta, RM.parseISO(sval));
+        if (sd == null) { render(); return; }
+        commit('story start', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+          if (st2 && st2.startDay != null) st2.startDay = Math.max(0, sd);
+        });
+        return;
+      }
+      if (stf === 'durWeeks') {
+        var swv = Math.max(0.2, parseFloat(sval) || 1);
+        commit('story duration', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+          if (st2 && st2.startDay != null) st2.durDays = Math.max(1, Math.round(swv * 5));
+        });
+        return;
+      }
+      commit('story ' + stf, function (s) {
+        var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+        if (!st2) return;
+        if (stf === 'title') st2.title = String(sval);
+        else if (stf === 'done') st2.done = !!sval;
+      });
+      return;
+    }
     var f = e.target.dataset.f;
     var pstTitle = e.target.dataset.pstTitle;
     if (pstTitle) {
@@ -1968,14 +2133,16 @@
         commit('delete story', function (s) {
           var t = RM.itemById(s, itemId);
           t.stories = t.stories.filter(function (st) { return st.id !== stId; });
+          if (selStory === stId) selStory = null;
         });
-      } else if (act.dataset.act === 'st-title') {
-        startInlineEdit(act, function (v) {
-          commit('story title', function (s) {
-            RM.itemById(s, itemId).stories.forEach(function (st) { if (st.id === stId) st.title = v; });
-          });
-        });
+      } else if (act.dataset.act === 'st-open') {
+        selectStory(itemId, stId);
       }
+      return;
+    }
+    // clicking a story's left pane or bar opens the story panel
+    if (storyEl && (e.target.closest('.row-left') || e.target.closest('[data-stbar]'))) {
+      selectStory(itemId, storyEl.dataset.story);
       return;
     }
 
@@ -2118,12 +2285,13 @@
         }
         lanePress = { id: 'st:' + stLaneId, t: stNow };
       } else lanePress = null;
-      select(null);
+      selectStory(itemId, stLaneId);
       return;
     }
 
-    // empty lane space deselects; two quick clicks on an unscheduled row's
-    // lane place the item (manual count — see lanePress above)
+    // any other click in the row selects the item and opens the panel; two
+    // quick clicks on an unscheduled row's lane also place the item (manual
+    // count — see lanePress above)
     if (e.target.closest('.row-lane') &&
       !e.target.closest('[data-bar],[data-ghost],.ghost-pill,.port,.sc-row')) {
       if (view === 'planning' && !isScheduled(it) && !rowEl.classList.contains('story')) {
@@ -2135,11 +2303,10 @@
         }
         lanePress = { id: itemId, t: now };
       } else lanePress = null;
-      select(null);
+      select(itemId);
       return;
     }
-    // clicking an already-open item closes the edit panel
-    select(selectedId === itemId ? null : itemId);
+    select(itemId);
   });
 
   // set size / risk from the chip dropdowns
@@ -2195,7 +2362,7 @@
       return;
     }
     var day = Math.max(0, snapTo(laneDayAt(e.clientX)));
-    var dur = RM.stretchSpan(state.meta, day, RM.effortDays(state, it) || 5);
+    var dur = it.milestone ? 1 : RM.stretchSpan(state.meta, day, RM.effortDays(state, it) || 5);
     if (!placePrev || placePrev.parentNode !== lane) {
       clearPlacePreview();
       placePrev = document.createElement('div');
@@ -2288,6 +2455,9 @@
         { icon: it.done ? 'circle' : 'circle-check', label: it.done ? 'Unmark as done' : 'Mark as done', fn: function () {
           commit('done', function (s) { var t = RM.itemById(s, itemId); t.done = !t.done; });
         } },
+        { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
+          label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
+          fn: function () { toggleMilestone(itemId); } },
         { sep: true },
         { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(itemId); } },
         { icon: 'trash-2', label: 'Delete #' + it.num + '…', fn: function () { deleteItemConfirm(itemId); } }
@@ -2473,7 +2643,7 @@
     commit('place item', function (s2) {
       var t2 = RM.itemById(s2, itemId);
       t2.startDay = pDay;
-      t2.durDays = RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5);
+      t2.durDays = t2.milestone ? 0 : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5);
       if (autoOrder) RM.sortItemsByStart(s2);
     });
     select(itemId);
@@ -2631,29 +2801,17 @@
     }
   });
 
-  // the rich scoping description cell commits on blur
+  // scoping cells are all rich editors — they commit on blur
   rowsEl.addEventListener('focusout', function (e) {
-    if (!e.target.dataset || e.target.dataset.scope !== 'description') return;
+    var f = e.target.dataset && e.target.dataset.scope;
+    if (!f) return;
     if (e.target.getAttribute('contenteditable') !== 'true') return;
     var rowEl = e.target.closest('.row');
     var itemId = rowEl && rowEl.dataset.id;
     if (!itemId) return;
     var val = sanitizeHtml(e.target.innerHTML);
-    if (val === RM.scopeValue(RM.itemById(state, itemId), 'description')) return;
-    commit('scope description', function (s) {
-      var t = RM.itemById(s, itemId);
-      if (t) RM.setScopeValue(t, 'description', val);
-    });
-  });
-
-  // scoping view: spreadsheet cells commit on change (blur)
-  rowsEl.addEventListener('change', function (e) {
-    var f = e.target.dataset && e.target.dataset.scope;
-    if (!f) return;
-    var rowEl = e.target.closest('.row');
-    var itemId = rowEl && rowEl.dataset.id;
-    if (!itemId) return;
-    var val = e.target.value;
+    var prev = RM.scopeValue(RM.itemById(state, itemId), f);
+    if (val === prev || val === richDisplay(prev)) return;
     commit('scope ' + f, function (s) {
       var t = RM.itemById(s, itemId);
       if (t) RM.setScopeValue(t, f, val);
@@ -2846,9 +3004,7 @@
     if (idx < cols.length - 1) items2.push({ icon: 'arrow-right', label: 'Move right', fn: function () {
       commit('move column', function (s) { RM.moveScopeCol(s, key, 1); });
     } });
-    if (!RM.SCOPE_BUILTIN_LABELS[key]) {
-      items2.push({ icon: 'pencil', label: 'Rename…', fn: function () { scopeColModal(key); } });
-    }
+    items2.push({ icon: 'pencil', label: 'Rename…', fn: function () { scopeColModal(key); } });
     items2.push({ sep: true });
     items2.push({ icon: 'trash-2', label: 'Remove column', fn: function () {
       commit('remove column', function (s) { RM.removeScopeCol(s, key); });
@@ -2856,11 +3012,14 @@
     openDropdown(mb, items2);
   });
 
-  // create (key == null) or rename a custom scoping column
+  // create (key == null) or rename a scoping column (built-ins included —
+  // clearing the label restores a built-in's canonical name)
   function scopeColModal(key) {
     var cur = '';
     if (key) {
-      state.meta.scopeCols.forEach(function (c) { if (c.key === key) cur = c.label || ''; });
+      state.meta.scopeCols.forEach(function (c) {
+        if (c.key === key) cur = RM.scopeColLabel(c);
+      });
     }
     openModal(
       '<div class="modal" style="width:360px">' +
@@ -2875,10 +3034,10 @@
         $('[data-m=x2]', host).onclick = closeModal;
         function save() {
           var v = $('#colName', host).value.trim();
-          if (!v) { closeModal(); return; }
+          if (!v && !key) { closeModal(); return; }
           closeModal();
           commit(key ? 'rename column' : 'add column', function (s) {
-            if (key) s.meta.scopeCols.forEach(function (c) { if (c.key === key) c.label = v; });
+            if (key) RM.renameScopeCol(s, key, v);
             else RM.addScopeCol(s, v);
           });
         }
@@ -3035,7 +3194,7 @@
     drag.el.classList.add('dragging');
     document.body.classList.add('dragging-x');
     drag.el.style.left = (ns * dayPx()) + 'px';
-    drag.el.style.width = (Math.max(6, nd * dayPx()) + nr * dayPx()) + 'px';
+    if (!it.milestone) drag.el.style.width = (Math.max(6, nd * dayPx()) + nr * dayPx()) + 'px';
     drag.ns = ns; drag.nd = nd; drag.nr = nr;
 
     // vertical: dragging the bar across other rows reorders / re-phases the
@@ -3058,15 +3217,19 @@
     }
 
     var meta = state.meta;
-    var endD = RM.spanEndDate(meta, ns, nd + nr);
-    var work = RM.workInSpan(meta, ns, nd);
-    var riskWork = RM.workInSpan(meta, ns + nd, nr);
     dragTip.hidden = false;
     dragTip.style.left = (e.clientX + 14) + 'px';
     dragTip.style.top = (e.clientY - 34) + 'px';
-    dragTip.innerHTML = '<b>' + RM.fmtShort(RM.dayToDate(meta, ns)) + '</b> → ' + RM.fmtShort(endD) +
-      ' · ' + fmtDays(work) + (it.size ? ' <b>(' + it.size + ')</b>' : '') +
-      (nr > 0 ? ' + ' + fmtDays(riskWork) + ' risk' : '');
+    if (it.milestone) {
+      dragTip.innerHTML = '<b>' + RM.fmtShort(RM.dayToDate(meta, ns)) + '</b> · milestone';
+    } else {
+      var endD = RM.spanEndDate(meta, ns, nd + nr);
+      var work = RM.workInSpan(meta, ns, nd);
+      var riskWork = RM.workInSpan(meta, ns + nd, nr);
+      dragTip.innerHTML = '<b>' + RM.fmtShort(RM.dayToDate(meta, ns)) + '</b> → ' + RM.fmtShort(endD) +
+        ' · ' + fmtDays(work) + (it.size ? ' <b>(' + it.size + ')</b>' : '') +
+        (nr > 0 ? ' + ' + fmtDays(riskWork) + ' risk' : '');
+    }
   }
 
   function barDragEnd(d) {
@@ -3144,7 +3307,7 @@
   function ghostDragMove(e) {
     var it = RM.itemById(state, drag.itemId);
     var day = Math.max(0, snapTo(laneDayAt(e.clientX)));
-    var dur = RM.stretchSpan(state.meta, day, RM.effortDays(state, it));
+    var dur = it.milestone ? 1 : RM.stretchSpan(state.meta, day, RM.effortDays(state, it));
     if (!drag.preview) {
       var rowEl = rowsEl.querySelector('.row[data-id="' + it.id + '"] .row-lane');
       drag.preview = document.createElement('div');
@@ -3166,7 +3329,7 @@
     commit('schedule', function (s) {
       var t = RM.itemById(s, d.itemId);
       t.startDay = d.day;
-      t.durDays = d.dur;
+      t.durDays = t.milestone ? 0 : d.dur;
       t.riskDays = RM.stretchSpan(s.meta, t.startDay + t.durDays, RM.riskEffortDays(s, t));
       if (autoOrder) RM.sortItemsByStart(s);
     });
@@ -3394,30 +3557,50 @@
 
   // menu bar (File / Edit / View)
   function menuItems(name) {
+    var isMacDesktop = !!window.HeadwayDesktop && navigator.platform.indexOf('Mac') === 0;
+    function openProject() {
+      if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+      else $('#filePick').click();
+    }
+    function toggleAutoSave() {
+      autoSave = !autoSave;
+      saveLocal(); renderTopbar();
+      if (autoSave) scheduleAutoSave();
+      toast('Auto save ' + (autoSave ? 'on — writes to the open file' : 'off'));
+    }
+    if (name === 'macApp') {
+      // macOS: file actions live in the app-name menu (desktop.js appends the
+      // standard Hide/Quit block after these)
+      return [
+        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProjectModal },
+        { icon: 'folder-open', nativeIcon: 'Folder', label: 'Open project', fn: openProject },
+        { icon: 'file-spreadsheet', nativeIcon: 'MultipleDocuments', label: 'Download template', fn: downloadTemplate },
+        { sep: true },
+        { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
+        { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
+        { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
+        { sep: true },
+        { icon: 'image', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { sep: true },
+        { icon: 'circle-help', nativeIcon: 'Info', label: 'Help', fn: helpModal }
+      ];
+    }
     if (name === 'file') {
       return [
         { icon: 'house', label: 'Start page', fn: showStart },
         { sep: true },
         { icon: 'file-plus-2', label: 'New project…', fn: newProjectModal },
-        { icon: 'folder-open', label: 'Open .xlsx…', fn: function () {
-          if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
-          else $('#filePick').click();
-        } },
+        { icon: 'folder-open', label: 'Open project…', fn: openProject },
         { sep: true },
-        { icon: 'download', label: 'Save .xlsx', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
+        { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
         window.HeadwayDesktop
-          ? { icon: 'save', label: 'Save As…', fn: function () { window.HeadwayApp.save(true); } }
+          ? { icon: 'save', label: 'Save as…', fn: function () { window.HeadwayApp.save(true); } }
           : null,
         window.HeadwayDesktop
-          ? { icon: 'timer-reset', label: 'Auto-save', checked: autoSave, fn: function () {
-              autoSave = !autoSave;
-              saveLocal(); renderTopbar();
-              if (autoSave) scheduleAutoSave();
-              toast('Auto-save ' + (autoSave ? 'on — writes to the open file' : 'off'));
-            } }
+          ? { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave }
           : null,
         { sep: true },
-        { icon: 'image', label: 'Export PNG…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'image', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         { icon: 'circle-help', label: 'Shortcuts & help', fn: helpModal }
@@ -3504,7 +3687,11 @@
       { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
       { icon: 'crosshair', label: 'Scroll to today', fn: goToday },
       { sep: true },
-    ].concat(themeMenuItems()).filter(Boolean));
+    ].concat(themeMenuItems())
+      // macOS lost the native File menu (its actions moved to the app menu) —
+      // keep the start page reachable from View there
+      .concat(isMacDesktop ? [{ sep: true }, { icon: 'house', label: 'Start page', fn: showStart }] : [])
+      .filter(Boolean));
   }
 
   var openMenuName = null;
@@ -4079,6 +4266,10 @@
     // one card set per vertical tab
     var tabBodies = {
       timeline:
+        '<section class="su-card"><h2>Project</h2>' +
+        '<label class="p-lab">Name</label>' +
+        '<input id="suTitle" style="width:100%" maxlength="120" value="' + esc(m.title || '') + '" placeholder="Roadmap name">' +
+        '</section>' +
         '<section class="su-card"><h2>Timeline</h2>' +
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Start (Monday)</label><input type="date" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
@@ -4121,7 +4312,7 @@
         '</section>',
       appearance:
         '<section class="su-card"><h2>Appearance</h2>' + personalFieldsHtml('appearance') +
-        '<div class="m-hint">System follows your OS. Personal settings live on this machine — they never travel inside a project file.</div>' +
+        '<div class="m-hint">System follows your OS.</div>' +
         '</section>',
       prefs:
         '<section class="su-card"><h2>Preferences</h2>' + personalFieldsHtml('behavior') + '</section>'
@@ -4136,10 +4327,17 @@
         }).join('');
     }).join('');
 
+    // page title = the active tab's rail label (typography hierarchy:
+    // page h1 > card h2 > field sub-headings)
+    var pageTitle = '';
+    SETUP_SECTIONS.forEach(function (sec) {
+      sec[1].forEach(function (t) { if (t[0] === setupTab) pageTitle = t[1]; });
+    });
+
     host.innerHTML =
       '<div class="su-layout">' +
       '<nav class="su-rail" aria-label="Settings sections">' + rail + '</nav>' +
-      '<div class="su-content">' + tabBodies[setupTab] + '</div>' +
+      '<div class="su-content"><h1 class="su-page">' + esc(pageTitle) + '</h1>' + tabBodies[setupTab] + '</div>' +
       '</div>';
     if (window.lucide) lucide.createIcons();
   }
@@ -4171,6 +4369,11 @@
   });
 
   $('#setupView').addEventListener('change', function (e) {
+    if (e.target.id === 'suTitle') {
+      var tv2 = e.target.value.trim() || 'Roadmap';
+      commit('title', function (s2) { s2.meta.title = tv2; });
+      return;
+    }
     var t = e.target;
     if (t.id === 'suCapEnable') {
       var on = t.checked;
@@ -5015,8 +5218,7 @@
     openModal(
       '<div class="modal" style="width:460px">' +
       '<div class="m-head"><h2>Personal settings</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
-      '<div class="m-body"><div id="ppFields">' + personalFieldsHtml() + '</div>' +
-      '<div class="m-hint">Personal settings live on this machine — they never travel inside a project file.</div></div>' +
+      '<div class="m-body"><div id="ppFields">' + personalFieldsHtml() + '</div></div>' +
       '<div class="m-foot"><button data-m="x2" class="primary">Done</button></div></div>',
       function (host) {
         $('[data-m=x]', host).onclick = closeModal;
@@ -5120,10 +5322,15 @@
       '<div class="sp-recents">' +
       ((continueCard + rows) || '<div class="sp-empty">Nothing yet — projects you create or open appear here.</div>') +
       '</div>' +
-      '<div class="sp-hint">Every project lives in an .xlsx file on disk' +
-      (desktop ? ' — edits auto-save to the open file.' : '.') + '</div>' +
+      (appVersion() ? '<div class="sp-version">Headway ' + esc(appVersion()) + '</div>' : '') +
       '</div>';
     if (window.lucide) lucide.createIcons();
+  }
+
+  // app version for the start page footer (desktop only — the browser build
+  // has no version of its own)
+  function appVersion() {
+    return (window.HeadwayDesktop && window.HeadwayDesktop.appVersion) || '';
   }
 
   $('#startPage').addEventListener('click', function (e) {
@@ -5313,7 +5520,8 @@
     saveFileName: saveFileName,
     save: doSave,
     menuItems: menuItems,
-    noteRecent: noteRecent
+    noteRecent: noteRecent,
+    renderStartPage: renderStartPage
   };
 
   // ------------------------------------------------------------ keyboard

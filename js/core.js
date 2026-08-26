@@ -28,7 +28,10 @@
     extDeps: 'External dependencies',
     notes: 'Notes'
   };
-  RM.DEFAULT_SCOPE_COLS = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
+  // New documents start with Description only; the rest stay available in
+  // the add-column menu. Legacy docs infer their list from actual content.
+  RM.DEFAULT_SCOPE_COLS = ['description'];
+  RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -315,14 +318,24 @@
     }
     m.sprintAnchor = m.sprintAnchor || m.timelineStart;
     m.sprintAnchorNum = m.sprintAnchorNum != null && isFinite(m.sprintAnchorNum) ? m.sprintAnchorNum : 1;
-    // scoping columns: ordered list of { key, label? }; built-in keys carry
-    // their canonical label, custom keys ('c…') keep the user's label
+    // scoping columns: ordered list of { key, label? }; built-in keys fall
+    // back to their canonical label, custom keys ('c…') keep the user's
+    // label. Any column may carry a user rename. Docs saved before scopeCols
+    // existed get Description plus whichever built-ins actually hold content.
     var seenCol = {};
-    m.scopeCols = (m.scopeCols || RM.DEFAULT_SCOPE_COLS.map(function (k) { return { key: k }; }))
+    var inheritedCols = m.scopeCols;
+    if (!inheritedCols) {
+      inheritedCols = RM.SCOPE_BUILTIN_ORDER.filter(function (k) {
+        return k === 'description' || (state.items || []).some(function (it) { return it && it[k]; });
+      }).map(function (k) { return { key: k }; });
+    }
+    m.scopeCols = inheritedCols
       .map(function (c) {
         if (typeof c === 'string') c = { key: c };
         if (!c || typeof c.key !== 'string' || !c.key) return null;
-        if (RM.SCOPE_BUILTIN_LABELS[c.key]) return { key: c.key };
+        if (RM.SCOPE_BUILTIN_LABELS[c.key]) {
+          return c.label ? { key: c.key, label: String(c.label) } : { key: c.key };
+        }
         return { key: c.key, label: String(c.label || 'Column') };
       })
       .filter(function (c) {
@@ -398,8 +411,11 @@
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
         // every work item defaults to 1 × Development
         teamType: it.teamType != null && it.teamType !== '' ? it.teamType : RM.DEFAULT_WORK_TYPE,
+        // milestones are fixed dates: zero-duration diamonds on the timeline
+        milestone: !!it.milestone,
         startDay: it.startDay != null && isFinite(it.startDay) ? it.startDay : null,
-        durDays: it.durDays != null && isFinite(it.durDays) ? Math.max(1, it.durDays) : null,
+        durDays: it.durDays != null && isFinite(it.durDays)
+          ? Math.max(it.milestone ? 0 : 1, it.durDays) : null,
         // risk t-shirt is planning metadata only — it never pads the schedule
         riskDays: 0,
         locked: !!it.locked,
@@ -424,6 +440,17 @@
             // rich-text (sanitized HTML) story body + acceptance criteria
             description: typeof s.description === 'string' ? s.description : '',
             ac: typeof s.ac === 'string' ? s.ac : '',
+            // scope-column values (same keys as item.custom) — stories share
+            // the document's columns; workstream/epic roll up from the item
+            custom: (function () {
+              var out = {};
+              if (s.custom && typeof s.custom === 'object') {
+                Object.keys(s.custom).forEach(function (k) {
+                  if (s.custom[k] != null && s.custom[k] !== '') out[k] = String(s.custom[k]);
+                });
+              }
+              return out;
+            })(),
             startDay: sched ? Math.max(0, Math.round(s.startDay)) : null,
             durDays: sched ? Math.round(s.durDays) : null
           };
@@ -537,7 +564,14 @@
 
   // ------------------------------------------------------------ scope columns
   RM.scopeColLabel = function (col) {
-    return RM.SCOPE_BUILTIN_LABELS[col.key] || col.label || 'Column';
+    return col.label || RM.SCOPE_BUILTIN_LABELS[col.key] || 'Column';
+  };
+  RM.renameScopeCol = function (state, key, label) {
+    state.meta.scopeCols.forEach(function (c) {
+      if (c.key !== key) return;
+      if (label && label !== RM.SCOPE_BUILTIN_LABELS[key]) c.label = label;
+      else delete c.label; // empty (or canonical) restores the built-in name
+    });
   };
   RM.scopeValue = function (it, key) {
     if (RM.SCOPE_BUILTIN_LABELS[key]) return it[key] || '';
@@ -590,8 +624,12 @@
     return it.startDay != null && it.durDays != null ? it.startDay + it.durDays + (it.riskDays || 0) : null;
   };
 
-  // Total calendar span on the grid (work + risk buffer).
-  RM.itemSpan = function (it) { return (it.durDays || 0) + (it.riskDays || 0); };
+  // Total calendar span on the grid (work + risk buffer). Milestones are a
+  // point in time — dependents may start the same day.
+  RM.itemSpan = function (it) {
+    if (it.milestone) return 0;
+    return (it.durDays || 0) + (it.riskDays || 0);
+  };
 
   // Risk is metadata only now — it contributes no working days to the plan.
   RM.riskEffortDays = function () { return 0; };
@@ -715,7 +753,7 @@
       });
     }
     state.items.forEach(function (it) {
-      if (it.startDay == null || it.durDays == null || it.done) return;
+      if (it.startDay == null || it.durDays == null || it.done || it.milestone) return;
       var w0 = Math.floor(it.startDay / 5);
       var w1 = Math.floor((it.startDay + it.durDays - 1) / 5);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
@@ -898,7 +936,7 @@
       var scheduled = it.startDay != null && it.durDays != null;
       var phase = phaseById[it.phaseId];
       if (scheduled) {
-        if (!it.size) add(it, 'warn', 'NO_SIZE', 'Scheduled without a t-shirt size');
+        if (!it.size && !it.milestone) add(it, 'warn', 'NO_SIZE', 'Scheduled without a t-shirt size');
         if (it.startDay < 0 || it.startDay + RM.itemSpan(it) > horizon) {
           add(it, 'warn', 'OFF_TIMELINE', 'Bar extends outside the timeline');
         }
@@ -967,7 +1005,8 @@
     state.items.forEach(function (it, idx) {
       it._idx = idx;
       var phase = state.phases[phaseIdxById[it.phaseId]];
-      if (!phase.bucket && !it.locked && !it.done) considered.push(it);
+      // milestones are fixed dates: never moved, dependents plan around them
+      if (!phase.bucket && !it.locked && !it.done && !it.milestone) considered.push(it);
       else if (it.startDay != null && it.durDays != null && !it.done) fixed.push(it);
     });
 
@@ -1186,7 +1225,8 @@
       var e = RM.itemEnd(dep);
       if (!dep.done && e != null && e > est) est = e;
     });
-    var work = RM.effortDays(state, it);
+    // a milestone occupies no working days — it snaps to the dependency floor
+    var work = it.milestone ? 0 : RM.effortDays(state, it);
 
     var capData = RM.capacity(state);
     var LIMIT = (meta.numWeeks + 104) * 5;
@@ -1280,7 +1320,7 @@
       var cur = q.shift();
       /* eslint-disable no-loop-func */
       (childrenBy[cur.id] || []).forEach(function (ch) {
-        if (ch.startDay == null || ch.locked || ch.done) return;
+        if (ch.startDay == null || ch.locked || ch.done || ch.milestone) return;
         // never start before any scheduled dependency's buffered end
         var floor = 0;
         ch.deps.forEach(function (n) {
