@@ -86,6 +86,24 @@ ok(!!contBtn, 'browser session offers Continue where you left off');
 click(contBtn);
 ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidden,
   'Continue enters the editor');
+
+// -------------------------------------------- author required on first change
+{
+  ok(!window.localStorage.getItem('headway-user-v1'), 'fresh session starts with no author name');
+  const t = doc.querySelector('#docTitle');
+  t.value = state().meta.title;
+  t.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const mh = doc.querySelector('#modalHost');
+  ok(!mh.hidden && /Who’s editing\?/.test(mh.textContent), 'the first saved change asks for your name');
+  const nameIn = doc.querySelector('#vhNameIn');
+  nameIn.value = 'Test User';
+  nameIn.dispatchEvent(new window.Event('input', { bubbles: true }));
+  click(doc.querySelector('#vhNameSave'));
+  ok(mh.hidden, 'saving the name closes the prompt');
+  ok(window.localStorage.getItem('headway-user-v1') === 'Test User', 'the name persists on this machine');
+  const hist = state().history;
+  ok(hist.length && hist[hist.length - 1].u === 'Test User', 'the anonymous change is stamped with the new author');
+}
 ok(doc.querySelectorAll('#rows .row.band').length === 6, 'six phase bands rendered');
 const itemRows = doc.querySelectorAll('#rows .row.item').length;
 ok(itemRows > 100, 'item rows rendered (' + itemRows + ')');
@@ -1991,6 +2009,188 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'budget column widths persist');
   const roleInp = doc.querySelector('#rows .row.brole[data-mid] input[data-bud="role"]');
   ok(roleInp.style.width === 'var(--bu-w-role)', 'row cells track the resized header width');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ------------------------------------------------- batch 11: header columns
+{
+  // detail selector lives in the top header line, left of Filter rows,
+  // and carries a text label
+  const dmBtn = doc.querySelector('#filterCell #detailBtn');
+  ok(!!dmBtn, 'the detail selector sits inside the filter header cell');
+  ok(/Phase|Feature|Story/.test(dmBtn.textContent), 'the detail selector shows a text label');
+
+  // budget headers are rendered dynamically, aligned to the same visible set
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  const hdrKeys = Array.from(doc.querySelectorAll('#hlCols i[data-bucol]')).map(i => i.dataset.bucol);
+  ok(hdrKeys.join(',') === 'role,type,ws,cost,rate,margin,total', 'budget header renders all columns in order');
+  ok(doc.querySelectorAll('#hlCols i[data-bucol][title]').length === hdrKeys.length,
+    'every budget header carries an explanatory tooltip');
+  const roleCell = doc.querySelector('#rows .row.brole[data-mid] input[data-bud="role"]');
+  ok(roleCell && !roleCell.title, 'budget row cells carry no per-cell tooltips');
+  const typeChip = doc.querySelector('#rows .row.brole[data-mid] [data-bact="type"]');
+  ok(typeChip && !typeChip.title, 'rate-card chips carry no per-cell tooltips');
+
+  // hide a column from the corner context menu — header AND rows drop it
+  doc.querySelector('.hdr-left.corner').dispatchEvent(
+    new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+  const marginItem = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Margin/.test(b.textContent));
+  ok(!!marginItem, 'right-clicking the corner lists budget columns to show/hide');
+  click(marginItem);
+  ok(!doc.querySelector('#hlCols i[data-bucol="margin"]'), 'hiding Margin removes its header');
+  ok(!doc.querySelector('#rows .row.brole[data-mid] [style*="--bu-w-margin"]'), 'hiding Margin removes its row cells');
+
+  // drag a header to reorder (zero-rect jsdom drops it at the end)
+  const roleHdr = doc.querySelector('#hlCols i[data-bucol="role"]');
+  roleHdr.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 100, button: 0 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 400 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 400 }));
+  const keysAfter = Array.from(doc.querySelectorAll('#hlCols i[data-bucol]')).map(i => i.dataset.bucol);
+  ok(keysAfter[keysAfter.length - 1] === 'role', 'dragging a header reorders the column (' + keysAfter.join(',') + ')');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).buColOrder.length > 0, 'column order persists');
+
+  // reset restores everything
+  doc.querySelector('.hdr-left.corner').dispatchEvent(
+    new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Reset columns/.test(b.textContent)));
+  ok(Array.from(doc.querySelectorAll('#hlCols i[data-bucol]')).map(i => i.dataset.bucol).join(',') ===
+    'role,type,ws,cost,rate,margin,total', 'Reset columns restores the default set');
+
+  // planning columns hide too
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(doc.querySelectorAll('#hlCols i[data-plcol]').length === 3, 'planning header lists size/dur/ppl');
+  doc.querySelector('.hdr-left.corner').dispatchEvent(
+    new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^Dur/.test(b.textContent.trim())));
+  ok(!doc.querySelector('#hlCols i[data-plcol="dur"]'), 'hiding Duration removes its planning header');
+  ok(!doc.querySelector('#rows .row.item .r-wk'), 'hiding Duration removes the row chips');
+  doc.querySelector('.hdr-left.corner').dispatchEvent(
+    new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Reset columns/.test(b.textContent)));
+  ok(!!doc.querySelector('#rows .row.item .r-wk'), 'reset brings Duration back');
+}
+
+// ------------------------------------------------- batch 11: detail modes
+{
+  // phase detail paints items inside the phase bar, in their colors
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // Phase
+  ok(doc.querySelectorAll('#rows .ph-row-bar .ph-seg').length > 0,
+    'phase bars carry colored per-item segments');
+  ok(/background:#/.test(doc.querySelector('#rows .ph-seg').getAttribute('style')),
+    'segments use the item colors');
+
+  // story detail: everything expanded, add-story everywhere, milestones bare
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story
+  const visItems = Array.from(doc.querySelectorAll('#rows .row.item'));
+  const visNonMs = visItems.filter(r => {
+    const it = state().items.find(i => i.id === r.dataset.id);
+    return it && !it.milestone;
+  });
+  ok(doc.querySelectorAll('#rows .row.story-add').length === visNonMs.length,
+    'story detail gives EVERY non-milestone feature an add-story row (' +
+    doc.querySelectorAll('#rows .row.story-add').length + '/' + visNonMs.length + ')');
+  ok(!doc.querySelector('#rows .row.item .r-chev[data-act="stories"]'),
+    'story detail disables the per-row expand toggles');
+  const msRow = visItems.find(r => {
+    const it = state().items.find(i => i.id === r.dataset.id);
+    return it && it.milestone;
+  });
+  if (msRow) {
+    ok(!msRow.querySelector('.r-chev svg') && !doc.querySelector('#rows .row.story-add[data-id="' + msRow.dataset.id + '"]'),
+      'milestones carry no story chevron and no add-story row');
+  } else ok(true, '(no milestone visible)');
+
+  // stories reorder / move across features by dragging their row
+  const stRows = doc.querySelectorAll('#rows .row.story[data-story]');
+  ok(stRows.length >= 1, 'story rows present for the drag test (' + stRows.length + ')');
+  const src = stRows[0];
+  const srcSt = src.dataset.story, srcItem = src.dataset.id;
+  const allStoryRows = doc.querySelectorAll('#rows .row.story');
+  const lastRow = allStoryRows[allStoryRows.length - 1];
+  const destItem = lastRow.dataset.id;
+  src.querySelector('.row-left').dispatchEvent(
+    new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 30, clientY: 30, button: 0 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 30, clientY: 300 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 30, clientY: 300 }));
+  const moved = state().items.find(i => i.id === destItem).stories.some(s => s.id === srcSt);
+  ok(moved, 'dragging a story row drops it into the targeted feature (' + srcItem + ' → ' + destItem + ')');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature
+}
+
+// ------------------------------------------------- batch 11: status colors
+{
+  ok(window.RM.statusColor(state(), 'feature', window.RM.statusesOf(state(), 'feature').slice(-1)[0]) === '08875B',
+    'the last (done) status defaults to green');
+  click(doc.querySelector('#btnSetup'));
+  window.eval("document.querySelector('[data-sutab=\"statuses\"]').click()");
+  const sw = doc.querySelector('#setupView [data-stcsw]');
+  ok(!!sw, 'Setup → Statuses offers a color swatch per status');
+  click(sw);
+  const pick = doc.querySelector('#popover [data-stpick="B3362B"]');
+  ok(!!pick, 'the swatch opens a palette');
+  click(pick);
+  const stName = sw.dataset.stcsw.split(':').slice(1).join(':');
+  ok(state().meta.statusColors[stName] === 'B3362B', 'picking a color stores it on the status');
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const chip = Array.from(doc.querySelectorAll('#sprintView .sp-status')).find(b => b.textContent.trim() === stName);
+  if (chip) ok(chip.getAttribute('style').includes('B3362B'), 'sprint chips paint in the assigned color');
+  else ok(!!doc.querySelector('#sprintView .st-dot'), 'board column headers carry status color dots');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ------------------------------------------------- batch 11: history timeline
+{
+  const bar = doc.querySelector('#rows .bar:not(.ms)[data-bar]');
+  click(doc.querySelector('#rows .row.item[data-id="' + bar.getAttribute('data-bar') + '"] .r-num'));
+  const durInp = doc.querySelector('#panel input[data-f="durWeeks"]');
+  durInp.value = String(parseFloat(durInp.value) + 2);
+  durInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const lastEn = state().history[state().history.length - 1];
+  ok(Array.isArray(lastEn.tl) && lastEn.tl.length > 0 && lastEn.tl[0].s1 != null,
+    'schedule changes record machine-readable before/after positions');
+  click(doc.querySelector('#btnHistory'));
+  const tlTab = Array.from(doc.querySelectorAll('#historyView .hv-tab')).find(t => /Timeline/.test(t.textContent));
+  ok(!!tlTab, 'the change lands under a Timeline tab');
+  click(tlTab);
+  ok(!!doc.querySelector('#historyView .vt-wrap'), 'the Timeline tab renders a mini timeline');
+  ok(!!doc.querySelector('#historyView .vt-bar.new'), 'the new position paints green');
+  const vtRow = doc.querySelector('#historyView .vt-row');
+  ok(vtRow && /Duration/.test(vtRow.title), 'hovering a row lists the changed fields');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ------------------------------------------------- sprints view survives reload
+// regression: applyUi's saved-view whitelist omitted 'sprints', so reloading
+// while on the Sprinting tab silently fell back to Planning. Boot a second
+// window with the current session storage and assert Sprinting is restored.
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).view === 'sprints',
+    'sprints is written to the ui snapshot');
+  const dom2 = new JSDOM(html, {
+    url: 'http://localhost/roadmapping/index.html',
+    runScripts: 'outside-only',
+    pretendToBeVisual: true,
+  });
+  const w2 = dom2.window;
+  w2.ExcelJS = ExcelJS;
+  w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
+  w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/app.js']) {
+    w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  }
+  const d2 = w2.document;
+  d2.querySelector('#startBody [data-sp-continue]')
+    .dispatchEvent(new w2.MouseEvent('click', { bubbles: true }));
+  const onTab = d2.querySelector('#viewTabs button.on');
+  ok(onTab && onTab.dataset.view === 'sprints',
+    'reload restores the Sprinting tab (got ' + (onTab ? onTab.dataset.view : 'none') + ')');
+  ok(!!d2.querySelector('#sprintView .sp-toolbar'), 'the sprint board renders after the reload');
+  dom2.window.close();
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 

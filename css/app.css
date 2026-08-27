@@ -257,7 +257,8 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 }
 .view-tabs button { border-color: transparent; background: transparent; font-weight: 700; color: var(--ink-2); }
 .view-tabs button:hover { box-shadow: none; background: var(--tab-hover); }
-.view-tabs button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
+.view-tabs button.on { background: var(--surface); color: var(--blue); box-shadow: var(--shadow-1); }
+#btnSetup.on, #btnHistory.on { color: var(--blue); }
 
 .tb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 12px; }
@@ -623,7 +624,9 @@ body.cap-off .hc-lab { display: none !important; }
 .row.story { height: var(--story-h); }
 .row.story .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
 .row.story .row-lane { border-bottom-color: transparent; }
-.st-pad { width: 96px; flex: 0 0 96px; position: relative; }
+/* 85px = grip 18 + chev 20 + num 32 + dot 15 — story titles line up with
+   the feature titles above them */
+.st-pad { width: 85px; flex: 0 0 85px; position: relative; }
 .st-pad::before {
   content: ''; position: absolute; left: 44px; top: 0; bottom: 0;
   border-left: 1px solid var(--line-2);
@@ -634,7 +637,9 @@ body.cap-off .hc-lab { display: none !important; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
 .row.story-add .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
-/* the + starts exactly where story titles do (right after .st-pad) */
+/* the + sits LEFT of the text so the input's text starts exactly where
+   story titles do (68 + 12 icon + 5 gap = 85) */
+.row.story-add .st-pad { width: 68px; flex: 0 0 68px; }
 .row.story-add svg.st-add-ico { width: 12px; height: 12px; flex: 0 0 auto; color: var(--ink-3); margin-right: 5px; }
 .st-add-input {
   flex: 1; border: 0; background: transparent; font-size: 12px; padding: 3px 6px 3px 0;
@@ -1464,7 +1469,9 @@ body[data-view="setup"] #resPanel { display: none; }
 /* budgeting view — planning's board with role rows: frozen left columns
    (name · type · ws · rate · cost · margin · total) + week-hour cells */
 body[data-view="budget"] #resPanel { display: none; }
-.row.brole .row-left { align-items: center; gap: 6px; padding-left: 10px; }
+/* NO gap here: the header's column labels are gapless, so any flex gap
+   between the row's fixed-width columns walks them out of alignment */
+.row.brole .row-left { align-items: center; gap: 0; padding-left: 10px; }
 .bu-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bu-col { flex: 0 0 auto; }
 /* every budgeting column is LEFT-aligned, matching its header label */
@@ -1740,6 +1747,8 @@ body.chrome-win #topbar { padding-right: 0; }
    filter rides the frozen left pane instead of scrolling with the lane
    (sticky is a containing block, so the absolute icon/kbd still anchor here) */
 #filterCell { display: flex; align-items: center; }
+/* icon + ⌘F anchor to this wrapper, so the detail button can sit before it */
+.filter-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 #rowFilter {
   width: 100%; height: 30px;
   border: 1px solid var(--line-2); border-radius: 6px;
@@ -1750,9 +1759,8 @@ body.chrome-win #topbar { padding-right: 0; }
 /* lucide swaps the <i> for an <svg> carrying the same class, so the size
    must sit on .filter-ico itself */
 .filter-ico {
-  /* the cell carries 14px left / 4px bottom padding — offset so the icon
-     sits INSIDE the input (8px in from its left edge, on its midline) */
-  position: absolute; left: 22px; top: calc(50% - 2px); transform: translateY(-50%);
+  /* anchored to .filter-wrap: 8px inside the input's left edge */
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
   width: 13px; height: 13px;
   display: inline-flex; color: var(--ink-3); pointer-events: none;
 }
@@ -1761,7 +1769,7 @@ body.chrome-win #topbar { padding-right: 0; }
    so the native clear button gets the far-right spot to itself */
 #rowFilter:placeholder-shown:not(:focus) { padding-right: 40px; }
 .filter-kbd {
-  position: absolute; right: 14px; top: calc(50% - 2px); transform: translateY(-50%);
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   pointer-events: none;
 }
 #rowFilter:focus ~ .filter-kbd,
@@ -2445,28 +2453,41 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 }
 
 /* ------------------------------------------------------------ detail level */
-/* dropdown to the left of the "Feature" header: phases / features / stories */
+/* view-detail selector in the header's top line, left of "Filter rows" —
+   same height/shape as the filter input and the topbar buttons */
 #detailBtn {
-  display: inline-flex; align-items: center; gap: 1px;
-  border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface);
-  color: var(--ink-2); padding: 2px 4px; margin-right: 8px; cursor: pointer;
-  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; flex: 0 0 auto;
+  border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface);
+  color: var(--ink); padding: 0 10px; margin-right: 8px; cursor: pointer;
+  font-size: 12px; font-weight: 600;
 }
-#detailBtn:hover { border-color: var(--line-3); color: var(--ink); }
-#detailBtn svg { width: 13px; height: 13px; }
-#detailBtn .dm-caret { width: 10px; height: 10px; opacity: .6; }
-body[data-view="budget"] #detailBtn { display: none; }
+#detailBtn:hover { box-shadow: var(--shadow-1); border-color: var(--line-3); }
+#detailBtn svg { width: 13px; height: 13px; color: var(--ink-2); }
+#detailBtn .dm-caret { width: 11px; height: 11px; opacity: .6; margin-left: -2px; }
+body[data-view="budget"] #detailBtn, body[data-view="setup"] #detailBtn { display: none; }
+#rowFilter { border-radius: 7px; }
 
-/* phase-only detail: the band's lane paints the phase's span as a bar */
+/* phase-only detail: the band's lane holds the phase's span with every
+   scheduled item painted inside it in ITS color */
 .ph-row-bar {
-  position: absolute; top: 5px; bottom: 5px; border-radius: 6px;
-  background: var(--band); border: 1px solid var(--band-edge);
-  display: flex; align-items: center; padding: 0 8px; overflow: hidden;
+  position: absolute; top: 4px; bottom: 4px; border-radius: 6px;
+  background: var(--band-hover); border: 1px solid var(--band-line);
+  overflow: hidden;
 }
-.ph-row-bar span {
+.ph-row-bar > span {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%); z-index: 2;
   color: var(--band-ink); font-size: 10.5px; font-weight: 700; white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .55);
+  pointer-events: none;
+}
+.ph-seg {
+  position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
+  opacity: .9;
 }
 .row.band.ph-only .row-lane { position: relative; }
+/* no chevron in phase detail — indent the label to the app's 14px gutter */
+.row.band.ph-only .band-name { padding-left: 14px; }
 
 /* ------------------------------------------------------- budget column resize */
 .hl-cols i[data-bucol] { position: relative; }
@@ -2558,3 +2579,84 @@ body[data-view="history"] #panelPeek { display: none; }
 }
 .vd-arr { color: var(--ink-3); flex: 0 0 auto; }
 .hv-more { padding: 10px 4px; font-size: 11.5px; color: var(--ink-3); font-style: italic; }
+
+/* --------------------------------------------------- place-on-timeline hint */
+/* hovering an unscheduled row's empty lane previews the landing slot,
+   centered on the cursor, with a floating hint above it */
+.place-ghost {
+  position: absolute; top: 5px; height: 20px; border-radius: 5px;
+  border: 1.5px dashed var(--blue); background: var(--blue-soft);
+  opacity: .75; pointer-events: none; z-index: 3;
+}
+.place-ghost.ms { width: 14px !important; transform: rotate(45deg); top: 8px; height: 14px; }
+
+/* ------------------------------------------------------ header column tools */
+.hl-cols i[data-plcol], .hl-cols i[data-bucol] { cursor: grab; }
+.hl-cols i.colgrab { opacity: .35; cursor: grabbing; }
+.col-indicator {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--blue); z-index: 30; pointer-events: none;
+}
+
+/* ------------------------------------------------------------ status colors */
+.sp-status[data-stc] { color: var(--st-c); border-color: var(--st-c); }
+.sp-colhd .st-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  margin-right: 6px; vertical-align: 0;
+}
+.st-sw {
+  width: 16px; height: 16px; border-radius: 5px; padding: 0;
+  border: 1px solid rgba(var(--ink-rgb), .2); cursor: pointer;
+}
+
+/* ------------------------------------------- version history: timeline diff */
+.vt-wrap {
+  margin: 12px 0 6px; border: 1px solid var(--line); border-radius: 9px;
+  overflow-x: auto; background: var(--surface);
+}
+.vt-grid { position: relative; min-width: 100%; width: max-content; }
+.vt-hdr {
+  display: flex; height: 22px; border-bottom: 1px solid var(--line);
+  position: relative; background: var(--paper-2);
+}
+.vt-hdr .vt-left { flex: 0 0 var(--vt-left, 220px); border-right: 1px solid var(--line-2); }
+.vt-tick {
+  position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
+  font-size: 9.5px; color: var(--ink-3); padding-left: 4px;
+  border-left: 1px solid rgba(var(--ink-rgb), .09);
+}
+.vt-row { display: flex; height: 30px; position: relative; }
+.vt-row + .vt-row { border-top: 1px solid rgba(var(--ink-rgb), .05); }
+.vt-left {
+  flex: 0 0 var(--vt-left, 220px); min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 8px; border-right: 1px solid var(--line-2);
+  font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.vt-left .r-num { flex: 0 0 auto; width: auto; padding-right: 0; }
+.vt-lane { position: relative; flex: 1; }
+.vt-lane .vt-gridline {
+  position: absolute; top: 0; bottom: 0;
+  border-left: 1px solid rgba(var(--ink-rgb), .07); pointer-events: none;
+}
+.vt-bar {
+  position: absolute; height: 9px; border-radius: 3px;
+}
+.vt-bar.old {
+  top: 4px;
+  background: var(--err-bg); border: 1px solid var(--err);
+  background-image: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(179, 54, 43, .35) 3px 5px);
+}
+.vt-bar.new {
+  bottom: 4px;
+  background: color-mix(in srgb, var(--ok) 22%, var(--surface)); border: 1px solid var(--ok);
+}
+.vt-bar.msb { width: 9px !important; transform: rotate(45deg); }
+.vt-key {
+  display: flex; gap: 16px; align-items: center;
+  font-size: 10.5px; color: var(--ink-3); padding: 6px 2px 0;
+}
+.vt-key .k { display: inline-flex; align-items: center; gap: 5px; }
+.vt-key .sw { width: 14px; height: 8px; border-radius: 3px; display: inline-block; }
+.vt-key .sw.old { background: var(--err-bg); border: 1px solid var(--err); }
+.vt-key .sw.new { background: color-mix(in srgb, var(--ok) 22%, var(--surface)); border: 1px solid var(--ok); }

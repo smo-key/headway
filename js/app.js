@@ -65,6 +65,10 @@
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
   var detailMode = 'feature'; // Scoping/Planning row detail: phase | feature | story
   var buColW = {};           // budgeting column width overrides (key -> px)
+  var buColOrder = null;     // budgeting column order (array of keys; null = default)
+  var buColHide = {};        // budgeting columns hidden (key -> true)
+  var plColOrder = null;     // planning left-pane column order
+  var plColHide = {};        // planning left-pane columns hidden
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
   var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
@@ -107,7 +111,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide };
   }
   var sprintSel = 'cur';    // Sprinting view: 'cur' | 'all' | a sprint number
   var sprintMode = 'board'; // Sprinting view: 'board' (kanban) | 'grid'
@@ -116,9 +120,13 @@
   function applyUi(ui) {
     if (!ui) return;
     weekPx = ui.weekPx || 28;
-    view = ['scoping', 'setup', 'budget', 'reports', 'history'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'sprints'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
     detailMode = ['phase', 'feature', 'story'].indexOf(ui.detailMode) !== -1 ? ui.detailMode : 'feature';
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
+    buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
+    buColHide = ui.buColHide && typeof ui.buColHide === 'object' ? ui.buColHide : {};
+    plColOrder = Array.isArray(ui.plColOrder) ? ui.plColOrder : null;
+    plColHide = ui.plColHide && typeof ui.plColHide === 'object' ? ui.plColHide : {};
     depsMode = ui.depsMode === 'none' ? 'none' : 'on';
     groupWs = ui.groupWs != null ? !!ui.groupWs : ui.groupBy === 'ws';
     groupEpic = ui.groupEpic != null ? !!ui.groupEpic : (ui.groupBy === 'epic' || !!ui.groupByEpic);
@@ -188,6 +196,8 @@
   // Rapid same-kind edits by the same person coalesce into one entry.
   var USER_KEY = 'headway-user-v1';
   var HISTORY_COALESCE_MS = 5 * 60 * 1000;
+  var sessionStart = Date.now(); // for stamping this session's anonymous edits
+  var namePromptShown = false;
   function userName() {
     try { return (localStorage.getItem(USER_KEY) || '').trim(); } catch (e) { return ''; }
   }
@@ -201,6 +211,7 @@
   var VH_CATS = { timeline: 'Timeline', scope: 'Scope', status: 'Status', budget: 'Team & Costs', setup: 'Setup' };
   function diffStates(a, b) {
     var ops = [];
+    var tl = []; // schedule moves, machine-readable, for the visual timeline diff
     var meta = (b && b.meta) || (a && a.meta);
     function push(cat, label, oldV, newV) {
       oldV = oldV == null ? '' : String(oldV);
@@ -227,9 +238,21 @@
     }
     // ---- items (features / milestones) + their stories
     var ia = byId(a.items), ib = byId(b.items);
+    function span(x) { return x.durDays == null ? null : x.durDays + (x.riskDays || 0); }
+    function tlPush(it, p) {
+      // p null = added, it null = removed; only rows whose schedule differs
+      var s0 = p ? p.startDay : null, d0 = p ? span(p) : null;
+      var s1 = it ? it.startDay : null, d1 = it ? span(it) : null;
+      if (s0 === s1 && d0 === d1) return;
+      if (s0 == null && s1 == null) return;
+      var ref = it || p;
+      tl.push({ id: ref.id, n: ref.num, f: shorten(ref.feature || '(untitled)', 40),
+        ms: ref.milestone ? 1 : 0, s0: s0, d0: d0, s1: s1, d1: d1 });
+    }
     (b.items || []).forEach(function (it) {
       var lbl = '#' + it.num + ' ' + shorten(it.feature || '(untitled)', 28);
       var p = ia[it.id];
+      tlPush(it, p || null);
       if (!p) { push('scope', lbl, '', it.milestone ? 'Milestone added' : 'Feature added'); return; }
       push('scope', lbl + ' — Title', p.feature, it.feature);
       function phName(st, pid) {
@@ -278,8 +301,11 @@
       });
     });
     (a.items || []).forEach(function (it) {
-      if (!ib[it.id]) push('scope', '#' + it.num + ' ' + shorten(it.feature || '(untitled)', 28),
-        it.milestone ? 'Milestone removed' : 'Feature removed', '');
+      if (!ib[it.id]) {
+        tlPush(null, it);
+        push('scope', '#' + it.num + ' ' + shorten(it.feature || '(untitled)', 28),
+          it.milestone ? 'Milestone removed' : 'Feature removed', '');
+      }
     });
     // ---- phases
     var pa = byId(a.phases), pb = byId(b.phases);
@@ -347,7 +373,7 @@
     push('setup', 'Roles (rate card)', (a.teamTypes || []).join(', '), (b.teamTypes || []).join(', '));
     // rateCard sits inside meta too — drop the raw duplicate from the generic pass
     ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard' && op[1] !== 'Setup — statuses'; });
-    return ops;
+    return { ops: ops, tl: tl };
   }
   // merge coalesced ops: same field keeps its FIRST old and LAST new value
   function mergeOps(base, add) {
@@ -361,13 +387,30 @@
     });
     return out.filter(function (op) { return op[2] !== op[3]; });
   }
+  // coalesced schedule moves keep each item's FIRST before and LAST after
+  function mergeTl(base, add) {
+    var out = base.slice();
+    var by = {};
+    out.forEach(function (t, i) { by[t.id] = i; });
+    add.forEach(function (t) {
+      if (by[t.id] != null) {
+        var b = out[by[t.id]];
+        out[by[t.id]] = { id: t.id, n: t.n, f: t.f, ms: t.ms, s0: b.s0, d0: b.d0, s1: t.s1, d1: t.d1 };
+      } else { by[t.id] = out.length; out.push(t); }
+    });
+    return out.filter(function (t) { return !(t.s0 === t.s1 && t.d0 === t.d1); });
+  }
   function recordHistory(label, prevJson) {
     if (!label) return;
     var u = userName();
     var h = state.history = Array.isArray(state.history) ? state.history : [];
-    var ops = [];
+    var ops = [], tl = [];
     if (prevJson) {
-      try { ops = diffStates(JSON.parse(prevJson), state); } catch (e) { ops = []; }
+      try {
+        var df = diffStates(JSON.parse(prevJson), state);
+        ops = df.ops;
+        tl = df.tl;
+      } catch (e) { ops = []; tl = []; }
     }
     // the history array itself always differs between snapshots — never diff it
     ops = ops.filter(function (op) { return op[1].indexOf('history') === -1; });
@@ -379,11 +422,14 @@
       var merged = mergeOps(last.d || [], ops);
       last.x = (last.x || 0) + Math.max(0, merged.length - RM.HISTORY_OPS_MAX);
       last.d = merged.slice(0, RM.HISTORY_OPS_MAX);
+      var mtl = mergeTl(last.tl || [], tl).slice(0, 60);
+      if (mtl.length) last.tl = mtl; else delete last.tl;
       return;
     }
     var en = { t: now, u: u, label: label, n: 1 };
     if (ops.length > RM.HISTORY_OPS_MAX) en.x = ops.length - RM.HISTORY_OPS_MAX;
     en.d = ops.slice(0, RM.HISTORY_OPS_MAX);
+    if (tl.length) en.tl = tl.slice(0, 60);
     h.push(en);
     if (h.length > RM.HISTORY_MAX) h.splice(0, h.length - RM.HISTORY_MAX);
   }
@@ -395,6 +441,7 @@
     if (mutate) mutate(state);
     recordHistory(label, prev);
     afterChange();
+    maybeAskName();
   }
   function replaceState(label, next) {
     var prev = JSON.stringify(state);
@@ -404,6 +451,39 @@
     state = next;
     recordHistory(label, prev);
     afterChange();
+    maybeAskName();
+  }
+  // the first change someone saves (autosave included) must carry an author:
+  // ask for their name once, and stamp this session's anonymous entries
+  function maybeAskName() {
+    if (userName() || namePromptShown) return;
+    namePromptShown = true;
+    openModal(
+      '<div class="modal" style="width:420px">' +
+      '<div class="m-head"><h2>Who’s editing?</h2></div>' +
+      '<div class="m-body"><div class="m-sec"><label>Your name</label>' +
+      '<input id="vhNameIn" style="width:100%" placeholder="e.g. Alex Rivera" autocomplete="name">' +
+      '<div class="m-hint">Your changes just started saving. Every change is recorded in Version history with its author — set the name to record yours under. Stored on this machine only (Personal settings changes it later).</div></div></div>' +
+      '<div class="m-foot"><button data-m="later">Not now</button><button id="vhNameSave" class="primary" disabled>Save name</button></div></div>',
+      function (host) {
+        var inp = $('#vhNameIn', host), save = $('#vhNameSave', host);
+        if (inp) inp.focus();
+        inp.addEventListener('input', function () { save.disabled = !inp.value.trim(); });
+        function doSave() {
+          var v = inp.value.trim();
+          if (!v) return;
+          setUserName(v);
+          (state.history || []).forEach(function (en) {
+            if (!en.u && en.t >= sessionStart) en.u = v;
+          });
+          closeModal();
+          saveLocal();
+          render();
+        }
+        save.onclick = doSave;
+        inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') doSave(); });
+        $('[data-m=later]', host).onclick = closeModal;
+      });
   }
   function undo() {
     if (!undoStack.length) return;
@@ -780,9 +860,6 @@
   ];
   function setDetailMode(mode) {
     detailMode = mode;
-    if (mode === 'story') {
-      state.items.forEach(function (it) { if (it.stories.length) expanded[it.id] = true; });
-    }
     saveLocal();
     render();
   }
@@ -790,7 +867,7 @@
     var b = $('#detailBtn');
     if (!b) return;
     var m = DM_MODES.filter(function (x) { return x[0] === detailMode; })[0] || DM_MODES[1];
-    b.innerHTML = '<i data-lucide="' + m[2] + '"></i><i data-lucide="chevron-down" class="dm-caret"></i>';
+    b.innerHTML = '<i data-lucide="' + m[2] + '"></i><span>' + esc(m[1]) + '</span><i data-lucide="chevron-down" class="dm-caret"></i>';
     b.title = 'Detail level: ' + m[1] + ' — click to change';
     if (window.lucide) lucide.createIcons();
   }
@@ -931,7 +1008,9 @@
       (presentMode && (view === 'planning' || view === 'budget') ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     applyBuColWidths();
+    renderHlCols();
     syncDetailBtn();
+    hidePlaceGhost();
     document.body.dataset.view = view;
     // a view switch or re-render can replace the rich cell the floating
     // B/I toolbar is anchored to — never leave the bar orphaned on screen
@@ -1260,12 +1339,46 @@
     return mapStatusAcross(colName, RM.statusesOf(state, 'feature'), RM.statusesOf(state, 'story'));
   }
 
+  // pick a color for one status (Setup → Statuses): preset swatches or a
+  // custom color; "automatic" clears back to position-based defaults
+  var STATUS_SWATCHES = ['6E7883', '0057B8', '08875B', 'A66A00', 'B3362B', 'A14FBF', '0E7C86', 'C25E0E'];
+  function statusColorMenu(btn, kind, stName) {
+    var r = btn.getBoundingClientRect();
+    var cur = (state.meta.statusColors || {})[stName] || null;
+    var html = '<div class="swatches" style="padding:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:240px">' +
+      '<button class="swatch' + (!cur ? ' on' : '') + '" data-stpick="" title="Automatic (by position)" style="background:linear-gradient(135deg,#6E7883 45%,#08875B 55%)"></button>' +
+      STATUS_SWATCHES.map(function (hx) {
+        return '<button class="swatch' + (cur === hx ? ' on' : '') + '" data-stpick="' + hx + '" style="background:#' + hx + '"></button>';
+      }).join('') +
+      '<input type="color" data-stpickc value="#' + (cur || '0057B8') + '" title="Custom color">' +
+      '</div>';
+    openPopover(r.left, r.bottom + 4, html, function (host) {
+      host.addEventListener('click', function (ev) {
+        var b = ev.target.closest('[data-stpick]');
+        if (!b) return;
+        var hex = b.dataset.stpick;
+        closePopover();
+        commit('status color', function (s) {
+          s.meta.statusColors = s.meta.statusColors || {};
+          if (hex) s.meta.statusColors[stName] = hex;
+          else delete s.meta.statusColors[stName];
+        });
+      });
+      var ci = host.querySelector('[data-stpickc]');
+      if (ci) ci.addEventListener('change', function () {
+        var hex = ci.value.replace('#', '').toUpperCase();
+        closePopover();
+        commit('status color', function (s) {
+          s.meta.statusColors = s.meta.statusColors || {};
+          s.meta.statusColors[stName] = hex;
+        });
+      });
+    });
+  }
   function spStatusChip(kind, cur, act, id) {
-    var list = RM.statusesOf(state, kind);
-    var idx = list.indexOf(cur);
-    var pos = idx <= 0 ? 'first' : (idx === list.length - 1 ? 'done' : 'mid');
-    return '<button class="sp-status st-' + pos + '" data-' + act + '="' + id + '" title="Status \u2014 click to change">' +
-      esc(cur) + '</button>';
+    var c = RM.statusColor(state, kind, cur);
+    return '<button class="sp-status" data-stc data-' + act + '="' + id + '" style="--st-c:#' + c +
+      '" title="Status \u2014 click to change">' + esc(cur) + '</button>';
   }
 
   function spCardHtml(it) {
@@ -1310,7 +1423,8 @@
         var mine = items.filter(function (it) { return RM.statusOf(state, it, 'feature') === st; });
         var mineSt = stories.filter(function (p) { return storyColFor(RM.statusOf(state, p.st, 'story')) === st; });
         return '<div class="sp-col" data-spcol="' + esc(st) + '">' +
-          '<div class="sp-colhd">' + esc(st) + '<span class="band-count">' + (mine.length + mineSt.length) + '</span></div>' +
+          '<div class="sp-colhd"><span class="st-dot" style="background:#' + RM.statusColor(state, 'feature', st) + '"></span>' +
+          esc(st) + '<span class="band-count">' + (mine.length + mineSt.length) + '</span></div>' +
           '<div class="sp-colbody">' + mine.map(spCardHtml).join('') +
           mineSt.map(function (p) { return spStoryCardHtml(p.it, p.st); }).join('') + '</div>' +
           '</div>';
@@ -1412,7 +1526,7 @@
       var sid = stBtn.dataset.spstatus;
       openDropdown(stBtn, RM.statusesOf(state, 'feature').map(function (stName) {
         var cur = RM.statusOf(state, RM.itemById(state, sid), 'feature');
-        return { label: esc(stName), checked: cur === stName, fn: function () {
+        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'feature', stName), checked: cur === stName, fn: function () {
           commit('status', function (s) { RM.setStatus(s, RM.itemById(s, sid), 'feature', stName); });
         } };
       }));
@@ -1427,7 +1541,7 @@
       var stObj = pIt && storyById(pIt, stId);
       if (!stObj) return;
       openDropdown(ssBtn, RM.statusesOf(state, 'story').map(function (stName) {
-        return { label: esc(stName), checked: RM.statusOf(state, stObj, 'story') === stName, fn: function () {
+        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'story', stName), checked: RM.statusOf(state, stObj, 'story') === stName, fn: function () {
           commit('status', function (s) {
             var t = storyById(RM.itemById(s, pid) || {}, stId);
             if (t) RM.setStatus(s, t, 'story', stName);
@@ -1588,7 +1702,7 @@
       var ctxSt = ctxIt && storyById(ctxIt, ctxStId);
       if (!ctxSt) return;
       var stItems = RM.statusesOf(state, 'story').map(function (stName) {
-        return { label: esc(stName), checked: RM.statusOf(state, ctxSt, 'story') === stName, fn: function () {
+        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'story', stName), checked: RM.statusOf(state, ctxSt, 'story') === stName, fn: function () {
           commit('status', function (s) {
             var t = storyById(RM.itemById(s, ctxPid) || {}, ctxStId);
             if (t) RM.setStatus(s, t, 'story', stName);
@@ -1610,7 +1724,7 @@
     var itC = RM.itemById(state, cid);
     if (!itC) return;
     var items = RM.statusesOf(state, 'feature').map(function (stName) {
-      return { label: esc(stName), checked: RM.statusOf(state, itC, 'feature') === stName, fn: function () {
+      return { label: esc(stName), dot: '#' + RM.statusColor(state, 'feature', stName), checked: RM.statusOf(state, itC, 'feature') === stName, fn: function () {
         commit('status', function (s) { RM.setStatus(s, RM.itemById(s, cid), 'feature', stName); });
       } };
     });
@@ -2101,8 +2215,14 @@
       '" data-id="' + it.id + '">' +
       '<div class="row-left" title="Drag to reorder / move phase">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
-      '<span class="r-chev' + (detailMode === 'story' && expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
-      (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>' +
+      // milestones carry no stories; in story detail every feature is open
+      // and the chevron is inert (a fixed level, not a per-row toggle)
+      (it.milestone
+        ? '<span class="r-chev" aria-hidden="true"></span>'
+        : detailMode === 'story'
+          ? '<span class="r-chev open" style="pointer-events:none;opacity:.4"><i data-lucide="chevron-right"></i></span>'
+          : '<span class="r-chev" data-act="stories" title="Stories (' + it.stories.length + ') — opens story detail">' +
+            (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>') +
       '<span class="r-num">' + it.num + '</span>' +
       '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
@@ -2117,21 +2237,24 @@
         (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
         esc(it.epic) + '</span>' : '') +
       '</div>' +
-      (view === 'scoping' ? '' :
-        (RM.sizingEnabled(state)
-          ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
-          : '') +
-        (it.milestone
-          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
-          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>') +
-        '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
-        (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>') +
+      (view === 'scoping' ? '' : (function () {
+        // the planning chips follow the user's column order/visibility
+        var chips = {
+          size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>',
+          dur: it.milestone
+            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
+            : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>',
+          asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
+            (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>'
+        };
+        return plColsVisible().map(function (k) { return chips[k]; }).join('');
+      })()) +
       warnBadge(it) +
       '</div>' +
       '<div class="row-lane">' + laneInner + dlHtml + '</div>' +
       '</div>');
 
-    if (detailMode === 'story' && expanded[it.id]) {
+    if (detailMode === 'story' && !it.milestone) {
       it.stories.forEach(function (st) {
         var stSched = st.startDay != null && st.durDays != null;
         html.push(
@@ -2231,10 +2354,18 @@
       if (detailMode === 'phase' && view === 'planning') {
         var psp = RM.phaseSpan(state, p);
         if (psp) {
+          // every scheduled item paints inside the span in ITS color, so the
+          // phase row doubles as a colored overview of what's in it
+          var segs = items.filter(isScheduled).map(function (sit) {
+            var sw = Math.max(3, (sit.milestone ? 1 : RM.itemSpan(sit)) * dayPx());
+            return '<span class="ph-seg" style="left:' + ((sit.startDay - psp.lo) * dayPx()) +
+              'px;width:' + sw + 'px;background:#' + RM.colorForItem(state, sit) + '" title="' +
+              esc('#' + sit.num + ' ' + sit.feature) + '"></span>';
+          }).join('');
           bandLane = '<div class="ph-row-bar" style="left:' + (psp.lo * dayPx()) + 'px;width:' +
             Math.max(6, (psp.hi - psp.lo) * dayPx()) + 'px" title="' +
             esc(p.name + '  ·  ' + RM.fmtShort(RM.dayToDate(state.meta, psp.lo)) + ' → ' +
-              RM.fmtShort(RM.dayToDate(state.meta, Math.max(psp.lo, psp.hi - 1)))) + '"><span>' + esc(p.name) + '</span></div>';
+              RM.fmtShort(RM.dayToDate(state.meta, Math.max(psp.lo, psp.hi - 1)))) + '">' + segs + '<span>' + esc(p.name) + '</span></div>';
         }
       }
       html.push(
@@ -2664,9 +2795,10 @@
         '<div class="chips">' + dependentChips + (dependentChips ? '' : '<span class="p-none">none</span>') + '</div>' +
         '<div class="m-hint">Tip: hover a bar and drag its edge circles to another bar to link.</div>') +
 
-      sec('stories', 'Stories', '',
-        '<div class="p-stories">' + storyRows + '</div>' +
-        '<input data-f="storyadd" placeholder="+ add story…" style="width:100%;margin-top:6px">') +
+      (it.milestone ? '' : // milestones carry no stories
+        sec('stories', 'Stories', '',
+          '<div class="p-stories">' + storyRows + '</div>' +
+          '<input data-f="storyadd" placeholder="+ add story…" style="width:100%;margin-top:6px">')) +
 
       (vlist.length
         ? sec('checks', 'Checks', '',
@@ -3765,15 +3897,8 @@
           return;
         }
         case 'stories': {
-          // outside story detail, the chevron jumps INTO story detail with
-          // this item open; inside it, it collapses/expands per item
-          if (detailMode !== 'story') {
-            expanded[itemId] = true;
-            setDetailMode('story');
-            return;
-          }
-          expanded[itemId] = !expanded[itemId];
-          render();
+          // the chevron jumps into story detail (where every feature is open)
+          if (detailMode !== 'story') setDetailMode('story');
           return;
         }
         case 'warn': {
@@ -4038,8 +4163,7 @@
       var it = RM.itemById(state, itemId);
       if (!it) return;
       items = [
-        { icon: 'plus', label: 'Add story', fn: function () {
-          expanded[itemId] = true;
+        it.milestone ? null : { icon: 'plus', label: 'Add story', fn: function () {
           if (detailMode !== 'story') { detailMode = 'story'; saveLocal(); }
           render();
           requestAnimationFrame(function () {
@@ -4260,12 +4384,23 @@
     return (it.stories || []).filter(function (s) { return s.id === stId; })[0] || null;
   }
 
+  // the pointer marks the MIDDLE of the landing slot — the placed bar
+  // centers on the cursor, then snaps
+  function placeDurFor(it) {
+    if (!it) return 5;
+    if (it.milestone) return 1;
+    return it.durDays != null ? it.durDays : (RM.effortDays(state, it) || 5);
+  }
+  function centeredDayAt(clientX, dur) {
+    return Math.max(0, snapTo(Math.round(laneDayAt(clientX) - dur / 2)));
+  }
+
   // give a story its own little timeline where the pointer sits on its lane
   function placeStoryAt(itemId, stId, clientX) {
     var cur = storyById(RM.itemById(state, itemId) || {}, stId);
     if (!cur || cur.startDay != null) return;
     placedAt = Date.now(); placedKey = 'st:' + stId;
-    var day = Math.max(0, snapTo(laneDayAt(clientX)));
+    var day = centeredDayAt(clientX, 5);
     commit('place story', function (s) {
       var st = storyById(RM.itemById(s, itemId), stId);
       if (!st) return;
@@ -4278,7 +4413,8 @@
   var placedAt = 0, placedKey = null; // swallow the trailing native dblclick after a manual place
   function placeItemAt(itemId, clientX) {
     placedAt = Date.now(); placedKey = itemId;
-    var pDay = Math.max(0, snapTo(laneDayAt(clientX)));
+    var it0 = RM.itemById(state, itemId);
+    var pDay = centeredDayAt(clientX, placeDurFor(it0));
     commit('place item', function (s2) {
       var t2 = RM.itemById(s2, itemId);
       t2.startDay = pDay;
@@ -4290,6 +4426,50 @@
     });
     select(itemId);
   }
+
+  // hovering an unscheduled row's empty lane previews the landing slot and
+  // floats a hint right above it (double-click places the item there)
+  var placeGhost = null;
+  function hidePlaceGhost() {
+    if (placeGhost) {
+      if (placeGhost.parentNode) placeGhost.parentNode.removeChild(placeGhost);
+      placeGhost = null;
+      dragTip.hidden = true;
+    }
+  }
+  rowsEl.addEventListener('pointermove', function (e) {
+    if (view !== 'planning' || drag) { hidePlaceGhost(); return; }
+    if (!e.target.closest('.row-lane') ||
+      e.target.closest('[data-bar],[data-stbar],[data-ghost],.ghost-pill,.port,.ph-row-bar')) { hidePlaceGhost(); return; }
+    var stRow = e.target.closest('.row.story[data-story]');
+    var itRow = e.target.closest('.row.item');
+    var target = null, dur = 5, ms = false;
+    if (stRow) {
+      var stH = storyById(RM.itemById(state, stRow.dataset.id) || {}, stRow.dataset.story);
+      if (stH && stH.startDay == null) { target = stRow; dur = 5; }
+    } else if (itRow) {
+      var itH = RM.itemById(state, itRow.dataset.id);
+      if (itH && !isScheduled(itH)) { target = itRow; dur = placeDurFor(itH); ms = !!itH.milestone; }
+    }
+    if (!target) { hidePlaceGhost(); return; }
+    var day = centeredDayAt(e.clientX, dur);
+    var lane = target.querySelector('.row-lane');
+    if (!placeGhost) {
+      placeGhost = document.createElement('div');
+      placeGhost.className = 'place-ghost';
+    }
+    placeGhost.classList.toggle('ms', ms);
+    if (placeGhost.parentNode !== lane) lane.appendChild(placeGhost);
+    placeGhost.style.left = (day * dayPx()) + 'px';
+    placeGhost.style.width = Math.max(8, dur * dayPx()) + 'px';
+    var lr = target.getBoundingClientRect();
+    dragTip.hidden = false;
+    dragTip.innerHTML = '<b>Double-click to place</b> · ' + esc(RM.fmtShort(RM.dayToDate(state.meta, day)));
+    dragTip.style.left = (e.clientX + 14) + 'px';
+    dragTip.style.top = (lr.top - 30) + 'px';
+  });
+  rowsEl.addEventListener('pointerleave', hidePlaceGhost);
+  rowsEl.addEventListener('pointerdown', hidePlaceGhost);
 
   function justPlaced(key) { return placedKey === key && Date.now() - placedAt < 500; }
   rowsEl.addEventListener('dblclick', function (e) {
@@ -4597,6 +4777,15 @@
         sh ? (sh.dataset.act === 'sh-l' ? 'resize-l' : 'resize-r') : 'move', stBarEl);
       return;
     }
+    var stLeftEl = e.target.closest('.row.story[data-story] .row-left');
+    if (stLeftEl && !e.target.closest('input,button,textarea,select,[contenteditable="true"]')) {
+      // stories drag too: reorder within their feature or move to another
+      var stRowD = stLeftEl.closest('.row.story');
+      drag = { kind: 'strow', itemId: stRowD.dataset.id, stId: stRowD.dataset.story,
+        x0: e.clientX, y0: e.clientY, moved: false, indicator: null };
+      e.preventDefault();
+      return;
+    }
     if (leftEl && !e.target.closest('input,button,textarea,select,[contenteditable="true"]')) {
       // any part of the left pane drags the row (chips still click if not moved)
       startRowDrag(e, leftEl.closest('.row.item').dataset.id);
@@ -4890,6 +5079,7 @@
     else if (drag.kind === 'stbar') stBarDragMove(e, dx);
     else if (drag.kind === 'ghost') ghostDragMove(e);
     else if (drag.kind === 'row') rowDragMove(e);
+    else if (drag.kind === 'strow') strowMove(e);
     else if (drag.kind === 'phspan') phSpanDragMove(e, dx);
     else if (drag.kind === 'port') portDragMove(e);
     else if (drag.kind === 'scol') scolDragMove(e);
@@ -4958,6 +5148,7 @@
     else if (d.kind === 'stbar') stBarDragEnd(d);
     else if (d.kind === 'ghost') ghostDragEnd(d, e);
     else if (d.kind === 'row') rowDragEnd(d, e);
+    else if (d.kind === 'strow') strowEnd(d);
     else if (d.kind === 'phspan') phSpanDragEnd(d);
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
@@ -5185,6 +5376,60 @@
     commit('reorder', function (s) { applyDrop(s, d.itemId, r); });
   }
 
+  // story rows drag among story rows: reorder inside a feature, or drop into
+  // another feature (before one of its stories, or on its "add story" row)
+  function strowMove(e) {
+    if (!drag.indicator) {
+      drag.indicator = document.createElement('div');
+      drag.indicator.className = 'drop-indicator';
+      grid.appendChild(drag.indicator);
+      var srcEl = rowsEl.querySelector('.row.story[data-story="' + drag.stId + '"]');
+      if (srcEl) srcEl.classList.add('drag-row-ghost');
+    }
+    var els = $$('#rows .row.story');
+    var target = null;
+    for (var i = 0; i < els.length; i++) {
+      var r = els[i].getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) { target = { beforeEl: els[i], y: r.top }; break; }
+    }
+    if (!target && els.length) {
+      var lr = els[els.length - 1].getBoundingClientRect();
+      target = { beforeEl: els[els.length - 1], y: lr.top };
+    }
+    drag.target = target;
+    if (target) {
+      var g = grid.getBoundingClientRect();
+      drag.indicator.style.top = (target.y - g.top) + 'px';
+      drag.indicator.style.left = board.scrollLeft + 'px';
+      drag.indicator.style.display = '';
+    } else {
+      drag.indicator.style.display = 'none';
+    }
+  }
+  function strowEnd(d) {
+    var srcEl = rowsEl.querySelector('.row.story[data-story="' + d.stId + '"]');
+    if (srcEl) srcEl.classList.remove('drag-row-ghost');
+    var t = d.target;
+    if (!t || !t.beforeEl) { render(); return; }
+    var toItemId = t.beforeEl.dataset.id;
+    var beforeStId = t.beforeEl.classList.contains('story-add') ? null : t.beforeEl.dataset.story;
+    if (beforeStId === d.stId) { render(); return; }
+    commit('move story', function (s) {
+      var from = RM.itemById(s, d.itemId);
+      var st = from && (from.stories || []).filter(function (x) { return x.id === d.stId; })[0];
+      if (!st) return;
+      from.stories = from.stories.filter(function (x) { return x.id !== d.stId; });
+      var to = RM.itemById(s, toItemId);
+      if (!to || to.milestone) { from.stories.push(st); return; }
+      var at = to.stories.length;
+      if (beforeStId) {
+        var bi = to.stories.map(function (x) { return x.id; }).indexOf(beforeStId);
+        if (bi !== -1) at = bi;
+      }
+      to.stories.splice(at, 0, st);
+    });
+  }
+
   // Where does the insertion point sit? Determine governing phase + before-item.
   // Shared by the left-pane row drag and the bar's vertical drag.
   function resolveDrop(target, itemId) {
@@ -5350,6 +5595,47 @@
   function vhEntryTitle(en) {
     return vhLabel(en.label) + (en.n > 1 ? ' ×' + en.n : '');
   }
+  // mini planning-style timeline for the Timeline tab: one row per item whose
+  // schedule changed — the old position in red, the new one in green. Hovering
+  // a row lists every field that changed on that item.
+  function vtHtml(tlList, ops) {
+    if (!tlList || !tlList.length) return '';
+    var meta = state.meta;
+    var wpx = Math.max(6, Math.min(22, Math.round(820 / meta.numWeeks)));
+    var dpx = wpx / RM.slotsOf(meta);
+    var laneW = Math.round(meta.numWeeks * wpx);
+    var si = RM.sprintInfo(meta);
+    var firstB = si.anchorWeek - Math.ceil(si.anchorWeek / si.wps) * si.wps;
+    var ticks = '', glines = '';
+    for (var bw = Math.max(0, firstB); bw < meta.numWeeks; bw += si.wps) {
+      var x = Math.round(bw * wpx);
+      glines += '<span class="vt-gridline" style="left:' + x + 'px"></span>';
+      if (x + 46 < laneW) {
+        ticks += '<span class="vt-tick" style="left:' + x + 'px">' + esc(RM.fmtShort(RM.weekStartDate(meta, bw))) + '</span>';
+      }
+    }
+    var rows = tlList.map(function (t) {
+      var opsFor = (ops || []).filter(function (op) { return op[1].indexOf('#' + t.n + ' ') === 0; });
+      var tip = opsFor.map(function (op) {
+        return op[1].split('— ').pop() + ': ' + (op[2] || '∅') + ' → ' + (op[3] || '∅');
+      }).join('\n') || 'Schedule changed';
+      function bar(cls, s, d) {
+        if (s == null) return '';
+        var w = Math.max(4, (d || 1) * dpx);
+        return '<span class="vt-bar ' + cls + (t.ms && !d ? ' msb' : '') + '" style="left:' + (s * dpx).toFixed(1) + 'px;width:' + w.toFixed(1) + 'px"></span>';
+      }
+      return '<div class="vt-row" title="' + esc('#' + t.n + ' ' + t.f + '\n' + tip) + '">' +
+        '<div class="vt-left"><span class="r-num">#' + t.n + '</span>' + esc(t.f) + '</div>' +
+        '<div class="vt-lane" style="width:' + laneW + 'px">' + glines +
+        bar('old', t.s0, t.d0) + bar('new', t.s1, t.d1) + '</div></div>';
+    }).join('');
+    return '<div class="vt-wrap"><div class="vt-grid">' +
+      '<div class="vt-hdr"><div class="vt-left"></div><div class="vt-lane" style="width:' + laneW + 'px">' + ticks + '</div></div>' +
+      rows + '</div></div>' +
+      '<div class="vt-key"><span class="k"><span class="sw old"></span>before</span>' +
+      '<span class="k"><span class="sw new"></span>after</span>' +
+      '<span class="k">hover a row for every changed field</span></div>';
+  }
   function renderHistoryPage() {
     var host = $('#historyView');
     if (!host) return;
@@ -5376,11 +5662,12 @@
       : 'Your edits record as “Unknown user” — <button data-vh-me>set your name</button>';
 
     // ---- assemble the diff for the current selection
-    var ops = [], head = '', sub = '', noDetail = '', overflow = 0;
+    var ops = [], tlSel = [], head = '', sub = '', noDetail = '', overflow = 0;
     if (vhPick.length === 2) {
       var lo = Math.min(vhPick[0], vhPick[1]), hi = Math.max(vhPick[0], vhPick[1]);
       for (var k = lo + 1; k <= hi; k++) {
         ops = mergeOps(ops, h[k].d || []);
+        tlSel = mergeTl(tlSel, h[k].tl || []);
         overflow += h[k].x || 0;
         if (!h[k].d) noDetail = 'Some of the compared changes predate change tracking — their details aren’t included.';
       }
@@ -5389,6 +5676,7 @@
     } else if (vhSel != null) {
       var se = h[vhSel];
       ops = se.d || [];
+      tlSel = se.tl || [];
       overflow = se.x || 0;
       head = vhEntryTitle(se);
       sub = '<b>' + esc(se.u || 'Unknown user') + '</b> · ' + esc(relTime(se.t)) + ' · ' + esc(new Date(se.t).toLocaleString());
@@ -5414,11 +5702,14 @@
     if (!h.length) {
       detail = '<div class="vh-empty">No changes recorded yet — edits made from now on appear here, newest first.</div>';
     } else {
+      // the Timeline tab leads with a mini planning-style timeline: every
+      // moved item as a row — before in red, after in green
+      var tlVisual = activeTab === 'timeline' ? vtHtml(tlSel, ops) : '';
       detail =
         '<div class="hv-dhead"><h2>' + esc(head) + '</h2><div class="hv-dsub">' + sub + '</div></div>' +
         (noDetail ? '<div class="hv-nodetail">' + esc(noDetail) + '</div>' : '') +
         (cats.length
-          ? '<div class="hv-tabs">' + tabs + '</div><div class="hv-diff">' + diffRows +
+          ? '<div class="hv-tabs">' + tabs + '</div>' + tlVisual + '<div class="hv-diff">' + diffRows +
             (overflow ? '<div class="hv-more">…and ' + overflow + ' more change(s) not kept in detail</div>' : '') + '</div>'
           : (noDetail ? '' : '<div class="vh-empty">Nothing to show — this change left no recorded field differences.</div>'));
     }
@@ -5616,8 +5907,7 @@
         setDetailMode('story');
       } },
       { icon: 'chevrons-down-up', label: 'Collapse all features', fn: function () {
-        expanded = {};
-        render();
+        setDetailMode('feature');
       } },
       { icon: 'arrow-down-narrow-wide', label: 'Auto-order rows by start', checked: autoOrder, fn: function () {
         autoOrder = !autoOrder;
@@ -5892,6 +6182,41 @@
   // week cells. Name is optional; Role is free text; Rate card is the
   // rate-card role selector (empty = not assigned).
   var BU_COLS = { role: 110, type: 96, ws: 108, cost: 76, rate: 76, margin: 54, total: 80 };
+  // header labels + the tooltip that explains each column (tooltips live on
+  // the HEADERS — the cells themselves stay quiet)
+  var BU_COL_DEFS = {
+    role: ['Role', 'Role — free text, e.g. “Senior Backend Dev”'],
+    type: ['Rate card', 'Rate card — the role whose default rate/cost applies (optional)'],
+    ws: ['Workstream', 'Workstreams this person works on'],
+    cost: ['Cost', 'Cost (hourly) — empty inherits the rate card'],
+    rate: ['Rate', 'Rate (hourly) — empty inherits the rate card'],
+    margin: ['Margin', 'Margin — (rate − cost) ÷ rate'],
+    total: ['Total', 'Total — actual hours × rate']
+  };
+  var BU_KEYS = ['role', 'type', 'ws', 'cost', 'rate', 'margin', 'total'];
+  var PL_COL_DEFS = {
+    size: ['size', 'Size — click a row chip to change', 34],
+    dur: ['dur', 'Duration in weeks', 34],
+    asg: ['ppl', 'Assignees', 44]
+  };
+  var PL_KEYS = ['size', 'dur', 'asg'];
+  function orderedCols(order, allKeys) {
+    var out = (order || []).filter(function (k) { return allKeys.indexOf(k) !== -1; });
+    allKeys.forEach(function (k) { if (out.indexOf(k) === -1) out.push(k); });
+    return out;
+  }
+  function buColsOrdered() { return orderedCols(buColOrder, BU_KEYS); }
+  function plColsOrdered() { return orderedCols(plColOrder, PL_KEYS); }
+  function buColsVisible() {
+    return buColsOrdered().filter(function (k) { return !buColHide[k]; });
+  }
+  function plColsVisible() {
+    return plColsOrdered().filter(function (k) {
+      if (plColHide[k]) return false;
+      if (k === 'size') return RM.sizingEnabled(state);
+      return true;
+    });
+  }
   // columns are user-resizable (drag the header edges); widths flow to every
   // row (and the Resources panel) through --bu-w-* CSS variables
   function buW(k) { return Math.max(44, Math.min(420, parseInt(buColW[k], 10) || BU_COLS[k])); }
@@ -5899,12 +6224,52 @@
     var rs = document.documentElement.style;
     Object.keys(BU_COLS).forEach(function (k) { rs.setProperty('--bu-w-' + k, buW(k) + 'px'); });
   }
-  $('#hdr').addEventListener('pointerdown', function (e) {
-    var rz = e.target.closest('.bu-rz');
-    if (!rz || view !== 'budget' || e.button !== 0) return;
+  // the column-label strip is rendered per view: labels, tooltips, resize
+  // handles (budget), and drag-to-reorder all live here
+  function renderHlCols() {
+    var el = $('#hlCols');
+    if (!el) return;
+    if (view === 'budget') {
+      el.innerHTML = buColsVisible().map(function (k) {
+        return '<i class="bu-only" data-bucol="' + k + '" title="' +
+          esc(BU_COL_DEFS[k][1] + '\nDrag to reorder · click for columns · right edge resizes') +
+          '" style="width:var(--bu-w-' + k + ')">' + esc(BU_COL_DEFS[k][0]) +
+          '<span class="bu-rz" data-burz="' + k + '" title="Drag to resize"></span></i>';
+      }).join('');
+    } else {
+      el.innerHTML = plColsVisible().map(function (k) {
+        return '<i class="pl-only' + (k === 'size' ? ' sz-lab' : '') + '" data-plcol="' + k + '" title="' +
+          esc(PL_COL_DEFS[k][1] + '\nDrag to reorder · click for column options') +
+          '" style="width:' + PL_COL_DEFS[k][2] + 'px">' + esc(PL_COL_DEFS[k][0]) + '</i>';
+      }).join('');
+    }
+  }
+  function columnsMenuItems(kind) {
+    var keys = kind === 'bu' ? buColsOrdered() : plColsOrdered();
+    var defs = kind === 'bu' ? BU_COL_DEFS : PL_COL_DEFS;
+    var hide = kind === 'bu' ? buColHide : plColHide;
+    var items = keys.map(function (k) {
+      var lbl = defs[k][0] || k;
+      lbl = lbl === 'ppl' ? 'Assignees' : lbl.charAt(0).toUpperCase() + lbl.slice(1);
+      return { icon: hide[k] ? 'eye-off' : 'eye', label: esc(lbl), checked: !hide[k], fn: function () {
+        hide[k] = !hide[k];
+        if (keys.every(function (x) { return hide[x]; })) hide[k] = false; // keep one column
+        saveLocal();
+        render();
+      } };
+    });
+    items.push({ sep: true });
+    items.push({ icon: 'rotate-ccw', label: 'Reset columns', fn: function () {
+      if (kind === 'bu') { buColOrder = null; buColHide = {}; buColW = {}; }
+      else { plColOrder = null; plColHide = {}; }
+      saveLocal();
+      render();
+    } });
+    return items;
+  }
+  function startBuColResize(e, k) {
     e.preventDefault();
     e.stopPropagation();
-    var k = rz.dataset.burz;
     var w0 = buW(k), x0 = e.clientX;
     function mv(ev) {
       buColW[k] = Math.max(44, Math.min(420, Math.round(w0 + ev.clientX - x0)));
@@ -5917,25 +6282,107 @@
     }
     window.addEventListener('pointermove', mv);
     window.addEventListener('pointerup', up);
+  }
+  // drag a header label to reorder its column; a plain click (no movement)
+  // opens the columns menu (show / hide / reset)
+  function startHdrColDrag(e, cell) {
+    e.preventDefault();
+    var isBu = cell.dataset.bucol != null;
+    var attr = isBu ? 'bucol' : 'plcol';
+    var key = cell.dataset[attr];
+    var host = $('#hlCols');
+    var x0 = e.clientX, moved = false, ind = null, at = null;
+    function cells() { return $$('i[data-' + attr + ']', host); }
+    function insertIndexAt(cx) {
+      var cs = cells(), i2;
+      for (i2 = 0; i2 < cs.length; i2++) {
+        var r = cs[i2].getBoundingClientRect();
+        if (cx < r.left + r.width / 2) return i2;
+      }
+      return cs.length;
+    }
+    function mv(ev) {
+      if (!moved && Math.abs(ev.clientX - x0) < 4) return;
+      moved = true;
+      cell.classList.add('colgrab');
+      if (!ind) {
+        ind = document.createElement('span');
+        ind.className = 'col-indicator';
+        host.style.position = 'relative';
+        host.appendChild(ind);
+      }
+      at = insertIndexAt(ev.clientX);
+      var cs = cells();
+      var hr = host.getBoundingClientRect();
+      var x = at < cs.length ? cs[at].getBoundingClientRect().left : cs[cs.length - 1].getBoundingClientRect().right;
+      ind.style.left = (x - hr.left) + 'px';
+    }
+    function up(ev) {
+      window.removeEventListener('pointermove', mv);
+      window.removeEventListener('pointerup', up);
+      cell.classList.remove('colgrab');
+      if (ind) ind.remove();
+      if (!moved) {
+        openContextMenu(ev.clientX, ev.clientY, columnsMenuItems(isBu ? 'bu' : 'pl'));
+        return;
+      }
+      var vis = (isBu ? buColsVisible() : plColsVisible()).slice();
+      var from = vis.indexOf(key);
+      if (from === -1 || at == null) return;
+      var to = at;
+      vis.splice(from, 1);
+      if (from < to) to -= 1;
+      vis.splice(to, 0, key);
+      var full = vis.concat((isBu ? buColsOrdered() : plColsOrdered()).filter(function (k2) {
+        return vis.indexOf(k2) === -1;
+      }));
+      if (isBu) buColOrder = full; else plColOrder = full;
+      saveLocal();
+      render();
+    }
+    window.addEventListener('pointermove', mv);
+    window.addEventListener('pointerup', up);
+  }
+  $('#hlCols').addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return;
+    var rz = e.target.closest('.bu-rz');
+    if (rz) { startBuColResize(e, rz.dataset.burz); return; }
+    var cell = e.target.closest('i[data-bucol],i[data-plcol]');
+    if (cell) startHdrColDrag(e, cell);
+  });
+  document.addEventListener('contextmenu', function (e) {
+    var corner = e.target.closest('.hdr-left.corner');
+    if (!corner || (view !== 'budget' && view !== 'planning')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openContextMenu(e.clientX, e.clientY, columnsMenuItems(view === 'budget' ? 'bu' : 'pl'));
   });
   // shared left-hand member columns — the Resources panel under the timeline
-  // renders these SAME columns (budgeting adds the money columns after them)
-  function memberColsHtml(m) {
+  // renders these SAME columns in the user's order (budgeting adds the money
+  // columns, also orderable/hideable). moneyMap: key -> html for cost/rate/
+  // margin/total; absent (Resources panel) skips those keys entirely.
+  function memberColsHtml(m, moneyMap) {
     var mws = RM.memberWorkstreams(m);
     var wsHex = RM.colorForWs(state, mws[0] || '');
-    return '<span class="bu-nm">' + avatarHtml(m, 'sm') +
+    var cols = {
+      role: '<input class="bu-in bu-col" style="width:var(--bu-w-role)" data-bud="role" value="' + esc(m.role || '') +
+        '" placeholder="Role">',
+      type: '<span class="r-ws sc-chip bu-col bu-chip' + (m.type ? '' : ' empty') +
+        '" style="width:var(--bu-w-type)" tabindex="0" role="button" data-bact="type">' +
+        (m.type ? esc(shorten(m.type, 13)) : '—') + '</span>',
+      ws: '<span class="r-ws sc-chip bu-col bu-chip' + (mws.length ? '' : ' empty') +
+        '" style="width:var(--bu-w-ws)" tabindex="0" role="button" data-bact="ws">' +
+        (mws.length ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(mws[0], 12)) +
+          (mws.length > 1 ? '<small class="bu-wsmore">+' + (mws.length - 1) + '</small>' : '') : '—') + '</span>'
+    };
+    var out = '<span class="bu-nm">' + avatarHtml(m, 'sm') +
       '<input class="bu-in bu-nm-in" data-bud="name" value="' + esc(m.name || '') +
-      '" placeholder="Name" title="Name (optional) — click to edit"></span>' +
-      '<input class="bu-in bu-col" style="width:var(--bu-w-role)" data-bud="role" value="' + esc(m.role || '') +
-      '" placeholder="Role" title="Role — free text, e.g. “Senior Backend Dev”">' +
-      '<span class="r-ws sc-chip bu-col bu-chip' + (m.type ? '' : ' empty') +
-      '" style="width:var(--bu-w-type)" tabindex="0" role="button" data-bact="type" title="Rate card — the role whose default rate/cost applies (optional)">' +
-      (m.type ? esc(shorten(m.type, 13)) : '—') + '</span>' +
-      '<span class="r-ws sc-chip bu-col bu-chip' + (mws.length ? '' : ' empty') +
-      '" style="width:var(--bu-w-ws)" tabindex="0" role="button" data-bact="ws" title="' +
-      esc('Workstreams — click to change' + (mws.length > 1 ? '\n' + mws.join(', ') : '')) + '">' +
-      (mws.length ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(mws[0], 12)) +
-        (mws.length > 1 ? '<small class="bu-wsmore">+' + (mws.length - 1) + '</small>' : '') : '—') + '</span>';
+      '" placeholder="Name"></span>';
+    buColsVisible().forEach(function (k) {
+      if (cols[k]) out += cols[k];
+      else if (moneyMap && moneyMap[k] != null) out += moneyMap[k];
+    });
+    return out;
   }
   function renderBudgetRows() {
     var meta = state.meta;
@@ -5967,19 +6414,21 @@
             ? '<span>' + (fmtH(wh.planned) || '') + '</span>' + (clipped ? '<span class="bu-sub">(' + fmtH(wh.actual) + ')</span>' : '')
             : '') + '</div>');
       }
+      var moneyMap = {
+        cost: '<input class="bu-in bu-col' + (!m.cost && effCost ? ' inherited' : '') +
+          '" style="width:var(--bu-w-cost)" type="number" min="0" data-bud="cost" value="' + (m.cost || '') +
+          '" placeholder="' + (rc && rc.cost ? rc.cost : 0) + '">',
+        rate: '<input class="bu-in bu-col' + (!m.rate && effRate ? ' inherited' : '') +
+          '" style="width:var(--bu-w-rate)" type="number" min="0" data-bud="rate" value="' + (m.rate || '') +
+          '" placeholder="' + (rc && rc.rate ? rc.rate : 0) + '">',
+        margin: '<span class="bu-col bu-ro" style="width:var(--bu-w-margin)">' + (margin == null ? '—' : Math.round(margin) + '%') + '</span>',
+        total: '<span class="bu-col bu-ro" style="width:var(--bu-w-total)">' + fmtMoney(total) + '</span>'
+      };
       html.push('<div class="row brole" data-mid="' + m.id + '">' +
         '<div class="row-left">' +
         '<span class="r-grip bu-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="r-dot" style="background:#' + wsHex + '"></span>' +
-        memberColsHtml(m) +
-        '<input class="bu-in bu-col' + (!m.cost && effCost ? ' inherited' : '') +
-        '" style="width:var(--bu-w-cost)" type="number" min="0" data-bud="cost" value="' + (m.cost || '') + '" placeholder="' + (rc && rc.cost ? rc.cost : 0) +
-        '" title="Cost (hourly) — empty inherits the role’s rate card">' +
-        '<input class="bu-in bu-col' + (!m.rate && effRate ? ' inherited' : '') +
-        '" style="width:var(--bu-w-rate)" type="number" min="0" data-bud="rate" value="' + (m.rate || '') + '" placeholder="' + (rc && rc.rate ? rc.rate : 0) +
-        '" title="Rate (hourly) — empty inherits the role’s rate card">' +
-        '<span class="bu-col bu-ro" style="width:var(--bu-w-margin)" title="Margin">' + (margin == null ? '—' : Math.round(margin) + '%') + '</span>' +
-        '<span class="bu-col bu-ro" style="width:var(--bu-w-total)" title="Total — actual hours × rate">' + fmtMoney(total) + '</span>' +
+        memberColsHtml(m, moneyMap) +
         '</div><div class="row-lane">' + cells.join('') + '</div></div>');
     });
     // click-to-add role row (same flow as the Resources panel)
@@ -6002,18 +6451,38 @@
       var kindLabel = c.kind === 'fixed' ? 'One-time' : c.kind === 'weekly' ? 'Weekly' : 'Monthly';
       var cTotal = RM.costTotal(state, c);
       sumTotal = sumTotal; // billing total stays roster-only; costs are spend
+      // cost rows fill the same visible column slots as the people above:
+      // kind chip in the Role slot, the date range across Rate card +
+      // Workstream (merged only when those two sit side by side)
+      var vis = buColsVisible();
+      var datesTxt = esc(RM.fmtShort(RM.dayToDate(meta, c.startDay)) +
+        (c.kind !== 'fixed' ? ' →' + (c.endDay != null ? ' ' + RM.fmtShort(RM.dayToDate(meta, c.endDay)) : ' end') : ''));
+      var datesAt = vis.indexOf('type') !== -1 ? 'type' : (vis.indexOf('ws') !== -1 ? 'ws' : null);
+      var mergeWs = datesAt === 'type' && vis[vis.indexOf('type') + 1] === 'ws';
+      var costCols = '';
+      vis.forEach(function (k) {
+        if (k === 'role') {
+          costCols += '<span class="r-ws sc-chip bu-col bu-chip" style="width:var(--bu-w-role)" tabindex="0" role="button" data-cact="kind">' + kindLabel + '</span>';
+        } else if (k === datesAt) {
+          costCols += '<span class="r-ws sc-chip bu-col bu-chip" style="width:' +
+            (mergeWs ? 'calc(var(--bu-w-type) + var(--bu-w-ws))' : 'var(--bu-w-' + k + ')') +
+            '" tabindex="0" role="button" data-cact="dates">' + datesTxt + '</span>';
+        } else if (k === 'ws' && mergeWs) {
+          // swallowed by the merged dates chip
+        } else if (k === 'cost') {
+          costCols += '<input class="bu-in bu-col" style="width:var(--bu-w-cost)" type="number" min="0" data-cf="amount" value="' + c.amount + '">';
+        } else if (k === 'total') {
+          costCols += '<span class="bu-col bu-ro" style="width:var(--bu-w-total)">' + fmtMoney(cTotal) + '</span>';
+        } else {
+          costCols += '<span class="bu-col" style="width:var(--bu-w-' + k + ')"></span>';
+        }
+      });
       html.push('<div class="row brole bcost" data-cost="' + c.id + '">' +
         '<div class="row-left">' +
         '<span class="r-grip bu-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="r-dot nodot"></span>' +
-        '<input class="bu-in bu-nm-in" data-cf="name" value="' + esc(c.name) + '" title="Cost name">' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:var(--bu-w-role)" tabindex="0" role="button" data-cact="kind" title="One-time, weekly, or monthly">' + kindLabel + '</span>' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:calc(var(--bu-w-type) + var(--bu-w-ws))" tabindex="0" role="button" data-cact="dates" title="When it applies — click to edit">' +
-        esc(RM.fmtShort(RM.dayToDate(meta, c.startDay)) + (c.kind !== 'fixed' ? ' →' + (c.endDay != null ? ' ' + RM.fmtShort(RM.dayToDate(meta, c.endDay)) : ' end') : '')) + '</span>' +
-        '<input class="bu-in bu-col" style="width:var(--bu-w-cost)" type="number" min="0" data-cf="amount" value="' + c.amount + '" title="Amount per occurrence">' +
-        '<span class="bu-col" style="width:var(--bu-w-rate)"></span>' +
-        '<span class="bu-col" style="width:var(--bu-w-margin)"></span>' +
-        '<span class="bu-col bu-ro" style="width:var(--bu-w-total)" title="Total across ' + occ.length + ' occurrence(s)">' + fmtMoney(cTotal) + '</span>' +
+        '<span class="bu-nm"><input class="bu-in bu-nm-in" data-cf="name" value="' + esc(c.name) + '"></span>' +
+        costCols +
         '</div><div class="row-lane">' + marks + '</div></div>');
     });
     html.push('<div class="row addrow" data-kind="baddcost" title="Add a fixed or recurring cost">' +
@@ -6738,13 +7207,15 @@
         var rows = list.map(function (stName, si2) {
           var last = si2 === list.length - 1;
           return '<tr>' +
+            '<td style="width:26px"><button class="st-sw" data-stcsw="' + kind + ':' + esc(stName) +
+            '" style="background:#' + RM.statusColor(state, kind, stName) + '" title="Status color — click to change"></button></td>' +
             '<td><input data-sustat="' + kind + '" data-old="' + esc(stName) + '" value="' + esc(stName) + '" aria-label="Status name"></td>' +
             '<td>' + (last ? '<span class="band-bucket-tag">done</span>' : '') + '</td>' +
             '<td class="hol-x">' + (list.length > 2 ? '<button data-sustatrm="' + kind + ':' + esc(stName) + '" title="Remove status"><i data-lucide="x"></i></button>' : '') + '</td>' +
             '</tr>';
         }).join('');
         return '<section class="su-card"><h2>' + (kind === 'feature' ? 'Feature statuses' : 'Story statuses') + '</h2>' +
-          '<table class="hol-table"><thead><tr><th>Status</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<table class="hol-table"><thead><tr><th></th><th>Status</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
           '<div class="p-row" style="margin-top:8px"><input id="suStAdd-' + kind + '" placeholder="New status\u2026"><button data-sustatadd="' + kind + '" class="fixed">Add</button></div>' +
           (kind === 'feature'
             ? '<div class="m-hint">Used on the Sprinting board and grid. The last status counts as done.</div>'
@@ -7048,6 +7519,11 @@
       var rmKind = rmParts.shift();
       var rmName = rmParts.join(':');
       commit('remove status', function (s2) { RM.removeStatus(s2, rmKind, rmName); });
+      return;
+    }
+    if (t.dataset.stcsw) {
+      var swParts = t.dataset.stcsw.split(':');
+      statusColorMenu(t, swParts.shift(), swParts.join(':'));
       return;
     }
     if (t.dataset.suwps != null) {

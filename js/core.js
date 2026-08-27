@@ -173,6 +173,18 @@
     if (obj.status && list.indexOf(obj.status) !== -1) return obj.status;
     return obj.done ? list[list.length - 1] : list[0];
   };
+  // status color: user-assigned (meta.statusColors, keyed by name) or a
+  // sensible default from the status's position (todo gray, doing blue,
+  // last-is-done green). Returns a 6-hex string, no '#'.
+  RM.statusColor = function (state, kind, name) {
+    var sc = (state.meta && state.meta.statusColors) || {};
+    if (typeof sc[name] === 'string' && /^[0-9a-fA-F]{6}$/.test(sc[name])) return sc[name];
+    var list = RM.statusesOf(state, kind);
+    var i = list.indexOf(name);
+    if (i === list.length - 1) return '08875B';
+    if (i <= 0) return '6E7883';
+    return '0057B8';
+  };
   RM.setStatus = function (state, obj, kind, status) {
     var list = RM.statusesOf(state, kind);
     if (list.indexOf(status) === -1) return;
@@ -192,6 +204,12 @@
       if (kind === 'feature') fix(it);
       else (it.stories || []).forEach(fix);
     });
+    // an assigned color follows the status through its rename
+    var sc = state.meta.statusColors;
+    if (sc && sc[oldName] != null) {
+      sc[newName] = sc[oldName];
+      delete sc[oldName];
+    }
     return true;
   };
   RM.addStatus = function (state, kind, name) {
@@ -905,6 +923,15 @@
         });
         out[kind] = list.length >= 2 ? list : RM.DEFAULT_STATUSES[kind].slice();
       });
+      // user-assigned status colors: name -> 6-hex
+      var sc = {};
+      if (m.statusColors && typeof m.statusColors === 'object') {
+        Object.keys(m.statusColors).forEach(function (nm) {
+          var hex = String(m.statusColors[nm] || '').replace(/^#/, '');
+          if (/^[0-9a-fA-F]{6}$/.test(hex)) sc[String(nm).slice(0, 60)] = hex.toUpperCase();
+        });
+      }
+      m.statusColors = sc;
       return out;
     })();
     // priority column scheme (own column, separate from risk)
@@ -1139,6 +1166,17 @@
       };
       if (d.length) out.d = d;
       if (isFinite(+h.x) && +h.x > 0) out.x = Math.round(+h.x);
+      // tl: machine-readable schedule moves for the visual timeline diff
+      if (Array.isArray(h.tl)) {
+        var tl = h.tl.slice(0, 60).map(function (m2) {
+          if (!m2 || typeof m2 !== 'object') return null;
+          function day(v) { return v == null || !isFinite(+v) ? null : Math.round(+v); }
+          return { id: String(m2.id || ''), n: isFinite(+m2.n) ? +m2.n : 0,
+            f: String(m2.f || '').slice(0, 60), ms: m2.ms ? 1 : 0,
+            s0: day(m2.s0), d0: day(m2.d0), s1: day(m2.s1), d1: day(m2.d1) };
+        }).filter(Boolean);
+        if (tl.length) out.tl = tl;
+      }
       return out;
     }).filter(Boolean).slice(-RM.HISTORY_MAX);
     state.team = (state.team || []).map(function (mbr) {
