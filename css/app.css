@@ -1290,6 +1290,12 @@ body[data-view="scoping"] #resPanel { display: none; }
 .rrow:hover .rr-grip { opacity: 1; }
 .res-name { flex: 1 1 auto; min-width: 0; font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .res-name:hover { text-decoration: underline dotted var(--ink-3); cursor: text; }
+/* resources rows share the budgeting columns (name · role · rate card · ws);
+   budgeting adds the money columns on top of these */
+.rleft .bu-in { border: 1px solid transparent; background: transparent; border-radius: 5px; padding: 2px 4px; font-size: 11.5px; }
+.rleft .bu-in:hover { border-color: var(--line-2); }
+.rleft .bu-in:focus { outline: none; border-color: var(--blue); background: var(--surface); }
+.rleft .sc-chip { justify-content: flex-start; text-align: left; }
 .res-wschip { color: var(--ink-3); }
 .radd-input {
   flex: 1;
@@ -1488,6 +1494,40 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 }
 .bu-cell.bu-fillsel { box-shadow: inset 0 0 0 1px var(--blue); background-color: var(--blue-soft) !important; }
 .row.btotal .bu-nm, .row.btotal .bu-ro { font-weight: 700; color: var(--ink); }
+/* budgeting rows reorder by their grip, like the resources panel */
+.bu-grip { flex: 0 0 16px; opacity: 0; cursor: grab; display: inline-flex; color: var(--ink-3); }
+.row.brole:hover .bu-grip { opacity: .8; }
+.bu-grip svg.lucide { width: 13px; height: 13px; }
+.row.drag-row-ghost { opacity: .35; }
+/* empty rate-card / workstream chips read as a quiet dash */
+.bu-chip:empty::before, .bu-chip.empty { color: var(--ink-3); }
+
+/* version history — timeline modal, newest first */
+.vh-list { position: relative; padding: 4px 0 4px 2px; max-height: 52vh; overflow-y: auto; }
+.vh-item { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 7px 4px 7px 26px; }
+/* the rail: one continuous line behind the dots */
+.vh-item::before {
+  content: ''; position: absolute; left: 9px; top: 0; bottom: 0;
+  width: 2px; background: var(--line);
+}
+.vh-item:first-child::before { top: 14px; }
+.vh-item:last-child::before { bottom: auto; height: 14px; }
+.vh-item:only-child::before { display: none; }
+.vh-dot {
+  position: absolute; left: 5px; top: 11px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--blue); border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.vh-main { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.45; }
+.vh-main b { font-weight: 700; }
+.vh-what { color: var(--ink-2); }
+.vh-count { color: var(--ink-3); font-size: 11px; margin-left: 4px; }
+.vh-time { flex: 0 0 auto; font-size: 11px; color: var(--ink-3); margin-top: 2px; white-space: nowrap; }
+.vh-empty { padding: 18px 6px; font-size: 12.5px; color: var(--ink-3); }
+.vh-me { font-size: 11.5px; color: var(--ink-3); margin-right: auto; align-self: center; }
+.vh-me button { border: 0; background: transparent; box-shadow: none; padding: 0; color: var(--blue); font-size: 11.5px; cursor: pointer; }
+.vh-me button:hover { text-decoration: underline; box-shadow: none; transform: none; }
 
 /* WYSIWYG editor (rich description / acceptance criteria) */
 .wz { border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); overflow: hidden; }
@@ -1696,7 +1736,10 @@ body.chrome-win #topbar { padding-right: 0; }
 }
 #titleEdit:hover { color: var(--ink); background: rgba(var(--ink-rgb), .06); box-shadow: none; transform: none; }
 
-#filterCell { position: relative; display: flex; align-items: center; }
+/* NO position of its own — .hdr-left's `sticky` must stay in effect so the
+   filter rides the frozen left pane instead of scrolling with the lane
+   (sticky is a containing block, so the absolute icon/kbd still anchor here) */
+#filterCell { display: flex; align-items: center; }
 #rowFilter {
   width: 100%; height: 30px;
   border: 1px solid var(--line-2); border-radius: 6px;
@@ -1707,7 +1750,9 @@ body.chrome-win #topbar { padding-right: 0; }
 /* lucide swaps the <i> for an <svg> carrying the same class, so the size
    must sit on .filter-ico itself */
 .filter-ico {
-  position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+  /* the cell carries 14px left / 4px bottom padding — offset so the icon
+     sits INSIDE the input (8px in from its left edge, on its midline) */
+  position: absolute; left: 22px; top: calc(50% - 2px); transform: translateY(-50%);
   width: 13px; height: 13px;
   display: inline-flex; color: var(--ink-3); pointer-events: none;
 }
@@ -1716,7 +1761,7 @@ body.chrome-win #topbar { padding-right: 0; }
    so the native clear button gets the far-right spot to itself */
 #rowFilter:placeholder-shown:not(:focus) { padding-right: 40px; }
 .filter-kbd {
-  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 14px; top: calc(50% - 2px); transform: translateY(-50%);
   pointer-events: none;
 }
 #rowFilter:focus ~ .filter-kbd,
@@ -1730,6 +1775,9 @@ body[data-view="scoping"] .hdr-phases .hdr-lane { visibility: hidden; }
 body[data-view="budget"] #rowFilter, body[data-view="setup"] #rowFilter { display: none; }
 body[data-view="budget"] .filter-kbd, body[data-view="setup"] .filter-kbd,
 body[data-view="reports"] .filter-kbd { display: none; }
+/* the icon follows the input everywhere the filter is hidden */
+body[data-view="budget"] .filter-ico, body[data-view="setup"] .filter-ico,
+body[data-view="sprints"] .filter-ico, body[data-view="reports"] .filter-ico { display: none; }
 
 /* Save button once the doc matches its file */
 #btnSave[data-mode="saved"] { opacity: .8; }
@@ -2038,19 +2086,27 @@ body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--ink-3); background-clip: content-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* icon-only Setup button beside the view tabs */
-#btnSetup {
-  border-radius: 999px;
-  width: 34px; height: 34px;
-  padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
+/* Setup + Version-history split button beside the view tabs: one pill,
+   two icon halves separated by a hairline */
+#setupSplit {
+  display: inline-flex; align-items: stretch;
+  border-radius: 999px; height: 34px;
   background: var(--well);
   border: 1px solid var(--line);
+  overflow: hidden;
+}
+#setupSplit .ss-div { width: 1px; background: var(--line); margin: 6px 0; flex: 0 0 1px; }
+#btnSetup, #btnHistory {
+  border: 0; border-radius: 0;
+  width: 34px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; box-shadow: none;
   color: var(--ink-2);
 }
-#btnSetup:hover { color: var(--ink); box-shadow: var(--shadow-1); }
-#btnSetup.on { background: var(--surface); color: var(--blue); border-color: var(--line-2); box-shadow: var(--shadow-1); }
-#btnSetup svg.lucide { width: 16px; height: 16px; }
+#btnSetup:hover, #btnHistory:hover { color: var(--ink); background: rgba(var(--ink-rgb), .06); box-shadow: none; transform: none; }
+#btnSetup.on { background: var(--surface); color: var(--blue); }
+#setupSplit:has(#btnSetup.on) { background: var(--surface); border-color: var(--line-2); box-shadow: var(--shadow-1); }
+#btnSetup svg.lucide, #btnHistory svg.lucide { width: 16px; height: 16px; }
 
 /* floating zoom / expand cluster (bottom right of the timeline) */
 #zoomCtl {
@@ -2387,3 +2443,118 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
   color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 4px;
   padding: 0 4px; flex: 0 0 auto;
 }
+
+/* ------------------------------------------------------------ detail level */
+/* dropdown to the left of the "Feature" header: phases / features / stories */
+#detailBtn {
+  display: inline-flex; align-items: center; gap: 1px;
+  border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface);
+  color: var(--ink-2); padding: 2px 4px; margin-right: 8px; cursor: pointer;
+  flex: 0 0 auto;
+}
+#detailBtn:hover { border-color: var(--line-3); color: var(--ink); }
+#detailBtn svg { width: 13px; height: 13px; }
+#detailBtn .dm-caret { width: 10px; height: 10px; opacity: .6; }
+body[data-view="budget"] #detailBtn { display: none; }
+
+/* phase-only detail: the band's lane paints the phase's span as a bar */
+.ph-row-bar {
+  position: absolute; top: 5px; bottom: 5px; border-radius: 6px;
+  background: var(--band); border: 1px solid var(--band-edge);
+  display: flex; align-items: center; padding: 0 8px; overflow: hidden;
+}
+.ph-row-bar span {
+  color: var(--band-ink); font-size: 10.5px; font-weight: 700; white-space: nowrap;
+}
+.row.band.ph-only .row-lane { position: relative; }
+
+/* ------------------------------------------------------- budget column resize */
+.hl-cols i[data-bucol] { position: relative; }
+.bu-rz {
+  position: absolute; top: -4px; bottom: -4px; right: -3px; width: 7px;
+  cursor: col-resize; z-index: 3;
+}
+.bu-rz:hover { background: rgba(0, 87, 184, .18); }
+
+/* ------------------------------------------------------- version history page */
+#historyView { display: none; }
+body[data-view="history"] #historyView { display: block; flex: 1; overflow: hidden; }
+body[data-view="history"] #board,
+body[data-view="history"] #leftRzLine,
+body[data-view="history"] #resPanel,
+body[data-view="history"] #rowFilter,
+body[data-view="history"] .filter-ico,
+body[data-view="history"] .filter-kbd,
+body[data-view="history"] #panelPeek { display: none; }
+#setupSplit:has(#btnHistory.on) { background: var(--well); }
+
+.hv-wrap { display: flex; height: 100%; min-height: 0; }
+.hv-side {
+  flex: 0 0 360px; display: flex; flex-direction: column; min-height: 0;
+  border-right: 1px solid var(--line); background: var(--paper-2);
+}
+.hv-sidehead {
+  display: flex; align-items: center; gap: 8px; padding: 16px 16px 6px;
+}
+.hv-sidehead h2 { font-size: 14px; font-weight: 800; margin: 0; }
+.hv-hint { padding: 0 16px 8px; font-size: 11px; color: var(--ink-3); }
+.hv-list { flex: 1; min-height: 0; overflow-y: auto; max-height: none; padding: 4px 10px 10px 8px; }
+.hv-item { border-radius: 8px; cursor: pointer; }
+.hv-item:hover { background: var(--hover); }
+.hv-item.sel { background: var(--blue-soft); }
+.hv-item.sel .vh-what { color: var(--ink); }
+.hv-ck {
+  position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+  width: 12px; height: 12px; accent-color: var(--blue); cursor: pointer;
+  opacity: 0;
+}
+.hv-item:hover .hv-ck, .hv-ck:checked { opacity: 1; }
+.hv-item::before { left: 8px; }
+.hv-item .vh-dot { left: 5px; }
+.hv-item:hover::before, .hv-item:hover .vh-dot,
+.hv-item.sel::before, .hv-item.sel .vh-dot { opacity: 0; }
+.hv-foot { border-top: 1px solid var(--line); padding: 9px 16px; }
+
+.hv-detail { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 26px 40px; }
+.hv-dhead h2 { font-size: 16px; font-weight: 800; margin: 0 0 3px; }
+.hv-dsub { font-size: 12px; color: var(--ink-2); }
+.hv-nodetail {
+  margin-top: 14px; padding: 10px 12px; border: 1px dashed var(--line-2);
+  border-radius: 8px; font-size: 12px; color: var(--ink-3); max-width: 620px;
+}
+.hv-tabs {
+  display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid var(--line);
+  padding-bottom: 0;
+}
+.hv-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 0; background: transparent; box-shadow: none; border-radius: 6px 6px 0 0;
+  padding: 6px 10px 7px; font-size: 12px; font-weight: 600; color: var(--ink-2);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.hv-tab svg { width: 13px; height: 13px; }
+.hv-tab:hover { color: var(--ink); background: var(--hover); }
+.hv-tab.on { color: var(--blue); border-bottom-color: var(--blue); }
+.hv-tabn {
+  font-size: 10px; font-weight: 700; color: var(--ink-3);
+  background: var(--well); border-radius: 8px; padding: 0 5px;
+}
+.hv-tab.on .hv-tabn { color: var(--blue); background: var(--blue-soft); }
+
+.hv-diff { padding: 10px 0; max-width: 860px; }
+.vd-row {
+  display: flex; align-items: baseline; gap: 14px; padding: 7px 4px;
+  border-bottom: 1px solid var(--line); font-size: 12.5px;
+}
+.vd-lab { flex: 0 0 300px; min-width: 0; color: var(--ink-2); font-weight: 600; overflow-wrap: anywhere; }
+.vd-vals { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.vd-old {
+  color: var(--err-deep); background: var(--err-bg); text-decoration: line-through;
+  border-radius: 4px; padding: 1px 6px; overflow-wrap: anywhere;
+}
+.vd-new {
+  color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-radius: 4px; padding: 1px 6px; font-weight: 600; overflow-wrap: anywhere;
+}
+.vd-arr { color: var(--ink-3); flex: 0 0 auto; }
+.hv-more { padding: 10px 4px; font-size: 11.5px; color: var(--ink-3); font-style: italic; }

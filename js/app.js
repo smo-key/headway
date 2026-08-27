@@ -54,7 +54,7 @@
   var showCap = true;        // weekly capacity row in the planning header
   var presentMode = false;   // timeline-only preview (hides topbar + left pane); transient
   var repCollapsed = true;   // bottom Reports drawer starts tucked away
-  var leftWBudget = 696;     // frozen left-pane width, budgeting view
+  var leftWBudget = 806;     // frozen left-pane width, budgeting view
   var repMode = 'workstream'; // reports grouping: workstream | phase | phase-ws
   var panelW = 372;          // right edit-panel width (resizable)
   var panelOpen = true;      // right panel is persistent on Planning; collapsible
@@ -63,6 +63,8 @@
   var groupWs = false;       // sub-group rows by workstream inside each phase
   var groupEpic = false;     // …and/or by epic (nested under workstream)
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
+  var detailMode = 'feature'; // Scoping/Planning row detail: phase | feature | story
+  var buColW = {};           // budgeting column width overrides (key -> px)
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
   var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
@@ -105,7 +107,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW };
   }
   var sprintSel = 'cur';    // Sprinting view: 'cur' | 'all' | a sprint number
   var sprintMode = 'board'; // Sprinting view: 'board' (kanban) | 'grid'
@@ -114,7 +116,9 @@
   function applyUi(ui) {
     if (!ui) return;
     weekPx = ui.weekPx || 28;
-    view = ['scoping', 'setup', 'budget', 'reports'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    view = ['scoping', 'setup', 'budget', 'reports', 'history'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    detailMode = ['phase', 'feature', 'story'].indexOf(ui.detailMode) !== -1 ? ui.detailMode : 'feature';
+    buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     depsMode = ui.depsMode === 'none' ? 'none' : 'on';
     groupWs = ui.groupWs != null ? !!ui.groupWs : ui.groupBy === 'ws';
     groupEpic = ui.groupEpic != null ? !!ui.groupEpic : (ui.groupBy === 'epic' || !!ui.groupByEpic);
@@ -129,7 +133,9 @@
     leftWPlan = ui.leftWPlan > 200 ? ui.leftWPlan : 538;
     leftWScope = ui.leftWScope > 200 ? ui.leftWScope : 538;
     // 660 was the pre-widened-columns default; bump those snapshots to 696
-    leftWBudget = ui.leftWBudget > 300 && ui.leftWBudget !== 660 ? ui.leftWBudget : 696;
+    // 660/696 were earlier defaults — stored values matching them jump to the
+    // new default (which fits the added Role column)
+    leftWBudget = ui.leftWBudget > 300 && ui.leftWBudget !== 660 && ui.leftWBudget !== 696 ? ui.leftWBudget : 806;
     panelW = ui.panelW > 280 ? ui.panelW : 372;
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
@@ -177,18 +183,226 @@
   }
 
   // ------------------------------------------------------------ commits
+  // every commit also lands in the document's version history (state.history,
+  // persisted with the doc): who made the change, what it was, and when.
+  // Rapid same-kind edits by the same person coalesce into one entry.
+  var USER_KEY = 'headway-user-v1';
+  var HISTORY_COALESCE_MS = 5 * 60 * 1000;
+  function userName() {
+    try { return (localStorage.getItem(USER_KEY) || '').trim(); } catch (e) { return ''; }
+  }
+  function setUserName(v) {
+    try { localStorage.setItem(USER_KEY, String(v || '').trim()); } catch (e) { /* storage optional */ }
+  }
+  // ---- semantic diff between two document states, for Version History.
+  // Ops are [category, field label, old value, new value]; categories map to
+  // the tabs on the Version History page. Values are short display strings —
+  // this is a human-readable audit trail, not a machine patch.
+  var VH_CATS = { timeline: 'Timeline', scope: 'Scope', status: 'Status', budget: 'Team & Costs', setup: 'Setup' };
+  function diffStates(a, b) {
+    var ops = [];
+    var meta = (b && b.meta) || (a && a.meta);
+    function push(cat, label, oldV, newV) {
+      oldV = oldV == null ? '' : String(oldV);
+      newV = newV == null ? '' : String(newV);
+      if (oldV !== newV) ops.push([cat, label, oldV, newV]);
+    }
+    function txt(v) {
+      var t = RM.htmlToText(String(v == null ? '' : v)).trim();
+      return t.length > 160 ? t.slice(0, 159) + '…' : t;
+    }
+    function dDate(day) { return day == null ? '' : RM.fmtShortYear(RM.dayToDate(meta, day)); }
+    function dWeeks(days) { return days == null ? '' : (Math.round(days / RM.slotsOf(meta) * 100) / 100) + 'w'; }
+    function byId(list) {
+      var m = {};
+      (list || []).forEach(function (x) { if (x && x.id) m[x.id] = x; });
+      return m;
+    }
+    function names(st, ids) {
+      return (ids || []).map(function (id) {
+        var m2 = null;
+        (st.team || []).forEach(function (x) { if (x.id === id) m2 = x; });
+        return m2 ? RM.memberLabel(m2) : '?';
+      }).join(', ');
+    }
+    // ---- items (features / milestones) + their stories
+    var ia = byId(a.items), ib = byId(b.items);
+    (b.items || []).forEach(function (it) {
+      var lbl = '#' + it.num + ' ' + shorten(it.feature || '(untitled)', 28);
+      var p = ia[it.id];
+      if (!p) { push('scope', lbl, '', it.milestone ? 'Milestone added' : 'Feature added'); return; }
+      push('scope', lbl + ' — Title', p.feature, it.feature);
+      function phName(st, pid) {
+        var ph = null;
+        (st.phases || []).forEach(function (x) { if (x.id === pid) ph = x; });
+        return ph ? ph.name : '';
+      }
+      push('scope', lbl + ' — Phase', phName(a, p.phaseId), phName(b, it.phaseId));
+      push('scope', lbl + ' — Workstream', p.workstream, it.workstream);
+      push('scope', lbl + ' — Epic', p.epic, it.epic);
+      push('scope', lbl + ' — Size', p.size, it.size);
+      push('scope', lbl + ' — ' + RM.riskColLabel(b), p.risk, it.risk);
+      push('scope', lbl + ' — Priority', p.priority, it.priority);
+      push('scope', lbl + ' — Role', p.teamType, it.teamType);
+      push('scope', lbl + ' — Depends on', (p.deps || []).map(function (n) { return '#' + n; }).join(', '),
+        (it.deps || []).map(function (n) { return '#' + n; }).join(', '));
+      (b.meta.scopeCols || []).forEach(function (c) {
+        push('scope', lbl + ' — ' + RM.scopeColLabel(c), txt(RM.scopeValue(p, c.key)), txt(RM.scopeValue(it, c.key)));
+      });
+      push('timeline', lbl + ' — Start', dDate(p.startDay), dDate(it.startDay));
+      push('timeline', lbl + ' — Duration', dWeeks(p.durDays), dWeeks(it.durDays));
+      push('timeline', lbl + ' — Risk buffer', dWeeks(p.riskDays || null), dWeeks(it.riskDays || null));
+      push('timeline', lbl + ' — Deadline', p.deadline, it.deadline);
+      push('timeline', lbl + ' — Milestone', p.milestone ? 'yes' : 'no', it.milestone ? 'yes' : 'no');
+      push('timeline', lbl + ' — Locked', p.locked ? 'yes' : 'no', it.locked ? 'yes' : 'no');
+      push('status', lbl + ' — Done', p.done ? 'done' : 'not done', it.done ? 'done' : 'not done');
+      push('status', lbl + ' — Status', p.status, it.status);
+      push('status', lbl + ' — Assignees', names(a, p.assignees), names(b, it.assignees));
+      var sa = byId(p.stories), sb = byId(it.stories);
+      (it.stories || []).forEach(function (st) {
+        var sl = lbl + ' › ' + shorten(st.title || '(story)', 24);
+        var sp = sa[st.id];
+        if (!sp) { push('scope', sl, '', 'Story added'); return; }
+        push('scope', sl + ' — Title', sp.title, st.title);
+        push('scope', sl + ' — Description', txt(sp.description), txt(st.description));
+        push('scope', sl + ' — Size', sp.size, st.size);
+        push('timeline', sl + ' — Start', dDate(sp.startDay), dDate(st.startDay));
+        push('timeline', sl + ' — Duration', dWeeks(sp.durDays), dWeeks(st.durDays));
+        push('timeline', sl + ' — Deadline', sp.deadline, st.deadline);
+        push('status', sl + ' — Done', sp.done ? 'done' : 'not done', st.done ? 'done' : 'not done');
+        push('status', sl + ' — Status', sp.status, st.status);
+        push('status', sl + ' — Assignees', names(a, sp.assignees), names(b, st.assignees));
+      });
+      (p.stories || []).forEach(function (st) {
+        if (!sb[st.id]) push('scope', lbl + ' › ' + shorten(st.title || '(story)', 24), 'Story removed', '');
+      });
+    });
+    (a.items || []).forEach(function (it) {
+      if (!ib[it.id]) push('scope', '#' + it.num + ' ' + shorten(it.feature || '(untitled)', 28),
+        it.milestone ? 'Milestone removed' : 'Feature removed', '');
+    });
+    // ---- phases
+    var pa = byId(a.phases), pb = byId(b.phases);
+    (b.phases || []).forEach(function (p) {
+      var prev = pa[p.id];
+      var lbl = 'Phase ' + shorten(p.name || '(unnamed)', 28);
+      if (!prev) { push('setup', lbl, '', 'Added'); return; }
+      push('setup', lbl + ' — Name', prev.name, p.name);
+      push('setup', lbl + ' — Description', txt(prev.description), txt(p.description));
+      push('setup', lbl + ' — Backlog bucket', prev.bucket ? 'yes' : 'no', p.bucket ? 'yes' : 'no');
+      push('timeline', lbl + ' — Pinned start', dDate(prev.startDay), dDate(p.startDay));
+      push('timeline', lbl + ' — Pinned end', dDate(prev.endDay), dDate(p.endDay));
+    });
+    (a.phases || []).forEach(function (p) {
+      if (!pb[p.id]) push('setup', 'Phase ' + shorten(p.name || '(unnamed)', 28), 'Removed', '');
+    });
+    // ---- team + costs (budgeting)
+    var ta = byId(a.team), tb = byId(b.team);
+    (b.team || []).forEach(function (m) {
+      var prev = ta[m.id];
+      var lbl = shorten(RM.memberLabel(m), 28);
+      if (!prev) { push('budget', lbl, '', 'Person added'); return; }
+      push('budget', lbl + ' — Name', prev.name, m.name);
+      push('budget', lbl + ' — Role', prev.role, m.role);
+      push('budget', lbl + ' — Rate card', prev.type, m.type);
+      push('budget', lbl + ' — Workstreams', RM.memberWorkstreams(prev).join(', '), RM.memberWorkstreams(m).join(', '));
+      push('budget', lbl + ' — Rate', prev.rate || '', m.rate || '');
+      push('budget', lbl + ' — Cost', prev.cost || '', m.cost || '');
+      push('budget', lbl + ' — Capacity', prev.capacity != null ? prev.capacity : 1, m.capacity != null ? m.capacity : 1);
+      var wk = 0, wa = prev.weekHours || {}, wb2 = m.weekHours || {};
+      Object.keys(wb2).forEach(function (k) { if (wa[k] !== wb2[k]) wk++; });
+      Object.keys(wa).forEach(function (k) { if (!(k in wb2)) wk++; });
+      if (wk) push('budget', lbl + ' — Week hours', '', wk + ' week(s) adjusted');
+    });
+    (a.team || []).forEach(function (m) {
+      if (!tb[m.id]) push('budget', shorten(RM.memberLabel(m), 28), 'Person removed', '');
+    });
+    var ca = byId(a.costs), cb = byId(b.costs);
+    (b.costs || []).forEach(function (c) {
+      var prev = ca[c.id];
+      var lbl = 'Cost ' + shorten(c.name || '(unnamed)', 26);
+      if (!prev) { push('budget', lbl, '', 'Added'); return; }
+      push('budget', lbl + ' — Name', prev.name, c.name);
+      push('budget', lbl + ' — Amount', prev.amount, c.amount);
+      push('budget', lbl + ' — Recurrence', prev.kind, c.kind);
+      push('budget', lbl + ' — From', dDate(prev.startDay), dDate(c.startDay));
+      push('budget', lbl + ' — Until', dDate(prev.endDay), dDate(c.endDay));
+    });
+    (a.costs || []).forEach(function (c) {
+      if (!cb[c.id]) push('budget', 'Cost ' + shorten(c.name || '(unnamed)', 26), 'Removed', '');
+    });
+    // ---- setup: meta + rate card + workstream config, compared generically
+    function genericDiff(cat, prefix, oa, ob) {
+      oa = oa || {}; ob = ob || {};
+      var keys = {};
+      Object.keys(oa).concat(Object.keys(ob)).forEach(function (k) { keys[k] = 1; });
+      Object.keys(keys).forEach(function (k) {
+        var va = JSON.stringify(oa[k]), vb = JSON.stringify(ob[k]);
+        if (va !== vb) push(cat, prefix + k, txt(va == null ? '' : va), txt(vb == null ? '' : vb));
+      });
+    }
+    genericDiff('setup', 'Setup — ', a.meta, b.meta);
+    genericDiff('budget', 'Rate card — ', (a.meta || {}).rateCard, (b.meta || {}).rateCard);
+    genericDiff('setup', 'Workstream color — ', a.wsColors, b.wsColors);
+    push('setup', 'Roles (rate card)', (a.teamTypes || []).join(', '), (b.teamTypes || []).join(', '));
+    // rateCard sits inside meta too — drop the raw duplicate from the generic pass
+    ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard' && op[1] !== 'Setup — statuses'; });
+    return ops;
+  }
+  // merge coalesced ops: same field keeps its FIRST old and LAST new value
+  function mergeOps(base, add) {
+    var out = base.slice();
+    var at = {};
+    out.forEach(function (op, i) { at[op[0] + '' + op[1]] = i; });
+    add.forEach(function (op) {
+      var k = op[0] + '' + op[1];
+      if (at[k] != null) out[at[k]] = [op[0], op[1], out[at[k]][2], op[3]];
+      else { at[k] = out.length; out.push(op); }
+    });
+    return out.filter(function (op) { return op[2] !== op[3]; });
+  }
+  function recordHistory(label, prevJson) {
+    if (!label) return;
+    var u = userName();
+    var h = state.history = Array.isArray(state.history) ? state.history : [];
+    var ops = [];
+    if (prevJson) {
+      try { ops = diffStates(JSON.parse(prevJson), state); } catch (e) { ops = []; }
+    }
+    // the history array itself always differs between snapshots — never diff it
+    ops = ops.filter(function (op) { return op[1].indexOf('history') === -1; });
+    var last = h[h.length - 1];
+    var now = Date.now();
+    if (last && last.label === label && last.u === u && now - last.t < HISTORY_COALESCE_MS) {
+      last.t = now;
+      last.n = (last.n || 1) + 1;
+      var merged = mergeOps(last.d || [], ops);
+      last.x = (last.x || 0) + Math.max(0, merged.length - RM.HISTORY_OPS_MAX);
+      last.d = merged.slice(0, RM.HISTORY_OPS_MAX);
+      return;
+    }
+    var en = { t: now, u: u, label: label, n: 1 };
+    if (ops.length > RM.HISTORY_OPS_MAX) en.x = ops.length - RM.HISTORY_OPS_MAX;
+    en.d = ops.slice(0, RM.HISTORY_OPS_MAX);
+    h.push(en);
+    if (h.length > RM.HISTORY_MAX) h.splice(0, h.length - RM.HISTORY_MAX);
+  }
   function commit(label, mutate) {
-    undoStack.push(JSON.stringify(state));
+    var prev = JSON.stringify(state);
+    undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     if (mutate) mutate(state);
+    recordHistory(label, prev);
     afterChange();
   }
   function replaceState(label, next) {
-    undoStack.push(JSON.stringify(state));
+    var prev = JSON.stringify(state);
+    undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     state = next;
+    recordHistory(label, prev);
     afterChange();
   }
   function undo() {
@@ -547,7 +761,7 @@
     var seq = [];
     state.phases.forEach(function (p) {
       seq.push({ kind: 'band', phaseId: p.id });
-      if (!p.collapsed) {
+      if (!p.collapsed && detailMode !== 'phase') {
         RM.itemsInPhase(state, p.id).filter(matchesFilter).forEach(function (it) {
           seq.push({ kind: 'item', id: it.id, phaseId: p.id });
         });
@@ -555,6 +769,37 @@
     });
     return seq;
   }
+
+  // ---- detail level (Scoping + Planning): how deep the row grid goes.
+  // phase: phase bands only · feature: features, stories tucked away ·
+  // story: features with every story row open
+  var DM_MODES = [
+    ['phase', 'Phase', 'panel-top', 'Only phases — the whole plan at a glance'],
+    ['feature', 'Feature', 'rows-3', 'Down to the feature level'],
+    ['story', 'Story', 'list-tree', 'Every story, under its feature']
+  ];
+  function setDetailMode(mode) {
+    detailMode = mode;
+    if (mode === 'story') {
+      state.items.forEach(function (it) { if (it.stories.length) expanded[it.id] = true; });
+    }
+    saveLocal();
+    render();
+  }
+  function syncDetailBtn() {
+    var b = $('#detailBtn');
+    if (!b) return;
+    var m = DM_MODES.filter(function (x) { return x[0] === detailMode; })[0] || DM_MODES[1];
+    b.innerHTML = '<i data-lucide="' + m[2] + '"></i><i data-lucide="chevron-down" class="dm-caret"></i>';
+    b.title = 'Detail level: ' + m[1] + ' — click to change';
+    if (window.lucide) lucide.createIcons();
+  }
+  $('#detailBtn').addEventListener('click', function () {
+    openDropdown($('#detailBtn'), DM_MODES.map(function (m) {
+      return { icon: m[2], label: esc(m[1]) + ' <small>' + esc(m[3]) + '</small>',
+        checked: detailMode === m[0], fn: function () { setDetailMode(m[0]); } };
+    }));
+  });
 
   // ------------------------------------------------------------ render
   // scoping view columns come from the document (meta.scopeCols — orderable,
@@ -610,10 +855,14 @@
     var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
     return mp[v] || v || '';
   }
-  // profile avatar: deterministic color + initials
+  // profile avatar: deterministic color + initials. Name, free-text role, and
+  // rate-card assignment are all optional — fall back through them for display
+  function mLabel(m) { return RM.memberLabel(m); }
+  function mSub(m) { return (m && (m.role || m.type)) || ''; }
   function avatarHtml(m, extraCls) {
-    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(m.name + ' — ' + m.type) +
-      '" style="background:' + RM.avatarColor(m.name) + '">' + esc(RM.initialsOf(m.name)) + '</span>';
+    var lbl = mLabel(m);
+    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(lbl + (mSub(m) ? ' — ' + mSub(m) : '')) +
+      '" style="background:' + RM.avatarColor(lbl) + '">' + esc(RM.initialsOf(lbl)) + '</span>';
   }
   function memberById(id) {
     for (var i = 0; i < state.team.length; i++) if (state.team[i].id === id) return state.team[i];
@@ -681,7 +930,12 @@
     document.documentElement.style.setProperty('--left-w',
       (presentMode && (view === 'planning' || view === 'budget') ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
+    applyBuColWidths();
+    syncDetailBtn();
     document.body.dataset.view = view;
+    // a view switch or re-render can replace the rich cell the floating
+    // B/I toolbar is anchored to — never leave the bar orphaned on screen
+    if (scFmtTarget && (view !== 'scoping' || !scFmtTarget.isConnected)) hideScFmtBar();
 
     renderTopbar();
     syncZoomCtl();
@@ -692,6 +946,11 @@
     }
     if (view === 'reports') {
       renderReportsPage();
+      renderPanel();
+      return;
+    }
+    if (view === 'history') {
+      renderHistoryPage();
       renderPanel();
       return;
     }
@@ -892,13 +1151,29 @@
           '</div>';
       }).join('') || '<div class="p-none">No milestones on the timeline — convert an item via its context menu.</div>';
 
+    // sprint-level delivery: what lands in each sprint (features + stories)
+    // and how much of that scope is already done
+    var curSp = currentSprintNum();
+    var spBars = sprintNums().map(function (n) {
+      var sIts = itemsInSprint(n);
+      var sSts = storiesInSprint(n, sIts);
+      var tot = sIts.length + sSts.length;
+      if (!tot) return '';
+      var done = sIts.filter(function (i) { return i.done; }).length +
+        sSts.filter(function (p2) { return p2.st.done; }).length;
+      var cur = n === curSp;
+      return barRow(sprintLabel(n) + (cur ? ' · current' : ''), tot ? done / tot : 0,
+        fmtPct(done / tot) + ' · ' + sIts.length + ' feature' + (sIts.length === 1 ? '' : 's') +
+        (sSts.length ? ' · ' + sSts.length + (sSts.length === 1 ? ' story' : ' stories') : ''));
+    }).join('') || '<div class="p-none">Nothing scheduled into sprints yet.</div>';
+
     var flagRows = flags.slice(0, 8).map(function (f) {
       return '<div class="rp-flag"><i data-lucide="triangle-alert"></i>' + esc(f) + '</div>';
     }).join('') || '<div class="rp-flag ok"><i data-lucide="circle-check"></i>No open warnings.</div>';
 
     host.innerHTML =
       '<div class="rp-page">' +
-      '<h1 class="su-page">Reports</h1>' +
+      '<h1 class="su-page">Reporting</h1>' +
       '<div class="rp-kpis">' +
       kpi('Complete', fmtPct(totalDays ? doneDays / totalDays : 0), doneCount + ' of ' + workItems.length + ' items done') +
       kpi('Scheduled', fmtPct(workItems.length ? schedCount / workItems.length : 0), schedCount + ' items on the timeline') +
@@ -912,6 +1187,7 @@
       '<div class="rp-grid">' +
       '<section class="su-card rp-card"><h2>Progress by phase</h2>' + phaseBars + '</section>' +
       '<section class="su-card rp-card"><h2>Cost &amp; effort by workstream</h2>' + wsBars + '</section>' +
+      '<section class="su-card rp-card rp-wide"><h2>Delivery by ' + (RM.sprintsEnabled(meta) ? 'sprint' : 'week') + '</h2>' + spBars + '</section>' +
       '<section class="su-card rp-card rp-wide"><h2>Planned spend over time</h2>' + curve + '</section>' +
       '<section class="su-card rp-card"><h2>Milestones</h2>' + msRows + '</section>' +
       '<section class="su-card rp-card"><h2>Flags</h2>' + flagRows + '</section>' +
@@ -1168,7 +1444,7 @@
       if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
       openDropdown(asgBtn, state.team.map(function (mm) {
         var onA = (itA.assignees || []).indexOf(mm.id) !== -1;
-        return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA, fn: function () {
+        return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
           commit('assignees', function (s) {
             var t = RM.itemById(s, aid2);
             t.assignees = t.assignees || [];
@@ -1200,7 +1476,7 @@
       if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
       openDropdown(stAsgBtn, state.team.map(function (mm) {
         var onA2 = (stA.assignees || []).indexOf(mm.id) !== -1;
-        return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA2, fn: function () {
+        return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA2, fn: function () {
           commit('story assignees', function (s) {
             var t = storyById(RM.itemById(s, pidA) || {}, stIdA);
             if (!t) return;
@@ -1379,7 +1655,7 @@
     var dot = $('#valDot');
     dot.className = counts.error ? 'err' : (counts.warn ? 'warn' : '');
     dot.id = 'valDot';
-    $$('#viewTabs button, #btnSetup').forEach(function (b) {
+    $$('#viewTabs button, #btnSetup, #btnHistory').forEach(function (b) {
       b.classList.toggle('on', b.dataset.view === view);
     });
 
@@ -1825,7 +2101,7 @@
       '" data-id="' + it.id + '">' +
       '<div class="row-left" title="Drag to reorder / move phase">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
-      '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
+      '<span class="r-chev' + (detailMode === 'story' && expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
       (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>' +
       '<span class="r-num">' + it.num + '</span>' +
       '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
@@ -1855,7 +2131,7 @@
       '<div class="row-lane">' + laneInner + dlHtml + '</div>' +
       '</div>');
 
-    if (expanded[it.id]) {
+    if (detailMode === 'story' && expanded[it.id]) {
       it.stories.forEach(function (st) {
         var stSched = st.startDay != null && st.durDays != null;
         html.push(
@@ -1949,19 +2225,32 @@
     var cyclic = RM.cycleMembers(state);
     state.phases.forEach(function (p) {
       var items = RM.itemsInPhase(state, p.id).filter(matchesFilter);
+      // phase detail: the band's lane carries the phase's span as a bar (the
+      // whole plan reads phase-by-phase, items tucked away)
+      var bandLane = p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
+      if (detailMode === 'phase' && view === 'planning') {
+        var psp = RM.phaseSpan(state, p);
+        if (psp) {
+          bandLane = '<div class="ph-row-bar" style="left:' + (psp.lo * dayPx()) + 'px;width:' +
+            Math.max(6, (psp.hi - psp.lo) * dayPx()) + 'px" title="' +
+            esc(p.name + '  ·  ' + RM.fmtShort(RM.dayToDate(state.meta, psp.lo)) + ' → ' +
+              RM.fmtShort(RM.dayToDate(state.meta, Math.max(psp.lo, psp.hi - 1)))) + '"><span>' + esc(p.name) + '</span></div>';
+        }
+      }
       html.push(
-        '<div class="row band" data-kind="band" data-phase="' + p.id + '">' +
+        '<div class="row band' + (detailMode === 'phase' ? ' ph-only' : '') + '" data-kind="band" data-phase="' + p.id + '">' +
         '<div class="row-left">' +
-        '<span class="band-chev' + (p.collapsed ? '' : ' open') + '" data-act="phase-toggle" title="Collapse / expand"><i data-lucide="chevron-right"></i></span>' +
+        (detailMode === 'phase' ? '' :
+          '<span class="band-chev' + (p.collapsed ? '' : ' open') + '" data-act="phase-toggle" title="Collapse / expand"><i data-lucide="chevron-right"></i></span>') +
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
         '<button class="band-add" data-act="phase-additem" title="Add a feature to this phase">+ feature</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         '</div>' +
-        '<div class="row-lane">' + (p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '') + '</div>' +
+        '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
-      if (p.collapsed) return;
+      if (p.collapsed || detailMode === 'phase') return;
 
       // grouping hierarchy: phase > workstream > epic ("no workstream" last)
       function partition(list, field, emptyLast) {
@@ -2332,7 +2621,9 @@
         '<div><label class="p-lab">Phase</label>' + phaseDd + '</div>' +
         (state.meta.workstreamsEnabled
           ? '<div><label class="p-lab">Workstream</label>' +
-            '<input data-f="workstream" list="wsList" value="' + esc(it.workstream) + '" placeholder="Product / Data / Process" style="width:100%"></div>'
+            ddButton('ws',
+              it.workstream ? esc(it.workstream) : esc(RM.defaultWsName(state)) + ' <small>(default)</small>',
+              '#' + RM.colorForWs(state, it.workstream), 'Workstream') + '</div>'
           : '<div></div>') +
         '</div>' +
         '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>') +
@@ -2356,7 +2647,7 @@
         (it.assignees || []).map(function (aid) {
           var mm = memberById(aid);
           if (!mm) return '';
-          return '<span class="dep-chip asg-chip">' + avatarHtml(mm, 'sm') + ' ' + esc(mm.name) +
+          return '<span class="dep-chip asg-chip">' + avatarHtml(mm, 'sm') + ' ' + esc(mLabel(mm)) +
             '<button class="x" data-asgrm="' + aid + '"><i data-lucide="x"></i></button></span>';
         }).join('') +
         '</div>' +
@@ -2834,10 +3125,14 @@
         openDropdown(dd, setEpicMenu(it.id, true));
         return;
       }
+      if (which === 'ws') {
+        openDropdown(dd, wsMenuItems(it.id, function () { return $('#panel [data-dd="ws"] .dd-label'); }));
+        return;
+      }
       if (which === 'assign') {
         var aItems = state.team.map(function (mm) {
           var onA = (it.assignees || []).indexOf(mm.id) !== -1;
-          return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA, fn: function () {
+          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
             commit('assignees', function (s) {
               var t = RM.itemById(s, it.id);
               t.assignees = t.assignees || [];
@@ -3106,6 +3401,7 @@
       var sv = val.trim();
       if (sv) {
         expanded[it.id] = true;
+        if (detailMode === 'phase') detailMode = 'feature'; // keep the new story reachable
         commit('add story', function (s) {
           RM.itemById(s, it.id).stories.push({ id: RM.uid('s'), title: sv, done: false });
         });
@@ -3238,7 +3534,7 @@
         if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
         openDropdown(act, state.team.map(function (mm) {
           var onSA = ((storyById(it, stId) || {}).assignees || []).indexOf(mm.id) !== -1;
-          return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onSA, fn: function () {
+          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onSA, fn: function () {
             commit('story assignees', function (s) {
               var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
               if (!st2) return;
@@ -3463,36 +3759,19 @@
           return;
         }
         case 'ws': {
-          var wsList = allWorkstreams();
-          var wsItems = [{
-            label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>',
-            dot: '#' + RM.defaultWsColor(state),
-            checked: !it.workstream,
-            fn: function () { commit('workstream', function (s) { RM.itemById(s, itemId).workstream = ''; }); },
-            edit: function () { defaultWsModal(); }
-          }];
-          wsList.forEach(function (w) {
-            wsItems.push({
-              label: esc(w),
-              dot: '#' + RM.colorForWs(state, w),
-              checked: it.workstream === w,
-              fn: function () { commit('workstream', function (s) { RM.itemById(s, itemId).workstream = w; }); },
-              edit: function () { wsEditModal(w); }
-            });
-          });
-          wsItems.push({ sep: true });
-          wsItems.push({ icon: 'pencil', label: 'Other…', fn: function () {
-            var chip = rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
-            if (!chip) return;
-            chip.textContent = it.workstream || '';
-            startInlineEdit(chip, function (v) {
-              commit('workstream', function (s) { RM.itemById(s, itemId).workstream = v; });
-            });
-          } });
-          openDropdown(act, wsItems);
+          openDropdown(act, wsMenuItems(itemId, function () {
+            return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
+          }));
           return;
         }
         case 'stories': {
+          // outside story detail, the chevron jumps INTO story detail with
+          // this item open; inside it, it collapses/expands per item
+          if (detailMode !== 'story') {
+            expanded[itemId] = true;
+            setDetailMode('story');
+            return;
+          }
           expanded[itemId] = !expanded[itemId];
           render();
           return;
@@ -3540,11 +3819,44 @@
     select(itemId);
   });
 
+  // one workstream picker everywhere an item's workstream can change (scoping
+  // chip, right panel, context menu): color dot per stream, default first,
+  // pencil to edit, "Other…" types a brand-new one in place
+  function wsMenuItems(itemId, chipFinder) {
+    var it = RM.itemById(state, itemId);
+    var wsItems = [{
+      label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>',
+      dot: '#' + RM.defaultWsColor(state),
+      checked: !it.workstream,
+      fn: function () { commit('workstream', function (s) { RM.itemById(s, itemId).workstream = ''; }); },
+      edit: function () { defaultWsModal(); }
+    }];
+    allWorkstreams().forEach(function (w) {
+      wsItems.push({
+        label: esc(w),
+        dot: '#' + RM.colorForWs(state, w),
+        checked: it.workstream === w,
+        fn: function () { commit('workstream', function (s) { RM.itemById(s, itemId).workstream = w; }); },
+        edit: function () { wsEditModal(w); }
+      });
+    });
+    wsItems.push({ sep: true });
+    wsItems.push({ icon: 'pencil', label: 'Other…', fn: function () {
+      var chip = chipFinder && chipFinder();
+      if (!chip) return;
+      chip.textContent = it.workstream || '';
+      startInlineEdit(chip, function (v) {
+        commit('workstream', function (s) { RM.itemById(s, itemId).workstream = v; });
+      });
+    } });
+    return wsItems;
+  }
+
   function assignMenuItems(itemId) {
     var it = RM.itemById(state, itemId);
     return state.team.map(function (mm) {
       var onA = (it.assignees || []).indexOf(mm.id) !== -1;
-      return { label: esc(mm.name) + ' <small>' + esc(mm.type) + '</small>', checked: onA, fn: function () {
+      return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
         commit('assignees', function (s) {
           var t = RM.itemById(s, itemId);
           t.assignees = t.assignees || [];
@@ -3728,6 +4040,7 @@
       items = [
         { icon: 'plus', label: 'Add story', fn: function () {
           expanded[itemId] = true;
+          if (detailMode !== 'story') { detailMode = 'story'; saveLocal(); }
           render();
           requestAnimationFrame(function () {
             var inp = rowsEl.querySelector('.row.story-add[data-id="' + itemId + '"] .st-add-input');
@@ -3740,6 +4053,13 @@
         { sep: true },
         { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(itemId)); } },
         { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(itemId, false)); } },
+        state.meta.workstreamsEnabled
+          ? { icon: 'layers', label: 'Set workstream…', fn: function () {
+              openContextMenu(cx, cy, wsMenuItems(itemId, function () {
+                return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
+              }));
+            } }
+          : null,
         { sep: true },
         isScheduled(it) ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
           commit('unschedule', function (s) {
@@ -4109,6 +4429,10 @@
     scFmtBar.style.left = Math.max(4, r.left) + 'px';
     scFmtBar.style.top = Math.max(4, r.top - 32) + 'px';
   }
+  function hideScFmtBar() {
+    if (scFmtBar) scFmtBar.hidden = true;
+    scFmtTarget = null;
+  }
   rowsEl.addEventListener('focusin', function (e) {
     if (!e.target.classList || !e.target.classList.contains('sc-rich')) return;
     ensureScFmtBar().hidden = false;
@@ -4116,11 +4440,16 @@
     placeScFmtBar();
   });
   rowsEl.addEventListener('focusout', function (e) {
-    if (e.target.classList && e.target.classList.contains('sc-rich') && scFmtBar) {
-      scFmtBar.hidden = true;
-      scFmtTarget = null;
-    }
+    if (e.target.classList && e.target.classList.contains('sc-rich') && scFmtBar) hideScFmtBar();
   });
+  // focusout doesn't fire when a re-render swaps the editor out from under the
+  // bar, and view switches leave it orphaned — close whenever focus lands
+  // anywhere that isn't the editor it's anchored to, or the window blurs
+  document.addEventListener('focusin', function (e) {
+    if (!scFmtBar || scFmtBar.hidden || !scFmtTarget) return;
+    if (e.target !== scFmtTarget && !scFmtBar.contains(e.target)) hideScFmtBar();
+  });
+  window.addEventListener('blur', hideScFmtBar);
   // the bar rides along when the board scrolls under it
   board.addEventListener('scroll', placeScFmtBar, { passive: true });
   window.addEventListener('resize', placeScFmtBar);
@@ -4569,6 +4898,7 @@
     else if (drag.kind === 'rfill') rfillMove(e);
     else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
+    else if (drag.kind === 'brow') browMove(e);
     else if (drag.kind === 'pan') {
       board.scrollLeft = drag.sl - (e.clientX - drag.x0);
       board.scrollTop = drag.st - (e.clientY - drag.y0);
@@ -4636,6 +4966,7 @@
     else if (d.kind === 'rfill') rfillEnd(d);
     else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
+    else if (d.kind === 'brow') browEnd(d);
     else if (d.kind === 'pan') requestAnimationFrame(renderArrows);
   });
 
@@ -4984,12 +5315,150 @@
     var b = e.target.closest('[data-view]');
     if (!b || b.dataset.view === view) return;
     view = b.dataset.view;
+    // entering Version History always lands on the newest change
+    if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
     saveLocal();
     render();
     if (view === 'planning') requestAnimationFrame(goToday);
   }
   $('#viewTabs').addEventListener('click', switchView);
   $('#btnSetup').addEventListener('click', switchView);
+  $('#btnHistory').addEventListener('click', switchView);
+
+  // ---------------------------------------------------------- version history
+  // Timeline of document changes (newest first): who, what, when. Entries are
+  // written by commit() and travel WITH the document (saved into the .xlsx).
+  function vhTime(t) {
+    var d = new Date(t);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+      d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  function vhLabel(label) {
+    var s = String(label || 'edit');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  // Version History is a full page: the change feed on the left (newest
+  // first), the selected change's visual diff on the right — grouped into
+  // tabs (Timeline / Scope / Status / Team & Costs / Setup) with old values
+  // in red and new values in green. Ticking two entries diffs the document
+  // ACROSS them (every change in between, merged).
+  var vhSel = null;   // selected entry index into state.history
+  var vhPick = [];    // ticked entries for a two-version compare (max 2)
+  var vhTab = null;   // active category tab (null = first non-empty)
+  var VH_TAB_ORDER = ['timeline', 'scope', 'status', 'budget', 'setup'];
+  var VH_TAB_ICONS = { timeline: 'chart-gantt', scope: 'table-properties', status: 'square-kanban', budget: 'wallet', setup: 'settings-2' };
+  function vhEntryTitle(en) {
+    return vhLabel(en.label) + (en.n > 1 ? ' ×' + en.n : '');
+  }
+  function renderHistoryPage() {
+    var host = $('#historyView');
+    if (!host) return;
+    var h = state.history || [];
+    if (vhSel == null || !h[vhSel]) vhSel = h.length ? h.length - 1 : null;
+    vhPick = vhPick.filter(function (i) { return h[i]; });
+    var listRows = [];
+    for (var i = h.length - 1; i >= 0; i--) {
+      var en = h[i];
+      var who = en.u || 'Unknown user';
+      var isSel = vhPick.length === 2 ? vhPick.indexOf(i) !== -1 : i === vhSel;
+      listRows.push('<div class="vh-item hv-item' + (isSel ? ' sel' : '') + '" data-vh="' + i + '"><span class="vh-dot"></span>' +
+        '<input type="checkbox" class="hv-ck" data-vhck="' + i + '"' + (vhPick.indexOf(i) !== -1 ? ' checked' : '') +
+        ' title="Tick two changes to compare across them">' +
+        '<span class="avatar sm" title="' + esc(who) + '" style="background:' +
+        (en.u ? RM.avatarColor(en.u) : 'var(--ink-3)') + '">' + esc(en.u ? RM.initialsOf(en.u) : '?') + '</span>' +
+        '<div class="vh-main"><b>' + esc(who) + '</b> <span class="vh-what">— ' + esc(vhLabel(en.label)) + '</span>' +
+        (en.n > 1 ? '<span class="vh-count">×' + en.n + '</span>' : '') + '</div>' +
+        '<span class="vh-time" title="' + esc(new Date(en.t).toLocaleString()) + '">' +
+        esc(relTime(en.t)) + ' · ' + esc(vhTime(en.t)) + '</span></div>');
+    }
+    var meNote = userName()
+      ? 'Editing as <b>' + esc(userName()) + '</b> — <button data-vh-me>change</button>'
+      : 'Your edits record as “Unknown user” — <button data-vh-me>set your name</button>';
+
+    // ---- assemble the diff for the current selection
+    var ops = [], head = '', sub = '', noDetail = '', overflow = 0;
+    if (vhPick.length === 2) {
+      var lo = Math.min(vhPick[0], vhPick[1]), hi = Math.max(vhPick[0], vhPick[1]);
+      for (var k = lo + 1; k <= hi; k++) {
+        ops = mergeOps(ops, h[k].d || []);
+        overflow += h[k].x || 0;
+        if (!h[k].d) noDetail = 'Some of the compared changes predate change tracking — their details aren’t included.';
+      }
+      head = 'Comparing ' + (hi - lo) + ' change' + (hi - lo > 1 ? 's' : '');
+      sub = esc(vhTime(h[lo].t)) + ' (' + esc(vhEntryTitle(h[lo])) + ') → ' + esc(vhTime(h[hi].t)) + ' (' + esc(vhEntryTitle(h[hi])) + ')';
+    } else if (vhSel != null) {
+      var se = h[vhSel];
+      ops = se.d || [];
+      overflow = se.x || 0;
+      head = vhEntryTitle(se);
+      sub = '<b>' + esc(se.u || 'Unknown user') + '</b> · ' + esc(relTime(se.t)) + ' · ' + esc(new Date(se.t).toLocaleString());
+      if (!se.d) noDetail = 'No detail was recorded for this change — it predates change tracking. New edits record full details.';
+    }
+    var byCat = {};
+    ops.forEach(function (op) { (byCat[op[0]] = byCat[op[0]] || []).push(op); });
+    var cats = VH_TAB_ORDER.filter(function (c) { return byCat[c] && byCat[c].length; });
+    var activeTab = cats.indexOf(vhTab) !== -1 ? vhTab : cats[0];
+    var tabs = cats.map(function (c) {
+      return '<button class="hv-tab' + (c === activeTab ? ' on' : '') + '" data-vhtab="' + c + '">' +
+        '<i data-lucide="' + VH_TAB_ICONS[c] + '"></i>' + esc(VH_CATS[c] || c) +
+        '<span class="hv-tabn">' + byCat[c].length + '</span></button>';
+    }).join('');
+    var diffRows = (byCat[activeTab] || []).map(function (op) {
+      return '<div class="vd-row"><span class="vd-lab">' + esc(op[1]) + '</span><span class="vd-vals">' +
+        (op[2] ? '<span class="vd-old">' + esc(op[2]) + '</span>' : '') +
+        (op[2] && op[3] ? '<span class="vd-arr">→</span>' : '') +
+        (op[3] ? '<span class="vd-new">' + esc(op[3]) + '</span>' : '') +
+        '</span></div>';
+    }).join('');
+    var detail;
+    if (!h.length) {
+      detail = '<div class="vh-empty">No changes recorded yet — edits made from now on appear here, newest first.</div>';
+    } else {
+      detail =
+        '<div class="hv-dhead"><h2>' + esc(head) + '</h2><div class="hv-dsub">' + sub + '</div></div>' +
+        (noDetail ? '<div class="hv-nodetail">' + esc(noDetail) + '</div>' : '') +
+        (cats.length
+          ? '<div class="hv-tabs">' + tabs + '</div><div class="hv-diff">' + diffRows +
+            (overflow ? '<div class="hv-more">…and ' + overflow + ' more change(s) not kept in detail</div>' : '') + '</div>'
+          : (noDetail ? '' : '<div class="vh-empty">Nothing to show — this change left no recorded field differences.</div>'));
+    }
+    host.innerHTML =
+      '<div class="hv-wrap">' +
+      '<aside class="hv-side">' +
+      '<div class="hv-sidehead"><h2>Version history</h2><span class="band-count">' + h.length + '</span></div>' +
+      '<div class="hv-hint">Click a change to see its diff · tick two to compare across them</div>' +
+      (listRows.length ? '<div class="vh-list hv-list">' + listRows.join('') + '</div>'
+        : '<div class="vh-empty">No changes yet.</div>') +
+      '<div class="hv-foot"><span class="vh-me">' + meNote + '</span></div>' +
+      '</aside>' +
+      '<section class="hv-detail">' + detail + '</section>' +
+      '</div>';
+    if (window.lucide) lucide.createIcons();
+  }
+  $('#historyView').addEventListener('click', function (e) {
+    var me = e.target.closest('[data-vh-me]');
+    if (me) { personalSettingsModal(); return; }
+    var tab = e.target.closest('[data-vhtab]');
+    if (tab) { vhTab = tab.dataset.vhtab; renderHistoryPage(); return; }
+    var ck = e.target.closest('[data-vhck]');
+    if (ck) {
+      var ci = parseInt(ck.dataset.vhck, 10);
+      var at = vhPick.indexOf(ci);
+      if (at !== -1) vhPick.splice(at, 1);
+      else {
+        vhPick.push(ci);
+        if (vhPick.length > 2) vhPick.shift();
+      }
+      renderHistoryPage();
+      return;
+    }
+    var row = e.target.closest('[data-vh]');
+    if (row) {
+      vhSel = parseInt(row.dataset.vh, 10);
+      vhPick = [];
+      renderHistoryPage();
+    }
+  });
 
   function goToday() {
     var now = new Date();
@@ -5144,8 +5613,7 @@
       } },
       { sep: true },
       { icon: 'chevrons-up-down', label: 'Expand all features', fn: function () {
-        state.items.forEach(function (it) { if (it.stories.length) expanded[it.id] = true; });
-        render();
+        setDetailMode('story');
       } },
       { icon: 'chevrons-down-up', label: 'Collapse all features', fn: function () {
         expanded = {};
@@ -5420,8 +5888,55 @@
   function fmtH(n) { return Math.round(n * 10) / 10; }
 
   // budgeting rows render into the shared board: frozen left pane columns
-  // (name · type · workstream · rate · cost · margin · total) + week cells
-  var BU_COLS = { type: 96, ws: 108, cost: 76, rate: 76, margin: 54, total: 80 };
+  // (name · role · rate card · workstream · cost · rate · margin · total) +
+  // week cells. Name is optional; Role is free text; Rate card is the
+  // rate-card role selector (empty = not assigned).
+  var BU_COLS = { role: 110, type: 96, ws: 108, cost: 76, rate: 76, margin: 54, total: 80 };
+  // columns are user-resizable (drag the header edges); widths flow to every
+  // row (and the Resources panel) through --bu-w-* CSS variables
+  function buW(k) { return Math.max(44, Math.min(420, parseInt(buColW[k], 10) || BU_COLS[k])); }
+  function applyBuColWidths() {
+    var rs = document.documentElement.style;
+    Object.keys(BU_COLS).forEach(function (k) { rs.setProperty('--bu-w-' + k, buW(k) + 'px'); });
+  }
+  $('#hdr').addEventListener('pointerdown', function (e) {
+    var rz = e.target.closest('.bu-rz');
+    if (!rz || view !== 'budget' || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var k = rz.dataset.burz;
+    var w0 = buW(k), x0 = e.clientX;
+    function mv(ev) {
+      buColW[k] = Math.max(44, Math.min(420, Math.round(w0 + ev.clientX - x0)));
+      document.documentElement.style.setProperty('--bu-w-' + k, buW(k) + 'px');
+    }
+    function up() {
+      window.removeEventListener('pointermove', mv);
+      window.removeEventListener('pointerup', up);
+      saveLocal();
+    }
+    window.addEventListener('pointermove', mv);
+    window.addEventListener('pointerup', up);
+  });
+  // shared left-hand member columns — the Resources panel under the timeline
+  // renders these SAME columns (budgeting adds the money columns after them)
+  function memberColsHtml(m) {
+    var mws = RM.memberWorkstreams(m);
+    var wsHex = RM.colorForWs(state, mws[0] || '');
+    return '<span class="bu-nm">' + avatarHtml(m, 'sm') +
+      '<input class="bu-in bu-nm-in" data-bud="name" value="' + esc(m.name || '') +
+      '" placeholder="Name" title="Name (optional) — click to edit"></span>' +
+      '<input class="bu-in bu-col" style="width:var(--bu-w-role)" data-bud="role" value="' + esc(m.role || '') +
+      '" placeholder="Role" title="Role — free text, e.g. “Senior Backend Dev”">' +
+      '<span class="r-ws sc-chip bu-col bu-chip' + (m.type ? '' : ' empty') +
+      '" style="width:var(--bu-w-type)" tabindex="0" role="button" data-bact="type" title="Rate card — the role whose default rate/cost applies (optional)">' +
+      (m.type ? esc(shorten(m.type, 13)) : '—') + '</span>' +
+      '<span class="r-ws sc-chip bu-col bu-chip' + (mws.length ? '' : ' empty') +
+      '" style="width:var(--bu-w-ws)" tabindex="0" role="button" data-bact="ws" title="' +
+      esc('Workstreams — click to change' + (mws.length > 1 ? '\n' + mws.join(', ') : '')) + '">' +
+      (mws.length ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(mws[0], 12)) +
+        (mws.length > 1 ? '<small class="bu-wsmore">+' + (mws.length - 1) + '</small>' : '') : '—') + '</span>';
+  }
   function renderBudgetRows() {
     var meta = state.meta;
     var html = [];
@@ -5454,22 +5969,17 @@
       }
       html.push('<div class="row brole" data-mid="' + m.id + '">' +
         '<div class="row-left">' +
+        '<span class="r-grip bu-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="r-dot" style="background:#' + wsHex + '"></span>' +
-        '<span class="bu-nm">' + avatarHtml(m, 'sm') +
-        '<input class="bu-in bu-nm-in" data-bud="name" value="' + esc(m.name) + '" title="Name — click to edit"></span>' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-bact="type" title="Role — sets the default rate from the rate card">' + esc(shorten(m.type || '', 13)) + '</span>' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-bact="ws" title="' +
-        esc('Workstreams — click to change' + (mws.length > 1 ? '\n' + mws.join(', ') : '')) + '">' +
-        (mws.length ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(mws[0], 12)) +
-          (mws.length > 1 ? '<small class="bu-wsmore">+' + (mws.length - 1) + '</small>' : '') : '') + '</span>' +
-        '<input class="bu-in bu-col' + (!m.cost && effCost ? ' inherited' : '') + '" style="width:' + BU_COLS.cost +
-        'px" type="number" min="0" data-bud="cost" value="' + (m.cost || '') + '" placeholder="' + (rc && rc.cost ? rc.cost : 0) +
+        memberColsHtml(m) +
+        '<input class="bu-in bu-col' + (!m.cost && effCost ? ' inherited' : '') +
+        '" style="width:var(--bu-w-cost)" type="number" min="0" data-bud="cost" value="' + (m.cost || '') + '" placeholder="' + (rc && rc.cost ? rc.cost : 0) +
         '" title="Cost (hourly) — empty inherits the role’s rate card">' +
-        '<input class="bu-in bu-col' + (!m.rate && effRate ? ' inherited' : '') + '" style="width:' + BU_COLS.rate +
-        'px" type="number" min="0" data-bud="rate" value="' + (m.rate || '') + '" placeholder="' + (rc && rc.rate ? rc.rate : 0) +
+        '<input class="bu-in bu-col' + (!m.rate && effRate ? ' inherited' : '') +
+        '" style="width:var(--bu-w-rate)" type="number" min="0" data-bud="rate" value="' + (m.rate || '') + '" placeholder="' + (rc && rc.rate ? rc.rate : 0) +
         '" title="Rate (hourly) — empty inherits the role’s rate card">' +
-        '<span class="bu-col bu-ro" style="width:' + BU_COLS.margin + 'px" title="Margin">' + (margin == null ? '—' : Math.round(margin) + '%') + '</span>' +
-        '<span class="bu-col bu-ro" style="width:' + BU_COLS.total + 'px" title="Total — actual hours × rate">' + fmtMoney(total) + '</span>' +
+        '<span class="bu-col bu-ro" style="width:var(--bu-w-margin)" title="Margin">' + (margin == null ? '—' : Math.round(margin) + '%') + '</span>' +
+        '<span class="bu-col bu-ro" style="width:var(--bu-w-total)" title="Total — actual hours × rate">' + fmtMoney(total) + '</span>' +
         '</div><div class="row-lane">' + cells.join('') + '</div></div>');
     });
     // click-to-add role row (same flow as the Resources panel)
@@ -5494,15 +6004,16 @@
       sumTotal = sumTotal; // billing total stays roster-only; costs are spend
       html.push('<div class="row brole bcost" data-cost="' + c.id + '">' +
         '<div class="row-left">' +
+        '<span class="r-grip bu-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="r-dot nodot"></span>' +
         '<input class="bu-in bu-nm-in" data-cf="name" value="' + esc(c.name) + '" title="Cost name">' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.type + 'px" tabindex="0" role="button" data-cact="kind" title="One-time, weekly, or monthly">' + kindLabel + '</span>' +
-        '<span class="r-ws sc-chip bu-col bu-chip" style="width:' + BU_COLS.ws + 'px" tabindex="0" role="button" data-cact="dates" title="When it applies — click to edit">' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:var(--bu-w-role)" tabindex="0" role="button" data-cact="kind" title="One-time, weekly, or monthly">' + kindLabel + '</span>' +
+        '<span class="r-ws sc-chip bu-col bu-chip" style="width:calc(var(--bu-w-type) + var(--bu-w-ws))" tabindex="0" role="button" data-cact="dates" title="When it applies — click to edit">' +
         esc(RM.fmtShort(RM.dayToDate(meta, c.startDay)) + (c.kind !== 'fixed' ? ' →' + (c.endDay != null ? ' ' + RM.fmtShort(RM.dayToDate(meta, c.endDay)) : ' end') : '')) + '</span>' +
-        '<input class="bu-in bu-col" style="width:' + BU_COLS.cost + 'px" type="number" min="0" data-cf="amount" value="' + c.amount + '" title="Amount per occurrence">' +
-        '<span class="bu-col" style="width:' + BU_COLS.rate + 'px"></span>' +
-        '<span class="bu-col" style="width:' + BU_COLS.margin + 'px"></span>' +
-        '<span class="bu-col bu-ro" style="width:' + BU_COLS.total + 'px" title="Total across ' + occ.length + ' occurrence(s)">' + fmtMoney(cTotal) + '</span>' +
+        '<input class="bu-in bu-col" style="width:var(--bu-w-cost)" type="number" min="0" data-cf="amount" value="' + c.amount + '" title="Amount per occurrence">' +
+        '<span class="bu-col" style="width:var(--bu-w-rate)"></span>' +
+        '<span class="bu-col" style="width:var(--bu-w-margin)"></span>' +
+        '<span class="bu-col bu-ro" style="width:var(--bu-w-total)" title="Total across ' + occ.length + ' occurrence(s)">' + fmtMoney(cTotal) + '</span>' +
         '</div><div class="row-lane">' + marks + '</div></div>');
     });
     html.push('<div class="row addrow" data-kind="baddcost" title="Add a fixed or recurring cost">' +
@@ -5610,6 +6121,63 @@
     fillWeekHours(mids.length ? mids : [d.mid], d.w0, d.w1, d.val);
   }
 
+  // drag a row's grip to reorder people or costs (budget view); people
+  // reorder within the roster, costs within the costs band
+  rowsEl.addEventListener('pointerdown', function (e) {
+    if (view !== 'budget' || e.button !== 0 || drag) return;
+    var grip = e.target.closest('.bu-grip');
+    if (!grip) return;
+    var pr = grip.closest('.row[data-mid]');
+    var cr = grip.closest('.row[data-cost]');
+    if (!pr && !cr) return;
+    drag = {
+      kind: 'brow',
+      id: cr ? cr.dataset.cost : pr.dataset.mid,
+      isCost: !!cr,
+      x0: e.clientX, y0: e.clientY, moved: false
+    };
+    e.preventDefault();
+  });
+  function browRows(d) {
+    return $$(d.isCost ? '#rows .row.bcost[data-cost]' : '#rows .row.brole[data-mid]');
+  }
+  function browRowId(rw, d) { return d.isCost ? rw.dataset.cost : rw.dataset.mid; }
+  function browMove(e) {
+    var rows = browRows(drag);
+    if (!drag.indicator) {
+      drag.indicator = document.createElement('div');
+      drag.indicator.className = 'rrow-indicator';
+      rowsEl.appendChild(drag.indicator);
+      rows.forEach(function (rw) {
+        if (browRowId(rw, drag) === drag.id) rw.classList.add('drag-row-ghost');
+      });
+    }
+    drag.before = null;
+    var g = rowsEl.getBoundingClientRect();
+    var y = null;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i].getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) { drag.before = browRowId(rows[i], drag); y = r.top - g.top; break; }
+    }
+    if (y == null && rows.length) y = rows[rows.length - 1].getBoundingClientRect().bottom - g.top;
+    drag.indicator.style.top = (y || 0) + 'px';
+  }
+  function browEnd(d) {
+    browRows(d).forEach(function (rw) { rw.classList.remove('drag-row-ghost'); });
+    if (d.before === d.id) { render(); return; }
+    commit(d.isCost ? 'reorder cost' : 'reorder person', function (s) {
+      var list = d.isCost ? (s.costs || []) : s.team;
+      var moved = null;
+      list.forEach(function (x) { if (x.id === d.id) moved = x; });
+      if (!moved) return;
+      list = list.filter(function (x) { return x.id !== d.id; });
+      var at = d.before ? list.map(function (x) { return x.id; }).indexOf(d.before) : list.length;
+      if (at < 0) at = list.length;
+      list.splice(at, 0, moved);
+      if (d.isCost) s.costs = list; else s.team = list;
+    });
+  }
+
   // rate/cost commits (budget rows). The commit re-renders, which would eat
   // the focus mid-Tab — so remember where focus LANDED and put it back.
   function buFocusSelector(el) {
@@ -5626,11 +6194,10 @@
     var rowEl2 = e.target.closest('[data-mid]');
     if (!f || !rowEl2) return;
     var roleId = rowEl2.dataset.mid;
-    if (f === 'name') {
-      var nm = e.target.value.trim();
-      if (!nm) { render(); return; }
-      commit('rename person', function (s) {
-        s.team.forEach(function (m) { if (m.id === roleId) m.name = nm; });
+    if (f === 'name' || f === 'role') {
+      var tv = e.target.value.trim();
+      commit(f === 'name' ? 'rename person' : 'person role', function (s) {
+        s.team.forEach(function (m) { if (m.id === roleId) m[f] = tv; });
       });
       return;
     }
@@ -5666,52 +6233,62 @@
     if (td && !td.querySelector('input')) { e.preventDefault(); openBuCellEditor(td); }
   });
 
-  // budget chips: type and workstream pick from the shared dropdown
+  // member chips (Budgeting rows AND the Resources panel): rate-card role and
+  // workstream pick from the shared dropdown
+  function openMemberTypeDropdown(chip, roleId) {
+    var m = memberById(roleId);
+    if (!m) return;
+    var items = [{ label: '<i>— none —</i>', checked: !m.type, fn: function () {
+      commit('rate card role', function (s) {
+        s.team.forEach(function (x) { if (x.id === roleId) x.type = ''; });
+      });
+    } }];
+    state.teamTypes.forEach(function (t) {
+      items.push({ label: esc(t), checked: m.type === t, fn: function () {
+        commit('rate card role', function (s) {
+          s.team.forEach(function (x) { if (x.id === roleId) x.type = t; });
+        });
+      } });
+    });
+    openDropdown(chip, items);
+  }
+  function openMemberWsDropdown(chip, roleId) {
+    var m = memberById(roleId);
+    if (!m) return;
+    // people can sit on several workstreams — each click toggles membership
+    var curWs = RM.memberWorkstreams(m);
+    var wsItems = [{ label: '<i>— none —</i>', checked: !curWs.length, fn: function () {
+      commit('role workstream', function (s) {
+        s.team.forEach(function (x) { if (x.id === roleId) RM.setMemberWorkstreams(x, []); });
+      });
+    } }];
+    allWorkstreams().forEach(function (wv) {
+      var onWs = curWs.indexOf(wv) !== -1;
+      wsItems.push({
+        label: esc(wv), dot: '#' + RM.colorForWs(state, wv), checked: onWs,
+        fn: function () {
+          commit('role workstream', function (s) {
+            s.team.forEach(function (x) {
+              if (x.id !== roleId) return;
+              var list = RM.memberWorkstreams(x).slice();
+              var at = list.indexOf(wv);
+              if (at === -1) list.push(wv);
+              else list.splice(at, 1);
+              RM.setMemberWorkstreams(x, list);
+            });
+          });
+        }
+      });
+    });
+    openDropdown(chip, wsItems);
+  }
   rowsEl.addEventListener('click', function (e) {
     if (view !== 'budget') return;
     var chip = e.target.closest('[data-bact]');
     var rowEl2 = e.target.closest('[data-mid]');
     if (!chip || !rowEl2 || rowEl2.classList.contains('btotal')) return;
-    var roleId = rowEl2.dataset.mid;
-    var m = null;
-    state.team.forEach(function (x) { if (x.id === roleId) m = x; });
-    if (!m) return;
-    if (chip.dataset.bact === 'type') {
-      openDropdown(chip, state.teamTypes.map(function (t) {
-        return { label: esc(t), checked: m.type === t, fn: function () {
-          commit('role type', function (s) {
-            s.team.forEach(function (x) { if (x.id === roleId) x.type = t; });
-          });
-        } };
-      }));
-    } else {
-      // people can sit on several workstreams — each click toggles membership
-      var curWs = RM.memberWorkstreams(m);
-      var wsItems = [{ label: '<i>— none —</i>', checked: !curWs.length, fn: function () {
-        commit('role workstream', function (s) {
-          s.team.forEach(function (x) { if (x.id === roleId) RM.setMemberWorkstreams(x, []); });
-        });
-      } }];
-      allWorkstreams().forEach(function (wv) {
-        var onWs = curWs.indexOf(wv) !== -1;
-        wsItems.push({
-          label: esc(wv), dot: '#' + RM.colorForWs(state, wv), checked: onWs,
-          fn: function () {
-            commit('role workstream', function (s) {
-              s.team.forEach(function (x) {
-                if (x.id !== roleId) return;
-                var list = RM.memberWorkstreams(x).slice();
-                var at = list.indexOf(wv);
-                if (at === -1) list.push(wv);
-                else list.splice(at, 1);
-                RM.setMemberWorkstreams(x, list);
-              });
-            });
-          }
-        });
-      });
-      openDropdown(chip, wsItems);
-    }
+    if (chip.dataset.bact === 'type') openMemberTypeDropdown(chip, rowEl2.dataset.mid);
+    else openMemberWsDropdown(chip, rowEl2.dataset.mid);
   });
 
   // add-role / add-cost rows + cost field edits (budget view)
@@ -5730,7 +6307,7 @@
       var v = inp.value.trim();
       if (saveIt && v) {
         commit('add person', function (s) {
-          s.team.push({ id: RM.uid('t'), name: v, type: s.teamTypes[0], weekHours: {} });
+          s.team.push({ id: RM.uid('t'), name: v, role: '', type: '', weekHours: {} });
         });
       } else render();
     }
@@ -5860,7 +6437,7 @@
           });
         });
       } },
-      { icon: 'tags', label: 'Role…', fn: function () {
+      { icon: 'tags', label: 'Rate card…', fn: function () {
         var chipT = roleRow.querySelector('[data-bact="type"]');
         if (chipT) chipT.click();
       } },
@@ -6667,19 +7244,17 @@
         var t2 = Math.max(0, Math.min(1, h / RM.weekHoursOf(meta)));
         var bg = '#' + (darkActive() ? mixHex('242C35', '31597F', t2) : RM.tint('7FAEDD', 1 - t2));
         cells.push('<div class="rh' + cls + '" data-w="' + w + '" style="left:' + (w * weekPx) +
-          'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(m.name + ' — week of ' +
+          'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(mLabel(m) + ' — week of ' +
             RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + fmtH(h) + 'h') + '">' +
           (weekPx >= 20 ? fmtH(h) : '') + '</div>');
       }
+      // SAME left columns as the Budgeting view (name · role · rate card ·
+      // workstream) — budgeting alone adds cost/rate/margin/total after them
       html.push(
         '<div class="rrow" data-mid="' + m.id + '">' +
         '<div class="rleft">' +
         '<span class="r-grip rr-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
-        '<span class="res-namecol">' + avatarHtml(m, 'sm') +
-        '<span class="res-name" data-rname="' + m.id + '" title="Name — click to rename">' + esc(m.name) + '</span></span>' +
-        '<button class="res-type res-rolecol" data-rtype="' + m.id + '" title="Role">' + esc(m.type) + '</button>' +
-        '<button class="res-type res-wschip" data-rws="' + m.id + '" title="Workstream (optional)">' +
-        (m.workstream ? esc(shorten(m.workstream, 12)) : '—') + '</button>' +
+        memberColsHtml(m) +
         (state.meta.capacityEnabled
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
             '" title="Capacity at full-time hours — click to edit">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
@@ -6917,7 +7492,7 @@
     if (!addRow || addRow.querySelector('input')) return;
     var lab = addRow.querySelector('.addrow-lab');
     var inp = document.createElement('input');
-    inp.placeholder = 'Role — e.g. Senior Dev (Alice)…';
+    inp.placeholder = 'Name — e.g. Alice…';
     inp.className = 'radd-input';
     lab.replaceWith(inp);
     inp.focus();
@@ -6927,7 +7502,7 @@
       var v = inp.value.trim();
       if (saveIt && v) {
         commit('add person', function (s) {
-          s.team.push({ id: RM.uid('t'), name: v, type: RM.DEFAULT_WORK_TYPE, weekHours: {} });
+          s.team.push({ id: RM.uid('t'), name: v, role: '', type: '', weekHours: {} });
         });
       } else renderResources();
     }
@@ -6943,7 +7518,7 @@
     var dm = null;
     state.team.forEach(function (x) { if (x.id === mid) dm = x; });
     if (!dm) return;
-    confirmBox('Remove “' + esc(dm.name) + '”?', 'Their weekly hours disappear from capacity.', 'Remove', function () {
+    confirmBox('Remove “' + esc(mLabel(dm)) + '”?', 'Their weekly hours disappear from capacity.', 'Remove', function () {
       commit('remove role', function (s) {
         s.team = s.team.filter(function (m) { return m.id !== mid; });
       });
@@ -7012,32 +7587,16 @@
     var cx = e.clientX, cy = e.clientY;
     openContextMenu(cx, cy, [
       { icon: 'pencil', label: 'Rename', fn: function () {
-        var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rname]');
-        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] input[data-bud="name"]');
+        if (el) { el.focus(); el.select(); }
       } },
-      { icon: 'tags', label: 'Role…', fn: function () {
-        openContextMenu(cx, cy, state.teamTypes.map(function (t) {
-          return { label: esc(t), checked: m.type === t, fn: function () {
-            commit('member type', function (s) {
-              s.team.forEach(function (x) { if (x.id === mid) x.type = t; });
-            });
-          } };
-        }));
+      { icon: 'tags', label: 'Rate card…', fn: function () {
+        var chipT = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-bact="type"]');
+        if (chipT) chipT.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } },
       { icon: 'layers', label: 'Workstream…', fn: function () {
-        var wsItems = [{ label: '<i>— none —</i>', checked: !m.workstream, fn: function () {
-          commit('role workstream', function (s) {
-            s.team.forEach(function (x) { if (x.id === mid) x.workstream = ''; });
-          });
-        } }];
-        allWorkstreams().forEach(function (w) {
-          wsItems.push({ label: esc(w), dot: '#' + RM.colorForWs(state, w), checked: m.workstream === w, fn: function () {
-            commit('role workstream', function (s) {
-              s.team.forEach(function (x) { if (x.id === mid) x.workstream = w; });
-            });
-          } });
-        });
-        openContextMenu(cx, cy, wsItems);
+        var chipW = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-bact="ws"]');
+        if (chipW) chipW.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } },
       state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity…', fn: function () {
         var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rcap]');
@@ -7049,15 +7608,15 @@
     ].filter(Boolean));
   });
 
-  // role rename (inline)
-  resGrid.addEventListener('click', function (e) {
-    var nameEl = e.target.closest('[data-rname]');
-    if (!nameEl || nameEl.querySelector('input')) return;
-    var nmid = nameEl.dataset.rname;
-    startInlineEdit(nameEl, function (v) {
-      commit('rename role', function (s) {
-        s.team.forEach(function (m) { if (m.id === nmid) m.name = v; });
-      });
+  // name / role text fields — same inline inputs as the budgeting rows
+  resGrid.addEventListener('change', function (e) {
+    var f = e.target.dataset && e.target.dataset.bud;
+    var rrow = e.target.closest('.rrow[data-mid]');
+    if (!f || !rrow || (f !== 'name' && f !== 'role')) return;
+    var nmid = rrow.dataset.mid;
+    var tv = e.target.value.trim();
+    commit(f === 'name' ? 'rename person' : 'person role', function (s) {
+      s.team.forEach(function (m) { if (m.id === nmid) m[f] = tv; });
     });
   });
 
@@ -7098,51 +7657,13 @@
     });
   });
 
-  // member workstream chip → shared dropdown
+  // rate-card / workstream chips → the SAME dropdowns as the budgeting rows
   resGrid.addEventListener('click', function (e) {
-    var chip = e.target.closest('[data-rws]');
-    if (!chip) return;
-    var mid = chip.dataset.rws;
-    var m = null;
-    state.team.forEach(function (x) { if (x.id === mid) m = x; });
-    if (!m) return;
-    var wsList = allWorkstreams();
-    var items = [{ label: '<i>— none —</i>', checked: !m.workstream, fn: function () {
-      commit('role workstream', function (s) {
-        s.team.forEach(function (x) { if (x.id === mid) x.workstream = ''; });
-      });
-    } }];
-    wsList.forEach(function (w) {
-      items.push({
-        label: esc(w),
-        dot: '#' + RM.colorForWs(state, w),
-        checked: m.workstream === w,
-        fn: function () {
-          commit('role workstream', function (s) {
-            s.team.forEach(function (x) { if (x.id === mid) x.workstream = w; });
-          });
-        },
-        edit: function () { wsEditModal(w); }
-      });
-    });
-    openDropdown(chip, items);
-  });
-
-  // member type chip → shared dropdown
-  resGrid.addEventListener('click', function (e) {
-    var chip = e.target.closest('[data-rtype]');
-    if (!chip) return;
-    var mid = chip.dataset.rtype;
-    var m = null;
-    state.team.forEach(function (x) { if (x.id === mid) m = x; });
-    if (!m) return;
-    openDropdown(chip, state.teamTypes.map(function (t) {
-      return { label: esc(t), checked: m.type === t, fn: function () {
-        commit('member type', function (s) {
-          s.team.forEach(function (x) { if (x.id === mid) x.type = t; });
-        });
-      } };
-    }));
+    var chip = e.target.closest('[data-bact]');
+    var rrow = e.target.closest('.rrow[data-mid]');
+    if (!chip || !rrow) return;
+    if (chip.dataset.bact === 'type') openMemberTypeDropdown(chip, rrow.dataset.mid);
+    else openMemberWsDropdown(chip, rrow.dataset.mid);
   });
 
   // member reorder
@@ -7198,7 +7719,11 @@
       return '<button data-pref-snap="' + sn[0] + '"' + (snapDays === sn[0] ? ' class="on"' : '') + '>' +
         sn[1] + '</button>';
     }).join('') + '</div>';
-    var appearance = '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>';
+    var appearance =
+      '<div class="m-sec"><label>Your name</label>' +
+      '<input type="text" data-pref-user maxlength="60" style="width:100%" placeholder="e.g. Alex Rivera" value="' + esc(userName()) + '">' +
+      '<div class="m-hint">Recorded with your edits in Version history. Stored on this machine only.</div></div>' +
+      '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>';
     var behavior = '<div class="m-sec"><label>Drag snap</label>' + snapSeg + '</div>' +
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
@@ -7226,6 +7751,7 @@
       if (sb) { snapDays = parseInt(sb.dataset.prefSnap, 10); saveLocal(); renderTopbar(); after(); return; }
     });
     host.addEventListener('change', function (e) {
+      if (e.target.dataset.prefUser != null) { setUserName(e.target.value); return; }
       var key = e.target.dataset.pref;
       if (!key) return;
       var on = e.target.checked;

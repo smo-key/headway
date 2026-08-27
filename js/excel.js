@@ -277,7 +277,9 @@
     var tws = wb.addWorksheet('Team');
     // Rate/Cost append AFTER the hours column so older importers (which read
     // col 5 as hours) still parse this layout
-    tws.getRow(1).values = ['Person', 'Role', 'Workstream', 'Capacity (at full-time)', 'Week hours (overrides)', 'Rate (hourly)', 'Cost (hourly)'];
+    // column 2 stays the rate-card role (older importers read it as the type);
+    // the free-text Role/title appends at the end to keep the layout stable
+    tws.getRow(1).values = ['Person', 'Rate card role', 'Workstream', 'Capacity (at full-time)', 'Week hours (overrides)', 'Rate (hourly)', 'Cost (hourly)', 'Role (title)'];
     tws.getRow(1).font = { bold: true };
     tws.getColumn(1).width = 28;
     tws.getColumn(2).width = 18;
@@ -286,11 +288,12 @@
     tws.getColumn(5).width = 60;
     tws.getColumn(6).width = 13;
     tws.getColumn(7).width = 13;
+    tws.getColumn(8).width = 22;
     state.team.forEach(function (m, i) {
       var wh = m.weekHours || {};
       var txt = Object.keys(wh).sort().map(function (iso) { return iso + '=' + wh[iso]; }).join(', ');
-      tws.getRow(i + 2).values = [m.name, m.type, m.workstream || null, m.capacity != null ? m.capacity : 1, txt,
-        m.rate || 0, m.cost || 0];
+      tws.getRow(i + 2).values = [m.name || null, m.type || null, m.workstream || null, m.capacity != null ? m.capacity : 1, txt,
+        m.rate || 0, m.cost || 0, m.role || null];
     });
 
     // ---- hidden lossless state sheet
@@ -699,7 +702,8 @@
     if (tws) {
       for (var tr = 2; tr <= tws.rowCount; tr++) {
         var nm = cellText(tws.getCell(tr, 1));
-        if (nm) {
+        // names are optional — a row with just a role/title still counts
+        if (nm || cellText(tws.getCell(tr, 8)) || cellText(tws.getCell(tr, 2))) {
           // new exports: 3=workstream, 4=capacity, 5=hours; legacy layouts had
           // hours in col 3 or 4 — hours cells are recognizable by their dates
           var c3 = cellText(tws.getCell(tr, 3));
@@ -719,6 +723,7 @@
           }
           team.push({
             name: nm,
+            role: cellText(tws.getCell(tr, 8)) || '',
             type: cellText(tws.getCell(tr, 2)) || 'Development',
             workstream: wsVal,
             capacity: capVal,

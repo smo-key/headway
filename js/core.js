@@ -233,6 +233,8 @@
   RM.DEFAULT_TEAM_TYPES = ['Software Engineer', 'Product Designer', 'Product Manager', 'Data Scientist', 'QA Engineer'];
   RM.DEFAULT_WORK_TYPE = 'Software Engineer';
   RM.WEEK_HOURS = 40; // one person's full week
+  RM.HISTORY_MAX = 300; // version-history entries kept per document
+  RM.HISTORY_OPS_MAX = 120; // change-detail rows kept per history entry
   RM.ANY_TYPE = '';
 
   // Scoping-view columns. Built-ins map to fixed item fields; custom columns
@@ -1118,6 +1120,27 @@
         endDay: ed
       };
     }).filter(Boolean);
+    // version history: {t: epoch ms, u: user name, label, n: coalesce count,
+    // d: change details [[category, field label, old, new], …], x: overflow}
+    state.history = (Array.isArray(state.history) ? state.history : []).map(function (h) {
+      if (!h || typeof h !== 'object') return null;
+      var ht = +h.t;
+      if (!isFinite(ht) || ht <= 0) return null;
+      var d = Array.isArray(h.d) ? h.d.slice(0, RM.HISTORY_OPS_MAX).map(function (op) {
+        if (!Array.isArray(op)) return null;
+        return [String(op[0] || '').slice(0, 20), String(op[1] || '').slice(0, 120),
+          String(op[2] == null ? '' : op[2]).slice(0, 400), String(op[3] == null ? '' : op[3]).slice(0, 400)];
+      }).filter(Boolean) : [];
+      var out = {
+        t: Math.round(ht),
+        u: typeof h.u === 'string' ? h.u.slice(0, 80) : '',
+        label: typeof h.label === 'string' ? h.label.slice(0, 140) : '',
+        n: isFinite(+h.n) && +h.n > 1 ? Math.round(+h.n) : 1
+      };
+      if (d.length) out.d = d;
+      if (isFinite(+h.x) && +h.x > 0) out.x = Math.round(+h.x);
+      return out;
+    }).filter(Boolean).slice(-RM.HISTORY_MAX);
     state.team = (state.team || []).map(function (mbr) {
       // weekHours: { isoMonday: hours } — default 40 for any week not listed.
       // Legacy offWeeks (whole weeks off) migrate to 0-hour entries.
@@ -1141,8 +1164,12 @@
       });
       return {
         id: mbr.id || RM.uid('t'),
-        name: mbr.name || 'Member',
-        type: mbr.type || state.teamTypes[0],
+        // name is optional — a row can be a yet-unnamed seat ("Senior Dev TBD")
+        name: mbr.name != null ? String(mbr.name) : '',
+        // free-text role/title (what they do), independent of the rate card
+        role: mbr.role != null ? String(mbr.role) : '',
+        // rate-card role (drives default rate/cost); empty = not assigned
+        type: mbr.type != null ? String(mbr.type) : '',
         workstream: wss[0] || '',
         workstreams: wss,
         // capacity at 40 h — a 0.5 role contributes half a head even full-time;
@@ -2066,7 +2093,12 @@
   // an explicit override (0/empty = inherit).
   RM.rateCardFor = function (state, role) {
     var rc = state.meta.rateCard;
-    return (rc && rc[role]) || null;
+    return (role && rc && rc[role]) || null;
+  };
+  // display label for a member — name first, then role/rate-card fallbacks
+  // (both name and rate-card assignment are optional)
+  RM.memberLabel = function (m) {
+    return (m && (m.name || m.role || m.type)) || 'Unnamed';
   };
   RM.memberRate = function (state, m) {
     if (m.rate > 0) return m.rate;

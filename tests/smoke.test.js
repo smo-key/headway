@@ -526,9 +526,9 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   const rrow = doc.querySelector('#resGrid .rrow[data-mid]');
   rrow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 150, clientY: 400 }));
   const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent);
-  ok(labels.some(l => /Remove role/.test(l)) && labels.some(l => /Role/.test(l)) &&
+  ok(labels.some(l => /Remove role/.test(l)) && labels.some(l => /Rate card/.test(l)) &&
     labels.some(l => /Workstream/.test(l)) && labels.some(l => /Capacity/.test(l)),
-    'role context menu offers rename/role/workstream/capacity/remove');
+    'role context menu offers rename/rate card/workstream/capacity/remove');
   ok(labels.some(l => /Start \/ end dates/.test(l)), 'role context menu offers start/end dates');
   doc.querySelector('#popover').hidden = true;
 }
@@ -742,7 +742,7 @@ click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /
 ok(doc.querySelectorAll('#rows .row.eband').length === 0, 'workstream grouping toggles back off');
 
 // resources rows carry a workstream chip
-ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream chip');
+ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a workstream chip');
 
 // ---------------------------------------------------------------- budgeting view
 {
@@ -764,10 +764,10 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
   ok(/40%/.test(doc.querySelector('#rows .row.brole').textContent), 'margin computed (40%)');
   // cost column precedes rate; both left pane and header agree
   {
-    const inps = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid] input[data-bud]')).filter(i => i.dataset.bud !== 'name');
+    const inps = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid] input[data-bud]')).filter(i => i.dataset.bud !== 'name' && i.dataset.bud !== 'role');
     ok(inps[0].dataset.bud === 'cost' && inps[1].dataset.bud === 'rate', 'Cost input comes before Rate');
     const labels = Array.from(doc.querySelectorAll('.hl-cols .bu-only')).map(i => i.textContent);
-    ok(labels.join(',') === 'Role,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out (Role now), cost before rate');
+    ok(labels.join(',') === 'Role,Rate card,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out, cost before rate');
   }
   // total = actual hours × RATE
   {
@@ -798,7 +798,9 @@ ok(!!doc.querySelector('#resGrid [data-rws]'), 'resource rows have a workstream 
 
   // money cells: wide enough to edit, contents selected on focus
   const costInp = doc.querySelector('#rows .row.brole[data-mid] input[data-bud="cost"]');
-  ok(parseInt(costInp.style.width, 10) >= 72, 'budget money cells are wide enough to edit');
+  ok(costInp.style.width === 'var(--bu-w-cost)' &&
+    parseInt(doc.documentElement.style.getPropertyValue('--bu-w-cost'), 10) >= 72,
+    'budget money cells are wide enough to edit');
   let selected = false;
   costInp.select = () => { selected = true; };
   costInp.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
@@ -1382,9 +1384,13 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   const sched = state().items.find(i => i.startDay != null && i.workstream && !i.milestone);
   if (sched) {
     click(doc.querySelector('#rows .row.item[data-id="' + sched.id + '"] .r-num'));
-    const wsInp = doc.querySelector('#panel [data-f="workstream"]');
-    wsInp.value = '';
-    wsInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+    // the panel's workstream control is a dropdown now — pick the default row
+    const wsBtn = doc.querySelector('#panel [data-dd="ws"]');
+    ok(!!wsBtn, 'the panel offers a Workstream dropdown (color dot, not a text input)');
+    click(wsBtn);
+    const wsMenu = doc.querySelector('#popover .menu-list');
+    ok(!!wsMenu && /default/.test(wsMenu.textContent), 'the workstream dropdown lists the default stream');
+    click(wsMenu.querySelector('[data-mi="0"]'));
     const bar = doc.querySelector('#rows .bar[data-bar="' + sched.id + '"]');
     ok(bar && !bar.classList.contains('nows') &&
       bar.getAttribute('style').includes(window.RM.defaultWsColor(state())),
@@ -1778,6 +1784,213 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const stP8b = state().items.find(i => i.id === stRow8.dataset.id);
   ok(stP8b.stories.find(s2 => s2.id === stRow8.dataset.story).deadline === iso8, 'story deadline commits');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- batch 9: version history, budgeting columns, resources parity
+{
+  // the filter cell must keep .hdr-left's sticky (an own `position` broke it)
+  const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const cellRule = /#filterCell\s*{[^}]*}/.exec(css);
+  ok(cellRule && !/position\s*:/.test(cellRule[0]), 'filter cell has no position of its own (stays sticky in the left pane)');
+
+  // floating B/I toolbar closes when the view changes
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const rich = doc.querySelector('#rows .sc-rich');
+  if (rich) {
+    rich.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+    ok(doc.querySelector('#scFmtBar') && !doc.querySelector('#scFmtBar').hidden, 'format toolbar opens on rich-cell focus');
+    click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    ok(doc.querySelector('#scFmtBar').hidden, 'format toolbar closes when the view changes');
+  } else {
+    ok(false, 'scoping view has a rich cell to test the format toolbar with');
+  }
+
+  // header: Setup / Version history split button
+  ok(!!doc.querySelector('#setupSplit #btnSetup') && !!doc.querySelector('#setupSplit #btnHistory'),
+    'setup split button carries Setup and Version history halves');
+
+  // budgeting: Name · Role · Rate card · Workstream columns + reorder grips
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  const brow = doc.querySelector('#rows .row.brole[data-mid]');
+  ok(!!brow.querySelector('input[data-bud="name"]') && !!brow.querySelector('input[data-bud="role"]'),
+    'budget rows have Name and free-text Role inputs');
+  ok(!!brow.querySelector('[data-bact="type"]') && !!brow.querySelector('[data-bact="ws"]'),
+    'budget rows have Rate card and Workstream chips');
+  ok(!!brow.querySelector('.bu-grip'), 'budget person rows have a reorder grip');
+  // costs reorder too
+  click(doc.querySelector('#rows .row.addrow[data-kind="baddcost"]'));
+  const crow = doc.querySelector('#rows .row.bcost[data-cost]');
+  ok(!!crow && !!crow.querySelector('.bu-grip'), 'budget cost rows have a reorder grip');
+
+  // free-text role commits; empty name is allowed (re-query — the add-cost
+  // commit above re-rendered the rows)
+  const brow2 = doc.querySelector('#rows .row.brole[data-mid]');
+  const roleInp = brow2.querySelector('input[data-bud="role"]');
+  roleInp.value = 'Senior Backend Dev';
+  roleInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team.find(m => m.id === brow2.dataset.mid).role === 'Senior Backend Dev', 'free-text role commits');
+  const nameInp = doc.querySelector('#rows .row.brole input[data-bud="name"]');
+  nameInp.value = '';
+  nameInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].name === '', 'name can be cleared (optional)');
+  // rate-card dropdown offers a "none" option that clears the assignment
+  const typeChip = doc.querySelector('#rows .row.brole [data-bact="type"]');
+  click(typeChip);
+  const noneOpt = Array.from(doc.querySelectorAll('#popover button')).find(b => /none/.test(b.textContent));
+  ok(!!noneOpt, 'rate-card dropdown offers — none —');
+  if (noneOpt) { click(noneOpt); ok(state().team[0].type === '', 'rate card can be unassigned'); }
+  doc.querySelector('#popover').hidden = true;
+
+  // resources panel mirrors the budgeting columns (minus the money ones)
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const rrow2 = doc.querySelector('#resGrid .rrow[data-mid]');
+  ok(!!rrow2.querySelector('input[data-bud="name"]') && !!rrow2.querySelector('input[data-bud="role"]') &&
+    !!rrow2.querySelector('[data-bact="type"]') && !!rrow2.querySelector('[data-bact="ws"]'),
+    'resources rows carry the same name/role/rate-card/workstream columns');
+  ok(!rrow2.querySelector('[data-bud="cost"]') && !rrow2.querySelector('[data-bud="rate"]'),
+    'resources rows carry no money columns');
+  const rRole = rrow2.querySelector('input[data-bud="role"]');
+  rRole.value = 'QA Lead';
+  rRole.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].role === 'QA Lead', 'role edits commit from the resources panel too');
+
+  // version history: commits record who + what, coalescing rapid same-kind edits
+  window.localStorage.setItem('headway-user-v1', 'Test User');
+  // re-query between edits: each commit re-renders the panel
+  let rr = doc.querySelector('#resGrid .rrow[data-mid] input[data-bud="role"]');
+  rr.value = 'QA Lead II';
+  rr.dispatchEvent(new window.Event('change', { bubbles: true }));
+  rr = doc.querySelector('#resGrid .rrow[data-mid] input[data-bud="role"]');
+  rr.value = 'QA Lead III';
+  rr.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const hist = state().history || [];
+  const lastH = hist[hist.length - 1];
+  ok(lastH && lastH.label === 'person role' && lastH.u === 'Test User' && lastH.n >= 2,
+    'history records user + change and coalesces rapid edits (' + JSON.stringify(lastH) + ')');
+  // Version History is a full page now — the split button's right half opens it
+  click(doc.querySelector('#btnHistory'));
+  ok(doc.body.dataset.view === 'history', 'the History button switches to the Version History page');
+  const hv = doc.querySelector('#historyView');
+  ok(/Version history/.test(hv.textContent) && /Test User/.test(hv.textContent) && /Person role/.test(hv.textContent),
+    'version history page shows who and what');
+  const firstItem = hv.querySelector('.vh-item');
+  ok(firstItem && /Test User/.test(firstItem.textContent), 'newest entry listed first');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- detail level dropdown
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const dmBtn = doc.querySelector('#detailBtn');
+  ok(!!dmBtn && !!dmBtn.querySelector('svg,[data-lucide]'), 'a detail-level dropdown sits left of the Feature header');
+  click(dmBtn);
+  const dmMenu = doc.querySelector('#popover .menu-list');
+  ok(!!dmMenu && dmMenu.querySelectorAll('[data-mi]').length === 3 &&
+    /Phase/.test(dmMenu.textContent) && /Feature/.test(dmMenu.textContent) && /Story/.test(dmMenu.textContent),
+    'the dropdown offers Phase / Feature / Story, each with an icon');
+  ok(dmMenu.querySelectorAll('[data-mi] svg, [data-mi] [data-lucide]').length >= 3, 'detail options carry icons');
+  click(dmMenu.querySelector('[data-mi="1"]')); // Feature
+  ok(doc.querySelectorAll('#rows .row.story').length === 0,
+    'feature detail keeps story rows tucked away');
+  click(dmBtn);
+  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story
+  ok(doc.querySelectorAll('#rows .row.story').length > 0, 'story detail opens every story row');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // Phase
+  ok(doc.querySelectorAll('#rows .row.item').length === 0 &&
+    doc.querySelectorAll('#rows .row.band').length === state().phases.length,
+    'phase detail shows only the phase bands');
+  ok(!!doc.querySelector('#rows .ph-row-bar'), 'phase bands paint their span as a bar on Planning');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  ok(doc.querySelectorAll('#rows .row.item').length === 0, 'phase detail applies on Scoping too');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story
+  ok(doc.querySelectorAll('#rows .row.story').length > 0, 'story detail applies on Scoping too');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- workstream via context menu
+{
+  const itRow = doc.querySelector('#rows .row.item');
+  itRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 60 }));
+  const ctx = doc.querySelector('#popover .menu-list');
+  ok(!!ctx && /Set workstream…/.test(ctx.textContent), 'item context menu offers Set workstream…');
+  doc.querySelector('#popover').hidden = true;
+  doc.querySelector('#popover').innerHTML = '';
+}
+
+// ---------------------------------------------------------------- version history diffs
+{
+  window.localStorage.setItem('headway-user-v1', 'Test User');
+  const inp = doc.querySelector('#rows .row.item input[data-rowname]');
+  const it = window.RM.itemById(state(), inp.closest('.row').dataset.id);
+  const oldTitle = it.feature;
+  inp.value = 'Diffed Feature Title';
+  inp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const en = state().history[state().history.length - 1];
+  ok(Array.isArray(en.d) && en.d.some(op => op[0] === 'scope' && /Title/.test(op[1]) &&
+    op[2] === oldTitle && op[3] === 'Diffed Feature Title'),
+    'a commit records field-level old → new detail (' + JSON.stringify(en.d && en.d[0]) + ')');
+
+  click(doc.querySelector('#btnHistory'));
+  const hv = doc.querySelector('#historyView');
+  ok(!!hv.querySelector('.hv-side') && !!hv.querySelector('.hv-detail'),
+    'Version History renders as a page: change feed left, diff right');
+  ok(!!hv.querySelector('.hv-tab'), 'the diff groups changes into tabs');
+  const oldEl = Array.from(hv.querySelectorAll('.vd-old')).find(el => el.textContent === oldTitle);
+  const newEl = Array.from(hv.querySelectorAll('.vd-new')).find(el => el.textContent === 'Diffed Feature Title');
+  ok(!!oldEl && !!newEl, 'the newest change shows its old (red) and new (green) values');
+
+  // schedule a change too, then check the Timeline tab appears for it
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const bar2 = doc.querySelector('#rows .bar:not(.ms)[data-bar]');
+  click(doc.querySelector('#rows .row.item[data-id="' + bar2.getAttribute('data-bar') + '"] .r-num'));
+  const durInp = doc.querySelector('#panel input[data-f="durWeeks"]');
+  durInp.value = String(parseFloat(durInp.value) + 1);
+  durInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#btnHistory'));
+  const tlTab = Array.from(doc.querySelectorAll('#historyView .hv-tab')).find(t => /Timeline/.test(t.textContent));
+  ok(!!tlTab, 'timeline edits appear under a Timeline tab');
+
+  // tick two entries → the page diffs ACROSS them
+  const cks = doc.querySelectorAll('#historyView [data-vhck]');
+  ok(cks.length >= 2, 'entries offer compare checkboxes');
+  click(cks[0]);
+  click(doc.querySelectorAll('#historyView [data-vhck]')[1]);
+  ok(/Comparing/.test(doc.querySelector('#historyView .hv-dhead h2').textContent),
+    'ticking two versions diffs between them');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- reporting page
+{
+  ok(/Reporting/.test(doc.querySelector('#viewTabs [data-view="reports"]').textContent),
+    'the Reports tab reads Reporting');
+  click(doc.querySelector('#viewTabs [data-view="reports"]'));
+  const rp = doc.querySelector('#reportsView');
+  ok(/Reporting/.test(rp.querySelector('h1').textContent), 'the page heading reads Reporting');
+  ok(/Delivery by (sprint|week)/.test(rp.textContent), 'reporting includes sprint-level delivery');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- budgeting column resize
+{
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  const rz = doc.querySelector('#hdr [data-burz="role"]');
+  ok(!!rz, 'budget header columns grow resize handles');
+  const before = parseInt(doc.documentElement.style.getPropertyValue('--bu-w-role'), 10);
+  rz.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 200, button: 0 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 260 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  const after = parseInt(doc.documentElement.style.getPropertyValue('--bu-w-role'), 10);
+  ok(after === before + 60, 'dragging a handle widens the column (' + before + ' → ' + after + ')');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).buColW.role === after,
+    'budget column widths persist');
+  const roleInp = doc.querySelector('#rows .row.brole[data-mid] input[data-bud="role"]');
+  ok(roleInp.style.width === 'var(--bu-w-role)', 'row cells track the resized header width');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 

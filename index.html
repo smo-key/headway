@@ -39,9 +39,13 @@
       <button data-view="planning" title="Timeline / gantt"><i data-lucide="chart-gantt"></i>Planning</button>
       <button data-view="budget" title="Resources — rates, costs and timelines"><i data-lucide="wallet"></i>Budgeting</button>
       <button data-view="sprints" title="Sprint board — statuses and execution"><i data-lucide="square-kanban"></i>Sprinting</button>
-      <button data-view="reports" title="Project reporting dashboard"><i data-lucide="chart-pie"></i>Reports</button>
+      <button data-view="reports" title="Project reporting dashboard"><i data-lucide="chart-pie"></i>Reporting</button>
     </div>
-    <button id="btnSetup" data-view="setup" title="Project setup — timeline, phases, workstreams, roles, sizing"><i data-lucide="settings-2"></i></button>
+    <div id="setupSplit">
+      <button id="btnSetup" data-view="setup" title="Project setup — timeline, phases, workstreams, roles, sizing"><i data-lucide="settings-2"></i></button>
+      <span class="ss-div" aria-hidden="true"></span>
+      <button id="btnHistory" data-view="history" title="Version history — who changed what, newest first"><i data-lucide="history"></i></button>
+    </div>
   </div>
 
   <div class="tb-right">
@@ -55,6 +59,7 @@
 <div id="centerCol">
   <div id="setupView"></div>
   <div id="reportsView"></div>
+  <div id="historyView"></div>
   <div id="sprintView"></div>
     <div id="board">
     <div id="grid">
@@ -62,7 +67,7 @@
       <div id="hdr">
         <div class="hdr-line hdr-phases"><div class="hdr-left" id="filterCell"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i><input id="rowFilter" type="search" placeholder="Filter rows" aria-label="Filter rows"><kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></div><div class="hdr-lane" id="hdrPhases"></div></div>
         <div class="hdr-line hdr-sprints"><div class="hdr-left corner">
-          <span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Person</span><span class="hl-cols"><i class="pl-only sz-lab" style="width:34px">size</i><i class="pl-only" style="width:34px">dur</i><i class="pl-only" style="width:44px"></i><i class="bu-only" style="width:96px">Role</i><i class="bu-only" style="width:108px">Workstream</i><i class="bu-only" style="width:76px">Cost</i><i class="bu-only" style="width:76px">Rate</i><i class="bu-only" style="width:54px">Margin</i><i class="bu-only" style="width:80px">Total</i></span><span id="leftRz" title="Drag to resize the left pane"></span>
+          <button id="detailBtn" class="pl-title" title="Detail level — phases, features, or stories"><i data-lucide="rows-3"></i><i data-lucide="chevron-down" class="dm-caret"></i></button><span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Person</span><span class="hl-cols"><i class="pl-only sz-lab" style="width:34px">size</i><i class="pl-only" style="width:34px">dur</i><i class="pl-only" style="width:44px"></i><i class="bu-only" data-bucol="role" style="width:var(--bu-w-role,110px)">Role<span class="bu-rz" data-burz="role" title="Drag to resize"></span></i><i class="bu-only" data-bucol="type" style="width:var(--bu-w-type,96px)">Rate card<span class="bu-rz" data-burz="type" title="Drag to resize"></span></i><i class="bu-only" data-bucol="ws" style="width:var(--bu-w-ws,108px)">Workstream<span class="bu-rz" data-burz="ws" title="Drag to resize"></span></i><i class="bu-only" data-bucol="cost" style="width:var(--bu-w-cost,76px)">Cost<span class="bu-rz" data-burz="cost" title="Drag to resize"></span></i><i class="bu-only" data-bucol="rate" style="width:var(--bu-w-rate,76px)">Rate<span class="bu-rz" data-burz="rate" title="Drag to resize"></span></i><i class="bu-only" data-bucol="margin" style="width:var(--bu-w-margin,54px)">Margin<span class="bu-rz" data-burz="margin" title="Drag to resize"></span></i><i class="bu-only" data-bucol="total" style="width:var(--bu-w-total,80px)">Total<span class="bu-rz" data-burz="total" title="Drag to resize"></span></i></span><span id="leftRz" title="Drag to resize the left pane"></span>
         </div><div class="hdr-lane" id="hdrSprints"></div></div>
         <div class="hdr-line hdr-cap"><div class="hdr-left" id="capTypeCell"></div><div class="hdr-lane" id="hdrCap"></div></div>
       </div>
