@@ -182,6 +182,23 @@
       });
     },
 
+    // rename the open file in place (the title IS the filename). Resolves to
+    // the new path; null with no open file; rejects if the target exists or
+    // the filesystem refuses.
+    renameTo: function (newBase) {
+      if (!currentPath) return Promise.resolve(null);
+      if (!/\.xlsx$/i.test(newBase)) newBase += '.xlsx';
+      var np = dirname(currentPath) + '/' + newBase;
+      if (samePath(np, currentPath)) return Promise.resolve(currentPath);
+      return fs.exists(np).then(function (there) {
+        if (there) throw new Error('“' + newBase + '” already exists in this folder');
+        return fs.rename(currentPath, np);
+      }).then(function () {
+        setPath(np); // re-watches the directory and refreshes the recents list
+        return np;
+      });
+    },
+
     currentPath: function () { return currentPath; },
     basename: basename,
     appVersion: '' // filled asynchronously below

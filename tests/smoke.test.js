@@ -91,10 +91,19 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
 {
   ok(!window.localStorage.getItem('headway-user-v1'), 'fresh session starts with no author name');
   const t = doc.querySelector('#docTitle');
-  t.value = state().meta.title;
+  const origTitle = state().meta.title;
+  ok(t.hasAttribute('readonly'), 'the title rests readonly');
+  click(t);
+  ok(!t.hasAttribute('readonly'), 'clicking the title starts a rename in place (no pencil)');
+  ok(!doc.querySelector('#titleEdit'), 'the pencil button is gone');
+  t.value = 'Renamed Roadmap.xlsx';
   t.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.title === 'Renamed Roadmap', 'renaming strips a typed .xlsx extension');
+  ok(window.__headway.saveFileName() === 'Renamed Roadmap.xlsx', 'the title maps 1:1 onto the file name');
   const mh = doc.querySelector('#modalHost');
   ok(!mh.hidden && /Who’s editing\?/.test(mh.textContent), 'the first saved change asks for your name');
+  t.value = origTitle; // put the suite's document title back
+  t.dispatchEvent(new window.Event('change', { bubbles: true }));
   const nameIn = doc.querySelector('#vhNameIn');
   nameIn.value = 'Test User';
   nameIn.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -2163,11 +2172,88 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- options
+// alternate plan versions: a dropdown right of the title. "Default" alone at
+// first; New option duplicates the current plan and switches to it; switching
+// swaps whole documents; Compare ghosts the other option's bars on the
+// timeline; Close removes a finished version.
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const optBtn = doc.querySelector('#optBtn');
+  ok(!!optBtn && /Default/.test(optBtn.textContent), 'options button sits by the title and reads "Default"');
+  ok(state().optName === 'Default' && (state().options || []).length === 0,
+    'a fresh document holds only the Default option');
+  const menuBtn = (re) =>
+    [...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => re.test(b.textContent.trim()));
+
+  click(optBtn);
+  ok(!!menuBtn(/New option/), 'options menu offers New option');
+  ok(!menuBtn(/Compare with/), 'no compare entries while Default is alone');
+  click(menuBtn(/New option/));
+  const nameIn = doc.querySelector('#modalHost #optNameIn');
+  ok(!!nameIn, 'New option asks for a name');
+  nameIn.value = 'Plan B';
+  click(doc.querySelector('#modalHost #optNameOk'));
+  ok(state().optName === 'Plan B', 'creating an option switches to it');
+  ok(state().options.length === 1 && state().options[0].name === 'Default',
+    'the previous plan is parked as Default');
+  ok(/Plan B/.test(doc.querySelector('#optBtn').textContent), 'the button shows the active option');
+
+  // diverge Plan B: push a scheduled feature's duration up by two weeks
+  const bar = doc.querySelector('#rows .bar:not(.ms)[data-bar]');
+  const vId = bar.getAttribute('data-bar');
+  click(doc.querySelector('#rows .row.item[data-id="' + vId + '"] .r-num'));
+  const durInp = doc.querySelector('#panel input[data-f="durWeeks"]');
+
+  durInp.value = String(parseFloat(durInp.value) + 2);
+  durInp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const editedDays = state().items.find(i => i.id === vId).durDays;
+
+  // compare with Default: the untouched schedule ghosts behind the live bars
+  click(doc.querySelector('#optBtn'));
+  ok(!!menuBtn(/Compare with Default/), 'options menu offers Compare with Default');
+  click(menuBtn(/Compare with Default/));
+  ok(doc.querySelectorAll('#rows .bar.cmp').length > 0, 'comparing paints ghost bars for differing items');
+  const ghost = [...doc.querySelectorAll('#rows .row.item[data-id="' + vId + '"] .bar.cmp')][0];
+  ok(!!ghost && /^Default: /.test(ghost.title), 'the edited feature carries a ghost titled with the option name');
+  ok(!!doc.querySelector('#cmpPill') && /Default/.test(doc.querySelector('#cmpPill').textContent),
+    'a pill announces what is being compared');
+  click(doc.querySelector('#cmpPill [data-cmpx]'));
+  ok(!doc.querySelector('#cmpPill') && !doc.querySelector('#rows .bar.cmp'),
+    'dismissing the pill clears the overlay');
+
+  // switch back to Default: the duration edit stays behind in Plan B
+  click(doc.querySelector('#optBtn'));
+  click(menuBtn(/^Default$/));
+  ok(state().optName === 'Default', 'switching activates the picked option');
+  const backDur = doc.querySelector('#rows .row.item[data-id="' + vId + '"] [data-act="wk"]');
+  ok(state().items.find(i => i.id === vId).durDays !== editedDays,
+    'Default still has the original schedule (' + backDur.textContent + 'w vs Plan B\'s edit)');
+  ok(state().options.length === 1 && state().options[0].name === 'Plan B' &&
+    state().options[0].doc.items.find(i => i.id === vId).durDays === editedDays,
+    'Plan B is parked with its own edited schedule');
+  // close Plan B out
+  click(doc.querySelector('#optBtn'));
+  click(menuBtn(/Close “Plan B”/));
+  ok(!!doc.querySelector('#modalHost [data-m="ok"]'), 'closing an option asks for confirmation');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+  ok((state().options || []).length === 0 && state().optName === 'Default',
+    'closing removes the option and keeps the current one');
+  ok(JSON.parse(window.localStorage.getItem('headway-v1')).optName === 'Default',
+    'the active option name autosaves with the document');
+}
+
 // ------------------------------------------------- sprints view survives reload
 // regression: applyUi's saved-view whitelist omitted 'sprints', so reloading
 // while on the Sprinting tab silently fell back to Planning. Boot a second
 // window with the current session storage and assert Sprinting is restored.
 {
+  // pick Story detail first — the level chosen must come back after a reload
+  // (and default to Feature when nothing is stored)
+  click(doc.querySelector('#detailBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => /Story/.test(b.textContent)));
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).detailMode === 'story',
+    'the detail level is written to the ui snapshot');
   click(doc.querySelector('#viewTabs [data-view="sprints"]'));
   ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).view === 'sprints',
     'sprints is written to the ui snapshot');
@@ -2190,8 +2276,25 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(onTab && onTab.dataset.view === 'sprints',
     'reload restores the Sprinting tab (got ' + (onTab ? onTab.dataset.view : 'none') + ')');
   ok(!!d2.querySelector('#sprintView .sp-toolbar'), 'the sprint board renders after the reload');
+  ok(/Story/.test(d2.querySelector('#detailBtn').textContent),
+    'reload restores the chosen detail level (Story)');
   dom2.window.close();
+  // a boot with no stored ui must land on Feature detail
+  const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
+  dom3.window.ExcelJS = ExcelJS;
+  dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/app.js']) {
+    dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  }
+  dom3.window.document.querySelector('#startBody [data-sp-continue]')
+    .dispatchEvent(new dom3.window.MouseEvent('click', { bubbles: true }));
+  ok(/Feature/.test(dom3.window.document.querySelector('#detailBtn').textContent),
+    'with nothing stored the detail level defaults to Feature');
+  dom3.window.close();
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  // leave the long-lived suite window back on Feature detail
+  click(doc.querySelector('#detailBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => /Feature/.test(b.textContent)));
 }
 
 // ---------------------------------------------------------------- export smoke

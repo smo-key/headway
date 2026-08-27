@@ -252,6 +252,7 @@
   RM.DEFAULT_WORK_TYPE = 'Software Engineer';
   RM.WEEK_HOURS = 40; // one person's full week
   RM.HISTORY_MAX = 300; // version-history entries kept per document
+  RM.OPTIONS_MAX = 12;  // parked alternate-plan options kept per document
   RM.HISTORY_OPS_MAX = 120; // change-detail rows kept per history entry
   RM.ANY_TYPE = '';
 
@@ -1179,6 +1180,23 @@
       }
       return out;
     }).filter(Boolean).slice(-RM.HISTORY_MAX);
+    // options — alternate plan versions. The active document carries its own
+    // option id/name; the others are parked in state.options as full document
+    // snapshots. A parked doc never nests options of its own.
+    state.optId = typeof state.optId === 'string' && state.optId ? state.optId.slice(0, 40) : 'opt-default';
+    state.optName = typeof state.optName === 'string' && state.optName.trim()
+      ? state.optName.trim().slice(0, 60) : 'Default';
+    state.options = (Array.isArray(state.options) ? state.options : []).filter(function (o) {
+      return o && typeof o === 'object' && o.doc && typeof o.doc === 'object' && Array.isArray(o.doc.items);
+    }).slice(0, RM.OPTIONS_MAX).map(function (o) {
+      var doc = RM.clone(o.doc);
+      delete doc.options;
+      return {
+        id: typeof o.id === 'string' && o.id ? o.id.slice(0, 40) : RM.uid('opt'),
+        name: typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 60) : 'Option',
+        doc: doc
+      };
+    });
     state.team = (state.team || []).map(function (mbr) {
       // weekHours: { isoMonday: hours } — default 40 for any week not listed.
       // Legacy offWeeks (whole weeks off) migrate to 0-hour entries.

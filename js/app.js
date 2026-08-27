@@ -371,6 +371,11 @@
     genericDiff('budget', 'Rate card — ', (a.meta || {}).rateCard, (b.meta || {}).rateCard);
     genericDiff('setup', 'Workstream color — ', a.wsColors, b.wsColors);
     push('setup', 'Roles (rate card)', (a.teamTypes || []).join(', '), (b.teamTypes || []).join(', '));
+    // options — renames of the active option and creates/renames/closes of
+    // parked ones land in the audit trail (switching bypasses history)
+    push('setup', 'Option name', a.optName || 'Default', b.optName || 'Default');
+    function optNames(s) { return ((s && s.options) || []).map(function (o) { return o.name; }).join(', '); }
+    push('setup', 'Other options', optNames(a), optNames(b));
     // rateCard sits inside meta too — drop the raw duplicate from the generic pass
     ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard' && op[1] !== 'Setup — statuses'; });
     return { ops: ops, tl: tl };
@@ -878,6 +883,188 @@
     }));
   });
 
+  // ------------------------------------------------------------ options
+  // alternate plan versions ("what if we cut phase 3?"). The active document
+  // IS the current option; the rest are parked in state.options as full
+  // snapshots. Switching swaps documents wholesale; comparing overlays the
+  // other option's schedule as dashed ghost bars on the planning timeline.
+  var compareOptId = null; // ghost-overlay option id; transient
+  var cmpCache = null;     // per-render {id, name, doc, byId} for the overlay
+  function cmpEntry() {
+    if (!compareOptId) return null;
+    return (state.options || []).filter(function (o) { return o.id === compareOptId; })[0] || null;
+  }
+  function getCmp() {
+    var en = cmpEntry();
+    if (!en) return null;
+    if (!cmpCache || cmpCache.id !== en.id) {
+      var doc = RM.normalizeState(en.doc);
+      var byId = {};
+      doc.items.forEach(function (x) { byId[x.id] = x; });
+      cmpCache = { id: en.id, name: en.name, doc: doc, byId: byId };
+    }
+    return cmpCache;
+  }
+  function parkCurrent() {
+    var doc = JSON.parse(JSON.stringify(state));
+    delete doc.options;
+    return { id: state.optId, name: state.optName, doc: doc };
+  }
+  function activateOption(id) {
+    var entry = (state.options || []).filter(function (o) { return o.id === id; })[0];
+    if (!entry) return;
+    var prevId = state.optId;
+    var next = RM.normalizeState(entry.doc);
+    next.optId = entry.id;
+    next.optName = entry.name;
+    next.options = (state.options || []).map(function (o) { return o.id === id ? parkCurrent() : o; });
+    // undo can't cross option documents — a revert here would fold one
+    // option's edits into another option's parked snapshot
+    undoStack.length = 0;
+    redoStack.length = 0;
+    selectedId = null;
+    // comparing with the option being activated: keep the overlay meaningful
+    // by flipping it to the one being parked
+    if (compareOptId === id) compareOptId = prevId;
+    state = next;
+    docSaved = false;
+    validation = RM.validate(state);
+    saveLocal();
+    render();
+    toast('Switched to “' + entry.name + '”');
+  }
+  function promptOptName(title, hint, initial, onOk) {
+    openModal(
+      '<div class="modal" style="width:420px"><div class="m-head"><h2>' + esc(title) + '</h2></div>' +
+      '<div class="m-body"><div class="m-sec"><label>Option name</label>' +
+      '<input id="optNameIn" style="width:100%" placeholder="e.g. Aggressive scope" value="' + esc(initial || '') + '">' +
+      (hint ? '<div class="m-hint">' + hint + '</div>' : '') + '</div></div>' +
+      '<div class="m-foot"><button data-m="cancel">Cancel</button><button id="optNameOk" class="primary">Save</button></div></div>',
+      function (host) {
+        var inp = $('#optNameIn', host);
+        inp.focus();
+        inp.select();
+        function doOk() {
+          var v = inp.value.trim().slice(0, 60);
+          if (!v) return;
+          closeModal();
+          onOk(v);
+        }
+        $('#optNameOk', host).onclick = doOk;
+        inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') doOk(); });
+        $('[data-m=cancel]', host).onclick = closeModal;
+      });
+  }
+  function createOption() {
+    if ((state.options || []).length >= RM.OPTIONS_MAX) {
+      toast('Close an option first — up to ' + (RM.OPTIONS_MAX + 1) + ' open options', 'warn');
+      return;
+    }
+    promptOptName('New option', 'Starts as a copy of “' + esc(state.optName) +
+      '” — edits stay in the new option until you switch back.', '', function (nm) {
+      commit('new option', function (s) {
+        var doc = JSON.parse(JSON.stringify(s));
+        delete doc.options;
+        s.options = (s.options || []).concat([{ id: s.optId, name: s.optName, doc: doc }]);
+        s.optId = RM.uid('opt');
+        s.optName = nm;
+      });
+      toast('Now editing “' + nm + '”');
+    });
+  }
+  function renameOption(id, curName) {
+    promptOptName('Rename option', null, curName, function (nm) {
+      commit('rename option', function (s) {
+        if (id === s.optId) s.optName = nm;
+        else (s.options || []).forEach(function (o) { if (o.id === id) o.name = nm; });
+      });
+    });
+  }
+  function closeOption(id, name) {
+    confirmBox('Close option',
+      'This removes “' + esc(name) + '” and its whole plan version. ' +
+      (id === state.optId ? 'You will land on the next open option.' : 'The current option is kept.') +
+      ' Undo can bring it back.',
+      'Close option', function () {
+        if (compareOptId === id) compareOptId = null;
+        if (id === state.optId) {
+          var first = (state.options || [])[0];
+          if (!first) return;
+          activateOption(first.id); // parks the closing option…
+        }
+        commit('close option', function (s) { // …then drops it
+          s.options = (s.options || []).filter(function (o) { return o.id !== id; });
+        });
+        toast('Closed “' + name + '”');
+      }, true);
+  }
+  function syncOptBtn() {
+    var b = $('#optBtn');
+    if (!b) return;
+    var n = (state.options || []).length;
+    b.innerHTML = '<i data-lucide="git-branch"></i><span>' + esc(state.optName) + '</span>' +
+      (compareOptId ? '<span class="opt-cmp-dot" title="Comparing"></span>' : '') +
+      '<i data-lucide="chevron-down" class="dm-caret"></i>';
+    b.title = 'Option: ' + state.optName + (n ? ' — ' + (n + 1) + ' open options' : ' — click to add alternate plan versions');
+    if (window.lucide) lucide.createIcons();
+  }
+  function syncCmpPill() {
+    if (compareOptId && !cmpEntry()) compareOptId = null; // option was closed
+    var pill = $('#cmpPill');
+    var en = cmpEntry();
+    if (!en || view !== 'planning') {
+      if (pill) pill.remove();
+      return;
+    }
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'cmpPill';
+      $('#centerCol').appendChild(pill);
+      pill.addEventListener('click', function (e) {
+        if (e.target.closest('[data-cmpx]')) { compareOptId = null; render(); }
+      });
+    }
+    pill.innerHTML = '<i data-lucide="eye"></i><span>Comparing with “' + esc(en.name) +
+      '” — dashed bars</span><button data-cmpx title="Stop comparing"><i data-lucide="x"></i></button>';
+    if (window.lucide) lucide.createIcons();
+  }
+  $('#optBtn').addEventListener('click', function () {
+    var items = [{
+      icon: 'git-branch', label: esc(state.optName), checked: true,
+      fn: function () {}, edit: function () { renameOption(state.optId, state.optName); }
+    }];
+    (state.options || []).forEach(function (o) {
+      items.push({ icon: 'git-branch', label: esc(o.name),
+        fn: function () { activateOption(o.id); },
+        edit: function () { renameOption(o.id, o.name); } });
+    });
+    items.push({ sep: true });
+    items.push({ icon: 'copy-plus', label: 'New option <small>copy of the current plan</small>', fn: createOption });
+    if ((state.options || []).length) {
+      items.push({ sep: true });
+      (state.options || []).forEach(function (o) {
+        items.push({ icon: 'eye', label: 'Compare with ' + esc(o.name), checked: compareOptId === o.id,
+          fn: function () {
+            compareOptId = compareOptId === o.id ? null : o.id;
+            // comparing is a timeline overlay — jump there if elsewhere
+            if (compareOptId && view !== 'planning') {
+              view = 'planning';
+              saveLocal();
+            }
+            render();
+          } });
+      });
+      items.push({ sep: true });
+      items.push({ icon: 'x', label: 'Close “' + esc(state.optName) + '”…',
+        fn: function () { closeOption(state.optId, state.optName); } });
+      (state.options || []).forEach(function (o) {
+        items.push({ icon: 'x', label: 'Close “' + esc(o.name) + '”…',
+          fn: function () { closeOption(o.id, o.name); } });
+      });
+    }
+    openDropdown($('#optBtn'), items);
+  });
+
   // ------------------------------------------------------------ render
   // scoping view columns come from the document (meta.scopeCols — orderable,
   // removable, plus custom ones); widths are user-resizable and remembered in
@@ -1010,6 +1197,9 @@
     applyBuColWidths();
     renderHlCols();
     syncDetailBtn();
+    cmpCache = null; // parked docs may have changed (switch/rename/close)
+    syncOptBtn();
+    syncCmpPill();
     hidePlaceGhost();
     document.body.dataset.view = view;
     // a view switch or re-render can replace the rich cell the floating
@@ -2121,6 +2311,35 @@
         '<div class="b-h r" data-act="bh-r"></div>' +
         ports +
         '</div>';
+    }
+    // option compare: the other option's schedule for this item rides behind
+    // the live bar as a dashed ghost (skipped when the two agree). Days map
+    // through calendar dates so options with different timelines still align.
+    if (view !== 'scoping' && compareOptId) {
+      var cmp = getCmp();
+      var cIt = cmp && cmp.byId[it.id];
+      if (cIt && cIt.startDay != null && (cIt.milestone || cIt.durDays != null)) {
+        var cMeta = cmp.doc.meta;
+        var gs = RM.dateToDay(meta, RM.dayToDate(cMeta, cIt.startDay));
+        var ge = cIt.milestone ? gs
+          : RM.dateToDay(meta, RM.spanEndDate(cMeta, cIt.startDay, RM.itemSpan(cIt)));
+        if (ge == null || ge < gs) ge = gs + Math.max(1, RM.itemSpan(cIt)) - 1;
+        var same = isScheduled(it) && !!cIt.milestone === !!it.milestone && gs === it.startDay &&
+          (cIt.milestone || ge === it.startDay + RM.itemSpan(it) - 1);
+        if (gs != null && gs >= 0 && !same) {
+          var gCol = '#' + RM.colorForItem(cmp.doc, cIt);
+          var gTip = cmp.name + ': ' + (cIt.milestone
+            ? RM.fmtShort(RM.dayToDate(cMeta, cIt.startDay)) + '  ·  milestone'
+            : RM.fmtShort(RM.dayToDate(cMeta, cIt.startDay)) + ' → ' +
+              RM.fmtShort(RM.spanEndDate(cMeta, cIt.startDay, RM.itemSpan(cIt))));
+          laneInner = (cIt.milestone
+            ? '<div class="bar ms cmp" style="left:' + (gs * dayPx()) + 'px;--bar-c:' + gCol +
+              '" title="' + esc(gTip) + '"><span class="ms-diamond"></span></div>'
+            : '<div class="bar cmp" style="left:' + (gs * dayPx()) + 'px;width:' +
+              Math.max(6, (ge - gs + 1) * dayPx()) + 'px;--bar-c:' + gCol +
+              '" title="' + esc(gTip) + '"></div>') + laneInner;
+        }
+      }
     }
     // hard deadline paint: a vertical tick on the deadline day plus a
     // connector from the bar's end — dashed red once the bar runs past it
@@ -4440,7 +4659,7 @@
   rowsEl.addEventListener('pointermove', function (e) {
     if (view !== 'planning' || drag) { hidePlaceGhost(); return; }
     if (!e.target.closest('.row-lane') ||
-      e.target.closest('[data-bar],[data-stbar],[data-ghost],.ghost-pill,.port,.ph-row-bar')) { hidePlaceGhost(); return; }
+      e.target.closest('[data-bar],[data-stbar],[data-ghost],.ghost-pill,.port,.ph-row-bar,.bar.cmp')) { hidePlaceGhost(); return; }
     var stRow = e.target.closest('.row.story[data-story]');
     var itRow = e.target.closest('.row.item');
     var target = null, dur = 5, ms = false;
@@ -5491,12 +5710,27 @@
   }
 
   // ------------------------------------------------------------ topbar: title, tabs, menus
+  // the title IS the file name (shown without .xlsx) — renaming the roadmap
+  // renames the open file on disk in the desktop shell
+  function titleFromFileName(name) {
+    return String(name || '').replace(/\.xlsx$/i, '').trim() || 'Roadmap';
+  }
   $('#docTitle').addEventListener('change', function (e) {
-    commit('title', function (s) { s.meta.title = e.target.value || 'Roadmap'; });
+    var v = titleFromFileName(e.target.value);
+    if (v === state.meta.title) { e.target.value = v; return; }
+    commit('title', function (s) { s.meta.title = v; });
+    e.target.value = state.meta.title;
+    if (window.HeadwayDesktop && HeadwayDesktop.renameTo && HeadwayDesktop.currentPath()) {
+      HeadwayDesktop.renameTo(saveFileName()).then(function (p) {
+        if (p) toast('Renamed file to “' + HeadwayDesktop.basename(p) + '”');
+      }, function (err) {
+        toast('Could not rename the file: ' + (err && err.message || err), 'err');
+      });
+    }
   });
-  // the title edits only via its pencil — readonly otherwise, so header
-  // clicks can't accidentally start a rename (and can drag the window).
-  // While editing, the pencil becomes a checkmark that commits the rename.
+  // the title edits in place — click it to rename. It rests readonly so
+  // header clicks can still drag the desktop window; the click unlocks it,
+  // blur/Enter commits, Esc reverts.
   var titleMeasure = null;
   function sizeTitle() {
     var t = $('#docTitle');
@@ -5513,28 +5747,21 @@
     t.style.width = Math.min(420, Math.max(editing ? 220 : 30, w)) + 'px';
   }
   function setTitleEditing(on) {
-    var t = $('#docTitle'), b = $('#titleEdit');
+    var t = $('#docTitle');
     if (on) t.removeAttribute('readonly');
     else t.setAttribute('readonly', '');
-    b.innerHTML = '<i data-lucide="' + (on ? 'check' : 'pencil') + '"></i>';
-    b.title = on ? 'Save name' : 'Rename roadmap';
-    if (window.lucide) lucide.createIcons();
     sizeTitle();
     if (on) { t.focus(); t.select(); }
   }
-  // pointerdown is swallowed so clicking the checkmark doesn't blur first
-  // (which would flip the button back to a pencil before the click lands)
-  $('#titleEdit').addEventListener('pointerdown', function (e) { e.preventDefault(); });
-  $('#titleEdit').addEventListener('click', function () {
-    var t = $('#docTitle');
-    if (t.hasAttribute('readonly')) setTitleEditing(true);
-    else t.blur(); // fires change → commit; the blur handler restores the pencil
+  $('#docTitle').addEventListener('click', function (e) {
+    if (e.target.hasAttribute('readonly')) setTitleEditing(true);
   });
   $('#docTitle').addEventListener('blur', function () {
     setTitleEditing(false);
   });
   $('#docTitle').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') e.target.blur();
+    if (e.key === 'Escape') { e.target.value = state.meta.title; e.target.blur(); }
   });
   $('#docTitle').addEventListener('input', sizeTitle);
 
@@ -8451,6 +8678,8 @@
         // the file must exist before the project does — Save dialog first
         return HeadwayDesktop.saveBlob(blob, fname, true).then(function (path) {
           if (!path) { toast('Project not created — no file chosen'); return; }
+          // the dialog may have picked a different name — the filename wins
+          st.meta.title = titleFromFileName(HeadwayDesktop.basename(path));
           adoptProject(st, path);
           toast('Created “' + st.meta.title + '” — ' + HeadwayDesktop.basename(path));
         });
@@ -8501,6 +8730,10 @@
           saveLocal();
           noteRecent(path); // keep the start page's title + timestamp fresh
           if (!quiet) toast('Saved ' + HeadwayDesktop.basename(path));
+          // Save As under a different name: the filename wins — retitle the
+          // doc (the autosave that follows rewrites the file to match)
+          var ft = titleFromFileName(HeadwayDesktop.basename(path));
+          if (ft !== state.meta.title) commit('title', function (s) { s.meta.title = ft; });
         });
       }
       var a = document.createElement('a');
@@ -8523,6 +8756,9 @@
   function loadWorkbookBuffer(buf, name, quiet) {
     return RMExcel.importWorkbook(buf).then(function (r) {
       if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
+      // the file's name IS the roadmap's title (minus .xlsx) — a rename on
+      // disk or a differing embedded title resolves in the filename's favor
+      if (name) r.state.meta.title = titleFromFileName(name);
       replaceState('open', r.state);
       docSaved = true; // fresh from disk — matches its file
       updateSaveBtn();

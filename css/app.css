@@ -1737,11 +1737,41 @@ body.chrome-win #topbar { padding-right: 0; }
   border-color: transparent; background: transparent;
   text-overflow: ellipsis;
 }
-#titleEdit {
-  border: 0; background: transparent; padding: 4px; border-radius: 6px;
-  color: var(--ink-3); box-shadow: none; margin-left: -4px;
+/* the title renames in place — a readonly rest state keeps header drags
+   working, but it should still read as clickable */
+.tb-title[readonly] { cursor: pointer; }
+.tb-title[readonly]:hover { background: rgba(var(--ink-rgb), .06); }
+
+/* ---- options — alternate plan versions (dropdown right of the title) */
+#optBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 8px; margin-left: -2px;
+  border: 0; background: transparent; border-radius: 6px;
+  color: var(--ink-2); font-size: 12px; font-weight: 600;
+  box-shadow: none;
 }
-#titleEdit:hover { color: var(--ink); background: rgba(var(--ink-rgb), .06); box-shadow: none; transform: none; }
+#optBtn:hover { color: var(--ink); background: rgba(var(--ink-rgb), .06); box-shadow: none; transform: none; }
+#optBtn i { width: 13px; height: 13px; }
+#optBtn .dm-caret { opacity: .55; }
+#optBtn .opt-cmp-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--blue); flex: 0 0 auto;
+}
+#cmpPill {
+  position: absolute; left: 14px; bottom: 14px; z-index: 30;
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 6px 5px 11px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line-2);
+  box-shadow: var(--shadow-2);
+  font-size: 12px; color: var(--ink-2);
+}
+#cmpPill i { width: 13px; height: 13px; color: var(--blue); }
+#cmpPill button {
+  border: 0; background: transparent; box-shadow: none;
+  padding: 3px; border-radius: 50%; color: var(--ink-3);
+  display: inline-flex; align-items: center;
+}
+#cmpPill button:hover { color: var(--ink); background: rgba(var(--ink-rgb), .07); transform: none; box-shadow: none; }
 
 /* NO position of its own — .hdr-left's `sticky` must stay in effect so the
    filter rides the frozen left pane instead of scrolling with the lane
@@ -1897,6 +1927,25 @@ body.chrome-mac #startBar { padding-left: 96px; }
   border: 2.4px solid var(--bar-c, var(--c-product));
   border-radius: 2.5px;
 }
+/* ---- option compare: the other option's schedule as a dashed ghost.
+   Hoverable for its tooltip, but never draggable (no data-bar). */
+.bar.cmp {
+  z-index: 2; /* behind the live bar (z 3) */
+  top: auto; bottom: 1px; height: 8px; /* slim baseline under the live bar */
+  border-radius: 3px;
+  cursor: default;
+  color: transparent;
+  background: repeating-linear-gradient(-45deg,
+    color-mix(in srgb, var(--bar-c, var(--c-product)) 38%, transparent) 0 4px,
+    transparent 4px 8px);
+  outline: 1px dashed var(--bar-c, var(--c-product));
+  outline-offset: -1px;
+  box-shadow: none;
+}
+.bar.cmp:hover { box-shadow: none; filter: none; }
+.bar.ms.cmp { top: auto; bottom: 0; height: 12px; opacity: .65; outline: none; background: transparent; }
+.bar.ms.cmp .ms-diamond { border-style: dashed; border-width: 2px; width: 10px; height: 10px; top: 50%; }
+
 .bar.ms.selected { outline: none; }
 .bar.ms.selected .ms-diamond { outline: 2px solid var(--ink); outline-offset: 1.5px; }
 .bar.ms .b-label.out { left: 12px; }
