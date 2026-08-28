@@ -55,7 +55,8 @@
     fs.watch(dirname(currentPath), function (event) {
       var paths = (event && event.paths) || [];
       var hit = paths.some(function (p) { return samePath(p, currentPath); });
-      // own writes are filtered by the content fingerprint, not by timing
+      // own writes are filtered by content (byte sig + embedded document
+      // JSON, see below), never by timing
       if (!hit || reloading) return;
       reloadFromDisk();
     }, { delayMs: 800 }).then(function (un) {
@@ -78,6 +79,23 @@
     return bytes.length + ':' + h.toString(16);
   }
 
+  // The byte fingerprint alone cannot tell our own save from a remote edit:
+  // sync clients (OneDrive/SharePoint especially) rewrite the xlsx container
+  // after upload — injected sync metadata re-zips the file — so the bytes
+  // change while the document does not. Track the embedded document JSON
+  // (excel.js hides it in the _RoadmapTool sheet) beside the byte sig; a
+  // changed file whose JSON still matches is an echo of our own write and is
+  // adopted silently instead of announcing a reload.
+  var lastStateJson = null;
+  function noteLoadedBytes(bytes) {
+    lastSig = sigOf(bytes);
+    return window.RMExcel.readStateJson(bytes.buffer).then(function (json) {
+      lastStateJson = json;
+    }, function () {
+      lastStateJson = null;
+    });
+  }
+
   // Sync clients (OneDrive especially) fire the change event before the new
   // bytes are fully on disk — an immediate read can return the old content
   // or a partial file. Retry with backoff until genuinely new bytes appear.
@@ -98,11 +116,24 @@
         }
         return;
       }
-      return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
-        lastSig = sig;
-        app().toast('Reloaded “' + basename(p) + '” — changed on disk');
-      }).finally(function () {
-        reloading = false;
+      // new bytes — but is it a new DOCUMENT? A sync client's container
+      // rewrite of our own save carries the same embedded JSON: adopt the
+      // new bytes quietly and leave the editor alone.
+      return window.RMExcel.readStateJson(bytes.buffer).catch(function () {
+        return null;
+      }).then(function (json) {
+        if (json != null && lastStateJson != null && json === lastStateJson) {
+          lastSig = sig;
+          reloading = false;
+          return;
+        }
+        return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
+          lastSig = sig;
+          lastStateJson = json;
+          app().toast('Reloaded “' + basename(p) + '” — changed on disk');
+        }).finally(function () {
+          reloading = false;
+        });
       });
     }).catch(function (err) {
       reloading = false;
@@ -116,9 +147,8 @@
       dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {
         if (!p) return;
         fs.readFile(p).then(function (bytes) {
-          var sig = sigOf(bytes);
           return app().loadBuffer(bytes.buffer, basename(p)).then(function () {
-            lastSig = sig;
+            return noteLoadedBytes(bytes);
           });
         }).then(function () {
           setPath(p);
@@ -129,8 +159,10 @@
     },
 
     // write the workbook; dialog only when there's no path yet (or Save As).
-    // Resolves to the saved path, or null if the user canceled.
-    saveBlob: function (blob, suggestedName, forceDialog) {
+    // stateJson: the document JSON embedded in this blob (RMExcel.stateJsonOf)
+    // — remembered so a sync client's rewrite of this save is not mistaken
+    // for a remote change. Resolves to the saved path, or null on cancel.
+    saveBlob: function (blob, suggestedName, forceDialog, stateJson) {
       var target = (currentPath && !forceDialog)
         ? Promise.resolve(currentPath)
         : dialog.save({ defaultPath: suggestedName, filters: XLSX_FILTER });
@@ -140,6 +172,7 @@
         return blob.arrayBuffer().then(function (buf) {
           var u8 = new Uint8Array(buf);
           lastSig = sigOf(u8);
+          lastStateJson = stateJson != null ? stateJson : null;
           return fs.writeFile(p, u8);
         }).then(function () {
           if (!samePath(p, currentPath || '')) setPath(p);
@@ -172,9 +205,8 @@
     // open a known path (start page recents) — rejects if unreadable
     openPath: function (p) {
       return fs.readFile(p).then(function (bytes) {
-        var sig = sigOf(bytes);
         return app().loadBuffer(bytes.buffer, basename(p)).then(function () {
-          lastSig = sig;
+          return noteLoadedBytes(bytes);
         });
       }).then(function () {
         setPath(p);

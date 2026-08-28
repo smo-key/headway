@@ -32,6 +32,38 @@
     return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + argbHex } };
   }
 
+  // \u-escape every non-ASCII char: the result is still valid JSON, and
+  // pure-ASCII chunks are immune to the surrogate-pair corruption ExcelJS
+  // exhibits at certain in-cell offsets (splitting mid-escape is fine —
+  // concatenation restores it before JSON.parse).
+  function asciiJson(obj) {
+    return JSON.stringify(obj).replace(/[\u007F-\uFFFF]/g, function (ch) {
+      return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
+    });
+  }
+  // The canonical serialized document: the EXACT string exportWorkbook embeds
+  // in the hidden sheet. Two files carry the same document iff these match.
+  RMExcel.stateJsonOf = function (state) { return asciiJson(state); };
+
+  // The embedded document JSON of a workbook (the string stateJsonOf wrote),
+  // or null for foreign/template files with no valid _RoadmapTool sheet.
+  // Lets callers tell a container rewrite (sync clients re-zip xlsx files
+  // without touching cell content) from a real document change.
+  RMExcel.readStateJson = function (arrayBuffer) {
+    var ExcelJS = ExcelJSRef();
+    var wb = new ExcelJS.Workbook();
+    return wb.xlsx.load(arrayBuffer).then(function () {
+      var hws = wb.getWorksheet('_RoadmapTool');
+      if (!hws || cellText(hws.getCell('A1')) !== STATE_VERSION) return null;
+      var chunks = [];
+      var count = parseInt(cellText(hws.getCell('A2')), 10) || 0;
+      for (var i = 0; i < count; i++) chunks.push(cellRaw(hws.getCell(2 + i, 2)));
+      var json = chunks.join('');
+      try { JSON.parse(json); } catch (e) { return null; }
+      return json;
+    });
+  };
+
   function depCellText(it) {
     var parts = it.deps.map(String);
     (it.depsText || []).forEach(function (t) { parts.push(t); });
@@ -299,13 +331,7 @@
     // ---- hidden lossless state sheet
     var hws = wb.addWorksheet('_RoadmapTool');
     hws.getCell('A1').value = STATE_VERSION;
-    // \u-escape every non-ASCII char: the result is still valid JSON, and
-    // pure-ASCII chunks are immune to the surrogate-pair corruption ExcelJS
-    // exhibits at certain in-cell offsets (splitting mid-escape is fine —
-    // concatenation restores it before JSON.parse).
-    var json = JSON.stringify(state).replace(/[\u007F-\uFFFF]/g, function (ch) {
-      return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
-    });
+    var json = RMExcel.stateJsonOf(state);
     var n = 0;
     for (var off = 0; off < json.length;) {
       var len = Math.min(CHUNK, json.length - off);
@@ -314,11 +340,7 @@
       n += 1;
     }
     hws.getCell('A2').value = n; // chunk count
-    if (ui) {
-      hws.getCell('A3').value = JSON.stringify(ui).replace(/[\u007F-\uFFFF]/g, function (ch) {
-        return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
-      });
-    }
+    if (ui) hws.getCell('A3').value = asciiJson(ui);
     hws.state = 'veryHidden';
 
     return wb.xlsx.writeBuffer().then(function (buf) {

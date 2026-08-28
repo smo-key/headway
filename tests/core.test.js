@@ -969,7 +969,33 @@ if (!ExcelJS) {
           ok(e1.stories[0].done === true, 'story Done toggled from the sheet');
           var un = r3.state.items.filter(function (i2) { return i2.num === st.items[1].num; })[0];
           ok(un.feature === st.items[1].feature, 'untouched rows keep their hidden-state values');
-          finish();
+
+          // sync-client echo detection: a container rewrite (re-zip of the
+          // same workbook — what OneDrive does after upload) changes the
+          // bytes but NOT the embedded document JSON. The desktop shell
+          // compares readStateJson against the stateJsonOf it last wrote to
+          // swallow echoes of its own save instead of announcing a reload.
+          var jsonOut = RMExcel.stateJsonOf(st);
+          return RMExcel.readStateJson(buf).then(function (jsonBack) {
+            ok(typeof jsonBack === 'string' && jsonBack === jsonOut,
+              'readStateJson returns the exact string stateJsonOf embedded');
+            var wb4 = new ExcelJS.Workbook();
+            return wb4.xlsx.load(buf).then(function () {
+              return wb4.xlsx.writeBuffer();
+            });
+          }).then(function (buf4) {
+            return RMExcel.readStateJson(buf4);
+          }).then(function (json4) {
+            ok(json4 === jsonOut, 'embedded JSON survives a container rewrite unchanged');
+            var wb5 = new ExcelJS.Workbook();
+            wb5.addWorksheet('Sheet1').getCell('A1').value = 'not a headway file';
+            return wb5.xlsx.writeBuffer();
+          }).then(function (buf5) {
+            return RMExcel.readStateJson(buf5);
+          }).then(function (json5) {
+            ok(json5 === null, 'foreign workbooks read as null (no echo match possible)');
+            finish();
+          });
         });
       });
     });

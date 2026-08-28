@@ -8732,10 +8732,14 @@
       btn.dataset.mode = '';
       updateSaveBtn();
     }
+    // the exact document JSON this export embeds — the desktop shell keeps it
+    // to recognize a sync client's rewrite of this very save (same document,
+    // different bytes) and not reload over it
+    var stateJson = RMExcel.stateJsonOf(state);
     return RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
       var name = saveFileName();
       if (window.HeadwayDesktop) { // desktop: write straight to disk
-        return HeadwayDesktop.saveBlob(blob, name, forceDialog).then(function (path) {
+        return HeadwayDesktop.saveBlob(blob, name, forceDialog, stateJson).then(function (path) {
           if (!path) return; // dialog canceled
           lastExport = new Date().toTimeString().slice(0, 5);
           docSaved = true;
