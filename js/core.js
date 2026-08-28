@@ -285,12 +285,14 @@
   ];
 
   // Categorical bar palette (CVD-validated): product blue / data orange /
-  // process green / mixed plum.
+  // process green / mixed plum. `neutral` is the gray every workstream
+  // falls back to until a color is chosen.
   RM.PALETTE = {
     product: '3273BD',
     data: 'C25E0E',
     process: '08875B',
-    mixed: 'A14FBF'
+    mixed: 'A14FBF',
+    neutral: '6E7883'
   };
   RM.PALETTE_KEYS = ['product', 'data', 'process', 'mixed'];
 
@@ -314,19 +316,19 @@
     return null;
   }
   // The DEFAULT workstream: what a null/empty workstream means. It is a
-  // real, renamable workstream with its own color (blue unless changed).
+  // real, renamable workstream with its own color (gray unless changed).
   RM.defaultWsName = function (state) {
     var m = state && state.meta;
     return (m && typeof m.defaultWsName === 'string' && m.defaultWsName.trim()) || 'General';
   };
   RM.defaultWsColor = function (state) {
     var m = state && state.meta;
-    return (m && resolveColor(m.defaultWsColor)) || RM.PALETTE.product;
+    return (m && resolveColor(m.defaultWsColor)) || RM.PALETTE.neutral;
   };
   RM.colorForWs = function (state, ws) {
     if (!ws) return RM.defaultWsColor(state);
     var c = state && state.wsColors ? resolveColor(state.wsColors[ws]) : null;
-    return c || RM.PALETTE.product;
+    return c || RM.PALETTE.neutral;
   };
   RM.colorForItem = function (state, it) {
     return RM.colorForWs(state, it.workstream);
@@ -910,7 +912,7 @@
       ? m.defaultWsName.trim() : 'General';
     m.defaultWsColor = (function () {
       var hex = String(m.defaultWsColor || '').replace(/^#/, '').toUpperCase();
-      return /^[0-9A-F]{6}$/.test(hex) ? hex : RM.PALETTE.product;
+      return /^[0-9A-F]{6}$/.test(hex) ? hex : RM.PALETTE.neutral;
     })();
     // workflow statuses (feature + story lists may differ)
     m.statuses = (function () {

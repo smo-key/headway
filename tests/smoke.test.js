@@ -189,7 +189,15 @@ ok(doc.querySelector('#panel .p-name').value.length > 0, 'panel shows the featur
 ok(doc.querySelector('#panel .wz-ed[data-f="col:description"]') !== null, 'panel has a description field');
 ok(doc.querySelector('#panel .p-sec[data-sec="fields"]').classList.contains('open'), 'Fields section is open by default');
 ok(doc.querySelector('#panel .p-actions') === null, 'footer Duplicate/Delete buttons are gone');
-ok(doc.querySelector('#panel .p-more') !== null, 'panel has a … actions button');
+ok(doc.querySelector('#panel .p-more') === null, 'the … actions button is gone from the panel');
+{
+  doc.querySelector('#panel .p-top').dispatchEvent(
+    new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 500, clientY: 100 }));
+  ok(!doc.querySelector('#popover').hidden &&
+    Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Duplicate/.test(b.textContent)),
+    'right-clicking the panel opens the item actions menu');
+  doc.querySelector('#popover').hidden = true;
+}
 ok(doc.querySelector('#panel [data-dd=epic]') !== null, 'epic is a dropdown button');
 click(doc.querySelector('#panel [data-dd=epic]'));
 ok(!doc.querySelector('#popover').hidden && doc.querySelectorAll('#popover .menu-list [data-mi]').length > 2, 'epic dropdown opens the shared list UI');
@@ -469,7 +477,7 @@ ok(doc.querySelectorAll('#setupView [data-suphedit]').length === state().phases.
 suTab('workstreams');
 ok(doc.querySelectorAll('#setupView [data-suwsedit]').length > 0, 'workstreams listed with edit controls');
 
-// picking "Default blue" for a workstream with a seeded default must SURVIVE
+// picking "Default gray" for a workstream with a seeded default must SURVIVE
 // a reload — the choice is stored explicitly, not deleted (regression: the
 // known-default re-seeded on load and reverted the color)
 {
@@ -477,11 +485,11 @@ ok(doc.querySelectorAll('#setupView [data-suwsedit]').length > 0, 'workstreams l
     .find(b => b.dataset.suwsedit === 'Product') || doc.querySelector('#setupView [data-suwsedit]');
   const wsName = editBtn.dataset.suwsedit;
   click(editBtn);
-  click(doc.querySelector('.swatch[data-esw="product"]'));
+  click(doc.querySelector('.swatch[data-esw="neutral"]'));
   click(doc.querySelector('#wsSave'));
-  ok(state().wsColors[wsName] === 'product', 'Default blue stored explicitly for ' + wsName);
+  ok(state().wsColors[wsName] === 'neutral', 'Default gray stored explicitly for ' + wsName);
   const reloaded = window.RM.normalizeState(JSON.parse(JSON.stringify(state())));
-  ok(window.RM.colorForWs(reloaded, wsName) === window.RM.PALETTE.product,
+  ok(window.RM.colorForWs(reloaded, wsName) === window.RM.PALETTE.neutral,
     'color survives a reload (normalize does not re-seed the default)');
 }
 ok(doc.querySelectorAll('#setupView .su-grip').length ===
@@ -655,8 +663,11 @@ cell.innerHTML = 'noted in the grid';
 cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
 ok(state().items.find(i => i.id === itId).notes === 'noted in the grid', 'scoping cell edit commits');
 
-// column management: remove the Description built-in via its column menu…
-click(doc.querySelector('#hdrSprints [data-colmenu="description"]'));
+// column management: right-click a header cell for its column menu (the ⋯
+// button is gone) — remove the Description built-in…
+ok(!doc.querySelector('#hdrSprints .sc-hmenu'), 'header cells carry no ⋯ menu button');
+doc.querySelector('#hdrSprints .sc-hcell[data-col="description"]').dispatchEvent(
+  new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 60 }));
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Remove column/.test(b.textContent)));
 ok(!doc.querySelector('#hdrSprints [data-col="description"]'), 'column removed via its menu');
 // …then re-add it (now hidden) through the "+" menu
@@ -665,7 +676,8 @@ const descAdd = Array.from(doc.querySelectorAll('#popover .menu-list button')).f
 click(descAdd);
 ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'hidden built-in column re-added via + menu');
 // leave the grid as it started: Description back in front of Enables
-click(doc.querySelector('#hdrSprints [data-colmenu="description"]'));
+doc.querySelector('#hdrSprints .sc-hcell[data-col="description"]').dispatchEvent(
+  new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 60 }));
 {
   const mv = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Move left/.test(b.textContent));
   if (mv) click(mv);
@@ -686,7 +698,8 @@ if (ownerCell) {
   ownerCell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
   ok(state().items.find(i => i.id === itId).custom[ownerCol.key] === 'Rita', 'custom cell edit commits to item.custom');
 }
-click(doc.querySelector('#hdrSprints [data-colmenu="' + ownerCol.key + '"]'));
+doc.querySelector('#hdrSprints .sc-hcell[data-col="' + ownerCol.key + '"]').dispatchEvent(
+  new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 60 }));
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Move left/.test(b.textContent)));
 {
   const ord = state().meta.scopeColOrder;

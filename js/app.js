@@ -1934,9 +1934,8 @@
     allScopeCols().forEach(function (c) {
       var fixed = isFixedColKey(c[0]);
       out.push('<div class="sc-hcell' + (fixed ? ' sc-fixh' : '') + '" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
-        '<span class="sc-hlab" title="Drag to reorder the column">' + esc(c[1]) + '</span>' +
-        (fixed ? '' : '<button class="sc-hmenu" data-colmenu="' + c[0] + '" title="Column options"><i data-lucide="ellipsis"></i></button>') +
-        '<span class="sc-rz" data-rz="' + c[0] + '" title="Drag to resize column"></span></div>');
+        '<span class="sc-hlab">' + esc(c[1]) + '</span>' +
+        '<span class="sc-rz" data-rz="' + c[0] + '"></span></div>');
     });
     out.push('<div class="sc-hcell sc-hadd"><button class="sc-hbtn" data-coladd title="Add a column">' +
       '<i data-lucide="plus"></i></button></div>');
@@ -2432,7 +2431,7 @@
       '<div class="row item' + (view === 'scoping' ? ' scope' : '') +
       (selectedId === it.id ? ' selected' : '') + (it.done ? ' done' : '') +
       '" data-id="' + it.id + '">' +
-      '<div class="row-left" title="Drag to reorder / move phase">' +
+      '<div class="row-left">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
       // milestones carry no stories; in story detail every feature is open
       // and the chevron is inert (a fixed level, not a per-row toggle)
@@ -2798,7 +2797,7 @@
     if (!it) {
       panel.hidden = false;
       panel.innerHTML =
-        '<div id="panelRz" title="Drag to resize"></div>' +
+        '<div id="panelRz"></div>' +
         '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
         '<div class="p-empty">No item selected<span>Click a row on the timeline to edit it here.</span></div>';
       if (window.lucide) lucide.createIcons();
@@ -2956,11 +2955,10 @@
     }).join('') || '<div class="p-none">No columns — add one in the Scoping view.</div>';
 
     panel.innerHTML =
-      '<div id="panelRz" title="Drag to resize"></div>' +
+      '<div id="panelRz"></div>' +
       '<div class="p-top"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
       '" title="Item # — an invalid or taken number picks the next available one"></span>' +
       (it.milestone ? '<span class="p-mschip" title="Milestone — fixed date">◆ Milestone</span>' : '') +
-      '<button class="p-more" data-f="more" title="Duplicate, convert, delete…"><i data-lucide="ellipsis"></i></button>' +
       '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
@@ -3057,11 +3055,10 @@
     }
 
     panel.innerHTML =
-      '<div id="panelRz" title="Drag to resize"></div>' +
+      '<div id="panelRz"></div>' +
       '<div class="p-top">' +
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
-      '<button class="p-more" data-stf="more" title="Delete…"><i data-lucide="ellipsis"></i></button>' +
       '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
       '<label class="p-check fixed" style="margin:6px 0 2px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
@@ -3273,8 +3270,8 @@
     var setting = state.wsColors[wsName] || null;
     var cur = '#' + RM.colorForWs(state, wsName);
     var count = state.items.filter(function (x) { return x.workstream === wsName; }).length;
-    var sw = '<button class="swatch' + (!setting || setting === 'product' ? ' on' : '') + '" data-esw="product" style="background:#' + RM.PALETTE.product + '" title="Default blue"></button>' +
-      RM.PALETTE_KEYS.slice(1).map(function (k) {
+    var sw = '<button class="swatch' + (!setting || setting === 'neutral' ? ' on' : '') + '" data-esw="neutral" style="background:#' + RM.PALETTE.neutral + '" title="Default gray"></button>' +
+      RM.PALETTE_KEYS.map(function (k) {
         return '<button class="swatch' + (setting === k ? ' on' : '') + '" data-esw="' + k + '" style="background:#' + RM.PALETTE[k] + '" title="' + k + '"></button>';
       }).join('');
     openModal(
@@ -3290,7 +3287,7 @@
       '<button id="wsDelete" class="danger" style="margin-right:auto">Delete workstream</button>' +
       '<button data-m="x2">Cancel</button><button id="wsSave" class="primary">Save</button></div></div>',
       function (host) {
-        var picked = setting; // palette key, hex, or null (default blue)
+        var picked = setting; // palette key, hex, or null (default gray)
         $('[data-m=x]', host).onclick = closeModal;
         $('[data-m=x2]', host).onclick = closeModal;
         host.addEventListener('click', function (ev) {
@@ -3331,8 +3328,8 @@
             }
             // store the choice EXPLICITLY — deleting the entry would let the
             // known-workstream default (e.g. Product = plum) re-seed on the
-            // next load and silently revert a "Default blue" pick
-            s.wsColors[name2] = picked || 'product';
+            // next load and silently revert a "Default gray" pick
+            s.wsColors[name2] = picked || 'neutral';
           });
         };
       });
@@ -3403,19 +3400,6 @@
     if (stf && selStory) {
       var stfk = stf.dataset.stf;
       if (stfk === 'up') { select(it.id); return; }
-      if (stfk === 'more') {
-        var stMoreId = selStory;
-        openDropdown(stf, [
-          { icon: 'trash-2', label: 'Delete story', fn: function () {
-            commit('delete story', function (s) {
-              var t = RM.itemById(s, it.id);
-              t.stories = t.stories.filter(function (x) { return x.id !== stMoreId; });
-              selStory = null;
-            });
-          } }
-        ]);
-        return;
-      }
       if (stfk === 'untimeline') {
         commit('story timeline', function (s) {
           var st2 = storyById(RM.itemById(s, it.id) || {}, selStory);
@@ -3521,17 +3505,6 @@
     if (!btn) return;
     var f = btn.dataset.f;
     if (f === 'close') { select(null); return; }
-    if (f === 'more') {
-      openDropdown(btn, [
-        { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
-        { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
-          label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
-          fn: function () { toggleMilestone(it.id); } },
-        { sep: true },
-        { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(it.id); } }
-      ]);
-      return;
-    }
     if (f === 'size') {
       var v = btn.dataset.v || null;
       commit('size', function (s) {
@@ -4449,6 +4422,37 @@
   }
 
   // right-click on app chrome (header, setup, start page background) →
+  // right panel: right-click = the item / story action menu (the actions the
+  // old ⋯ button carried — duplicate, convert, delete)
+  $('#panel').addEventListener('contextmenu', function (e) {
+    if (e.target.closest('input, textarea, select, [contenteditable="true"], button')) return;
+    var it = selectedId != null ? RM.itemById(state, selectedId) : null;
+    if (!it) return;
+    e.preventDefault();
+    e.stopPropagation(); // the theme fallback must not replace this menu
+    if (selStory) {
+      var stMoreId = selStory;
+      openContextMenu(e.clientX, e.clientY, [
+        { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
+          commit('delete story', function (s) {
+            var t = RM.itemById(s, it.id);
+            t.stories = t.stories.filter(function (x) { return x.id !== stMoreId; });
+            selStory = null;
+          });
+        } }
+      ]);
+      return;
+    }
+    openContextMenu(e.clientX, e.clientY, [
+      { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
+      { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
+        label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
+        fn: function () { toggleMilestone(it.id); } },
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(it.id); } }
+    ]);
+  });
+
   // quick app menu: theme switch lives here
   // No surface shows the browser's default context menu. Editable text keeps
   // the native menu (copy/paste is essential there); specific surfaces attach
@@ -4469,10 +4473,10 @@
       return;
     }
     // scoping column headers: right-click = the column menu
-    var colHd = e.target.closest('#hdrSprints [data-colmenu]');
-    if (colHd && view === 'scoping') {
+    var colHd = e.target.closest('#hdrSprints .sc-hcell[data-col]');
+    if (colHd && view === 'scoping' && !isFixedColKey(colHd.dataset.col)) {
       e.preventDefault();
-      colHd.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      openContextMenu(e.clientX, e.clientY, scopeColMenuItems(colHd.dataset.col));
       return;
     }
     e.preventDefault();
@@ -5110,7 +5114,7 @@
       e.stopPropagation();
       return;
     }
-    if (e.target.closest('.sc-hmenu,.sc-hadd,button,input')) return;
+    if (e.target.closest('.sc-hadd,button,input')) return;
     var hc = e.target.closest('.sc-hcell[data-col]');
     if (!hc) return;
     drag = { kind: 'scolmove', key: hc.dataset.col, x0: e.clientX, y0: e.clientY, moved: false, indicator: null };
@@ -5160,7 +5164,8 @@
     });
   }
 
-  // scoping column menus: reorder / rename / remove, plus the trailing "+"
+  // scoping header: the trailing "+" adds a column (column menus open on
+  // right-click — see the document contextmenu handler)
   $('#hdrSprints').addEventListener('click', function (e) {
     if (view !== 'scoping') return;
     var add = e.target.closest('[data-coladd]');
@@ -5179,9 +5184,11 @@
       openDropdown(add, items);
       return;
     }
-    var mb = e.target.closest('[data-colmenu]');
-    if (!mb) return;
-    var key = mb.dataset.colmenu;
+  });
+
+  // column menu for a (non-fixed) scoping column: reorder / rename / remove;
+  // opened by right-clicking the column's header cell
+  function scopeColMenuItems(key) {
     var ordKeys = allScopeCols().map(function (c) { return c[0]; });
     var idx = ordKeys.indexOf(key);
     function shiftCol(dir) {
@@ -5205,8 +5212,8 @@
     items2.push({ icon: 'trash-2', label: 'Remove column', fn: function () {
       commit('remove column', function (s) { RM.removeScopeCol(s, key); });
     } });
-    openDropdown(mb, items2);
-  });
+    return items2;
+  }
 
   // create (key == null) or rename a scoping column (built-ins included —
   // clearing the label restores a built-in's canonical name)
@@ -6422,9 +6429,9 @@
   };
   var BU_KEYS = ['role', 'type', 'ws', 'cost', 'rate', 'margin', 'total'];
   var PL_COL_DEFS = {
-    size: ['size', 'Size — click a row chip to change', 34],
-    dur: ['dur', 'Duration in weeks', 34],
-    asg: ['ppl', 'Assignees', 44]
+    size: ['Size', 'Size — click a row chip to change', 34],
+    dur: ['Wks', 'Duration in weeks', 34],
+    asg: ['Ppl', 'Assignees', 44]
   };
   var PL_KEYS = ['size', 'dur', 'asg'];
   function orderedCols(order, allKeys) {
@@ -6459,14 +6466,14 @@
     if (view === 'budget') {
       el.innerHTML = buColsVisible().map(function (k) {
         return '<i class="bu-only" data-bucol="' + k + '" title="' +
-          esc(BU_COL_DEFS[k][1] + '\nDrag to reorder · click for columns · right edge resizes') +
+          esc(BU_COL_DEFS[k][1]) +
           '" style="width:var(--bu-w-' + k + ')">' + esc(BU_COL_DEFS[k][0]) +
-          '<span class="bu-rz" data-burz="' + k + '" title="Drag to resize"></span></i>';
+          '<span class="bu-rz" data-burz="' + k + '"></span></i>';
       }).join('');
     } else {
       el.innerHTML = plColsVisible().map(function (k) {
         return '<i class="pl-only' + (k === 'size' ? ' sz-lab' : '') + '" data-plcol="' + k + '" title="' +
-          esc(PL_COL_DEFS[k][1] + '\nDrag to reorder · click for column options') +
+          esc(PL_COL_DEFS[k][1]) +
           '" style="width:' + PL_COL_DEFS[k][2] + 'px">' + esc(PL_COL_DEFS[k][0]) + '</i>';
       }).join('');
     }
@@ -6475,9 +6482,9 @@
     var keys = kind === 'bu' ? buColsOrdered() : plColsOrdered();
     var defs = kind === 'bu' ? BU_COL_DEFS : PL_COL_DEFS;
     var hide = kind === 'bu' ? buColHide : plColHide;
+    var MENU_LBL = { size: 'Size', dur: 'Duration', asg: 'Assignees' };
     var items = keys.map(function (k) {
-      var lbl = defs[k][0] || k;
-      lbl = lbl === 'ppl' ? 'Assignees' : lbl.charAt(0).toUpperCase() + lbl.slice(1);
+      var lbl = MENU_LBL[k] || defs[k][0] || k;
       return { icon: hide[k] ? 'eye-off' : 'eye', label: esc(lbl), checked: !hide[k], fn: function () {
         hide[k] = !hide[k];
         if (keys.every(function (x) { return hide[x]; })) hide[k] = false; // keep one column
@@ -6510,8 +6517,8 @@
     window.addEventListener('pointermove', mv);
     window.addEventListener('pointerup', up);
   }
-  // drag a header label to reorder its column; a plain click (no movement)
-  // opens the columns menu (show / hide / reset)
+  // drag a header label to reorder its column; the columns menu
+  // (show / hide / reset) opens on right-click instead
   function startHdrColDrag(e, cell) {
     e.preventDefault();
     var isBu = cell.dataset.bucol != null;
@@ -6549,10 +6556,7 @@
       window.removeEventListener('pointerup', up);
       cell.classList.remove('colgrab');
       if (ind) ind.remove();
-      if (!moved) {
-        openContextMenu(ev.clientX, ev.clientY, columnsMenuItems(isBu ? 'bu' : 'pl'));
-        return;
-      }
+      if (!moved) return;
       var vis = (isBu ? buColsVisible() : plColsVisible()).slice();
       var from = vis.indexOf(key);
       if (from === -1 || at == null) return;
@@ -6576,6 +6580,14 @@
     if (rz) { startBuColResize(e, rz.dataset.burz); return; }
     var cell = e.target.closest('i[data-bucol],i[data-plcol]');
     if (cell) startHdrColDrag(e, cell);
+  });
+  // right-click a column label (or the header corner, below) = columns menu
+  $('#hlCols').addEventListener('contextmenu', function (e) {
+    var cell = e.target.closest('i[data-bucol],i[data-plcol]');
+    if (!cell) return;
+    e.preventDefault();
+    e.stopPropagation(); // the corner + theme fallbacks must not double up
+    openContextMenu(e.clientX, e.clientY, columnsMenuItems(cell.dataset.bucol != null ? 'bu' : 'pl'));
   });
   document.addEventListener('contextmenu', function (e) {
     var corner = e.target.closest('.hdr-left.corner');
@@ -6653,7 +6665,7 @@
       };
       html.push('<div class="row brole" data-mid="' + m.id + '">' +
         '<div class="row-left">' +
-        '<span class="r-grip bu-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
+        '<span class="r-grip bu-grip"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="r-dot" style="background:#' + wsHex + '"></span>' +
         memberColsHtml(m, moneyMap) +
         '</div><div class="row-lane">' + cells.join('') + '</div></div>');
@@ -6706,7 +6718,7 @@
       });
       html.push('<div class="row brole bcost" data-cost="' + c.id + '">' +
         '<div class="row-left">' +
-        '<span class="r-grip bu-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
+        '<span class="r-grip bu-grip"><i data-lucide="grip-vertical"></i></span>' +
         '<span class="r-dot nodot"></span>' +
         '<span class="bu-nm"><input class="bu-in bu-nm-in" data-cf="name" value="' + esc(c.name) + '"></span>' +
         costCols +
@@ -7261,7 +7273,7 @@
     }).join('');
 
     function grip() {
-      return '<span class="su-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>';
+      return '<span class="su-grip"><i data-lucide="grip-vertical"></i></span>';
     }
     // the default workstream (null in the data) leads the list — renamable,
     // recolorable, not deletable and not draggable
@@ -7717,7 +7729,7 @@
       var wv = $('#suWsAdd').value.trim();
       if (!wv) return;
       commit('add workstream', function (s2) {
-        if (!s2.wsColors[wv]) s2.wsColors[wv] = RM.DEFAULT_WS_COLORS[wv] || RM.PALETTE.product;
+        if (!s2.wsColors[wv]) s2.wsColors[wv] = RM.DEFAULT_WS_COLORS[wv] || 'neutral';
       });
       return;
     }
@@ -7956,7 +7968,7 @@
       html.push(
         '<div class="rrow" data-mid="' + m.id + '">' +
         '<div class="rleft">' +
-        '<span class="r-grip rr-grip" title="Drag to reorder"><i data-lucide="grip-vertical"></i></span>' +
+        '<span class="r-grip rr-grip"><i data-lucide="grip-vertical"></i></span>' +
         memberColsHtml(m) +
         (state.meta.capacityEnabled
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +

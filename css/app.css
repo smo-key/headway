@@ -358,7 +358,8 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .hl-title { font-weight: 700; font-size: 12px; letter-spacing: .02em; color: var(--ink-2); }
 /* label widths mirror the row chips exactly (size 34 · risk 26 · hc 30 · warn 22) */
 .hl-cols { display: flex; gap: 0; }
-.hl-cols i { font-style: normal; font-size: 10px; color: var(--ink-3); text-align: center; flex: 0 0 auto; }
+/* column labels match the Scoping header type: 10.5px / 700 / ink */
+.hl-cols i { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--ink); text-align: center; flex: 0 0 auto; }
 .cap-label { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 
 .sprint-cell {
@@ -1447,16 +1448,6 @@ body[data-view="scoping"] .row.item .row-lane { background: var(--surface); }
 }
 .sc-hbtn svg { width: 12px; height: 12px; opacity: .45; flex: 0 0 auto; }
 .sc-hbtn:hover svg { opacity: 1; }
-.sc-hmenu {
-  margin-left: auto;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: none; border: 0; padding: 3px;
-  border-radius: 5px;
-  color: var(--ink-3);
-  cursor: pointer;
-}
-.sc-hmenu svg { width: 13px; height: 13px; }
-.sc-hmenu:hover, .sc-hmenu:focus-visible { color: var(--ink-2); background: var(--surface); }
 .sc-hadd { width: 40px; justify-content: center; border-right: 0; }
 
 /* ------------------------------------------------------------- setup view */
@@ -1973,13 +1964,6 @@ body.chrome-mac #startBar { padding-left: 96px; }
 .st-doneck svg { width: 12px; height: 12px; }
 
 /* ------------------------------------------------------- panel header row */
-.p-more {
-  border: 0; background: transparent; padding: 4px 6px;
-  color: var(--ink-3);
-  margin-left: auto;
-}
-.p-more:hover { color: var(--ink); box-shadow: none; }
-.p-top .p-close { margin-left: 0; }
 .p-mschip {
   font-size: 10.5px; font-weight: 700;
   color: var(--blue);

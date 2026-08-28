@@ -337,14 +337,14 @@ ok(!RM.validate(rOk.state).global.some(function (g) { return g.code === 'OVER_CA
 // ------------------------------------------------------------- color
 section('colors');
 var sCol = mkState([{ num: 1, feature: 'x', workstream: 'Custom A' }, { num: 2, feature: 'y', workstream: 'Custom B' }, { num: 3, feature: 'z' }]);
-eq(RM.colorForItem(sCol, sCol.items[0]), RM.PALETTE.product, 'unknown workstream without a color is blue');
-eq(RM.colorForItem(sCol, sCol.items[2]), RM.PALETTE.product, 'no workstream is blue');
+eq(RM.colorForItem(sCol, sCol.items[0]), RM.PALETTE.neutral, 'unknown workstream without a color is gray');
+eq(RM.colorForItem(sCol, sCol.items[2]), RM.PALETTE.neutral, 'no workstream is gray');
 sCol.wsColors['Custom B'] = 'process';
 eq(RM.colorForItem(sCol, sCol.items[1]), RM.PALETTE.process, 'palette-key workstream color applies');
 sCol.wsColors['Custom A'] = '#A14FBF';
 eq(RM.colorForItem(sCol, sCol.items[0]), 'A14FBF', 'custom hex workstream color applies');
 sCol.wsColors['Custom A'] = 'not-a-color';
-eq(RM.colorForItem(sCol, sCol.items[0]), RM.PALETTE.product, 'invalid custom color falls back to blue');
+eq(RM.colorForItem(sCol, sCol.items[0]), RM.PALETTE.neutral, 'invalid custom color falls back to gray');
 var sCol2 = mkState([{ num: 1, feature: 'x', workstream: 'OS' }, { num: 2, feature: 'y', workstream: 'Data' }]);
 eq(RM.colorForWs(sCol2, 'OS'), '3273BD', 'seeded default: OS is blue');
 eq(RM.colorForWs(sCol2, 'Data'), RM.DEFAULT_WS_COLORS['Data'], 'seeded default: known workstreams get their own color');
@@ -1024,13 +1024,13 @@ eq(RM.riskColLabel(sRs3), 'Confidence', 'confidence label');
 section('default workstream');
 var sDw = mkState([{ num: 1, feature: 'a' }]);
 eq(RM.defaultWsName(sDw), 'General', 'default workstream is General');
-eq(RM.colorForWs(sDw, ''), RM.PALETTE.product, 'null workstream paints the default blue');
+eq(RM.colorForWs(sDw, ''), RM.PALETTE.neutral, 'null workstream paints the default gray');
 sDw.meta.defaultWsName = 'Core';
 sDw.meta.defaultWsColor = '08875B';
 eq(RM.defaultWsName(sDw), 'Core', 'default workstream renames');
 eq(RM.colorForWs(sDw, ''), '08875B', 'default workstream color follows the setting');
 var sDwN = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, defaultWsColor: 'nope', holidaysV2026: true }, phases: [{ id: 'p' }], items: [] });
-eq(sDwN.meta.defaultWsColor, RM.PALETTE.product, 'bad default color falls back to blue');
+eq(sDwN.meta.defaultWsColor, RM.PALETTE.neutral, 'bad default color falls back to gray');
 
 // ------------------------------------------------------------- role rename
 section('role rename');
