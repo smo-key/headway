@@ -225,6 +225,15 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   color: var(--ink-3);
 }
 .menu-list .mi-edit:hover { background: var(--surface); color: var(--ink); }
+/* per-row action buttons (options menu: Compare / Rename / Delete) */
+.menu-list .mi-acts { margin-left: auto; display: inline-flex; gap: 2px; padding-left: 12px; }
+.menu-list .mi-act {
+  display: inline-flex; padding: 3px; border-radius: 5px;
+  color: var(--ink-3);
+}
+.menu-list .mi-act:hover { background: var(--surface); color: var(--ink); }
+.menu-list .mi-act.on { color: var(--blue); }
+.menu-list .mi-act svg.lucide { width: 13px; height: 13px; }
 .menu-list button.on .mi-edit + .mi-check { margin-left: 6px; }
 .menu-sep { height: 1px; background: var(--line); margin: 4px 2px; }
 
@@ -657,7 +666,6 @@ body.cap-off .hc-lab { display: none !important; }
 .st-bar .bh { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
 .st-bar .bh.l { left: 0; }
 .st-bar .bh.r { right: 0; }
-.st-bar.place-preview { opacity: .32; }
 .st-bar .stb-label {
   position: relative; display: block; line-height: 17px;
   font-size: 9.5px; font-weight: 600; color: #fff; opacity: .75;
@@ -1010,6 +1018,9 @@ input[type="checkbox"]:focus-visible {
   font-size: 12.5px;
 }
 #popover .po-actions { display: flex; gap: 7px; margin-top: 9px; justify-content: flex-end; }
+/* menu dropdowns size to their rows — the 300px cap would push wide rows
+   (e.g. the options menu's per-row action buttons) outside the box */
+#popover:has(.menu-list) { max-width: none; }
 .rd-pop { display: flex; flex-direction: column; gap: 8px; min-width: 176px; }
 .rd-pop label {
   display: flex; flex-direction: column; gap: 3px;
@@ -1655,7 +1666,6 @@ body.present #repPanel { display: none !important; }
   outline: 2px solid var(--blue);
   outline-offset: 1px;
 }
-.bar.place-preview { opacity: .32; outline: none; }
 
 /* blank click-to-add rows (phases + resources) */
 .row.addrow { height: 26px; cursor: pointer; }

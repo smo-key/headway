@@ -1,6 +1,6 @@
 {
   "name": "headway",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Standalone roadmap planning tool — web page and Tauri desktop app.",
   "scripts": {
@@ -12,6 +12,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "exceljs": "^4.4.0",
-    "jsdom": "^29.1.1"
+    "jsdom": "^29.1.1",
+    "pptxgenjs": "^4.0.1"
   }
 }

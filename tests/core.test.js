@@ -849,17 +849,176 @@ var RMExport = require('../js/export-png.js');
   eq(RMExport.fileName({ meta: { title: 'My Plan: Q3/Q4?' } }), 'My Plan Q3Q4.png',
     'png filename strips only invalid filename characters');
 
-  // overlapping phase spans stack into separate header lanes
-  var sOv = mkState([
-    { num: 1, feature: 'One', phaseId: 'p1', startDay: 0, durDays: 30 },
-    { num: 2, feature: 'Two', phaseId: 'p2', startDay: 10, durDays: 30 }
+  // the header is the date row alone — no title / range / phase-span lanes
+  eq(RMExport.layout(sEx, {}).rows[0].y, 22, 'rows start right under the date header');
+})();
+
+// ------------------------------------------------------------- export grouping + plan
+section('export grouping');
+(function () {
+  var sG = mkState([
+    { num: 1, feature: 'Alpha item', workstream: 'Product', epic: 'OS', startDay: 0, durDays: 10 },
+    { num: 2, feature: 'Beta item', workstream: 'Data', epic: 'ML', startDay: 20, durDays: 5 },
+    { num: 3, feature: 'Gamma item', workstream: 'Product', epic: 'ML', startDay: 5, durDays: 5 },
+    { num: 4, feature: 'Next thing', phaseId: 'p2', workstream: '', epic: '', startDay: 40, durDays: 10 }
   ]);
-  sOv.phases[1].bucket = false;
-  var ov = RMExport.layout(sOv, {});
-  eq(ov.phaseSpans.map(function (s) { return s.lane; }), [0, 1],
-    'overlapping phase spans take separate lanes');
-  ok(ov.rows[0].y > RMExport.layout(sEx, {}).rows[0].y - 1 &&
-    ov.phLanes === 2, 'a second phase lane grows the header');
+  function names(lay, kind) {
+    return lay.rows.filter(function (r) { return r.kind === kind; })
+      .map(function (r) { return r.name; });
+  }
+  function feats(lay) {
+    return lay.rows.filter(function (r) { return r.kind === 'item'; })
+      .map(function (r) { return r.feature; });
+  }
+
+  // the left label rail is gone: bars start at x 0 and labels ride the bars
+  var base = RMExport.layout(sG, {});
+  eq(base.laneX, 0, 'export lane starts at 0 — no left rail');
+  eq(base.width, (base.w1 - base.w0) * base.weekPx, 'width is the date lane alone');
+
+  // group by workstream inside each phase, default/empty workstream last
+  var gw = RMExport.layout(sG, { groupWs: true });
+  eq(names(gw, 'wsband'), ['Product', 'Data', 'General'],
+    'workstream sub-bands per phase; empty workstream shows the default name last');
+  eq(feats(gw), ['Alpha item', 'Gamma item', 'Beta item', 'Next thing'],
+    'items regroup under their workstream band');
+  ok(/^[0-9A-Fa-f]{6}$/.test(gw.rows.filter(function (r) { return r.kind === 'wsband'; })[0].color),
+    'workstream bands carry the workstream color');
+  eq(gw.rows.filter(function (r) { return r.kind === 'wsband'; }).map(function (r) { return r.count; }),
+    [2, 1, 1], 'workstream bands count their items');
+
+  // group by epic (no workstream grouping)
+  var ge = RMExport.layout(sG, { groupEpic: true });
+  eq(names(ge, 'eband'), ['OS', 'ML', ''], 'epic sub-bands in encounter order; empty epic key kept raw');
+  eq(feats(ge), ['Alpha item', 'Beta item', 'Gamma item', 'Next thing'],
+    'items regroup under their epic band');
+
+  // both: phase > workstream > epic
+  var gb = RMExport.layout(sG, { groupWs: true, groupEpic: true });
+  eq(gb.rows.map(function (r) { return r.kind; }),
+    ['band', 'wsband', 'eband', 'item', 'eband', 'item', 'wsband', 'eband', 'item',
+      'band', 'wsband', 'eband', 'item'],
+    'nested grouping emits phase > workstream > epic > items');
+  var lastRow = gb.rows[gb.rows.length - 1];
+  ok(gb.height >= lastRow.y + lastRow.h, 'grouped canvas height covers the last row');
+
+  // grouping respects workstreamsEnabled, like the timeline
+  var sNoWs = mkState([{ num: 1, feature: 'A', workstream: 'Product', startDay: 0, durDays: 5 }]);
+  sNoWs.meta.workstreamsEnabled = false;
+  eq(names(RMExport.layout(sNoWs, { groupWs: true }), 'wsband'), [],
+    'groupWs is a no-op when workstreams are disabled');
+
+  // exact workstream filter ('' = the default workstream) for per-workstream slides
+  var wk = RMExport.layout(sG, { wsKey: '' });
+  eq(feats(wk), ['Next thing'], 'wsKey "" selects items with no workstream');
+  eq(feats(RMExport.layout(sG, { wsKey: 'Product' })), ['Alpha item', 'Gamma item'],
+    'wsKey selects exactly one workstream');
+
+  // ---- export plan: how a split turns into multiple images / slides
+  var p1 = RMExport.plan(sG, {});
+  eq(p1.map(function (e) { return e.name; }), ['T'], 'no split → one export named after the doc');
+  var pp = RMExport.plan(sG, { byPhase: true });
+  eq(pp.map(function (e) { return e.name; }), ['Alpha', 'Next'], 'phase split → one export per visible phase');
+  eq(pp[0].opts.phaseId, 'p1', 'phase split entries carry the phase filter');
+  var pw = RMExport.plan(sG, { byWs: true });
+  eq(pw.map(function (e) { return e.name; }), ['Product', 'Data', 'General'],
+    'workstream split → one export per workstream, default last');
+  eq(pw[2].opts.wsKey, '', 'default-workstream entry filters on the empty key');
+  var pb = RMExport.plan(sG, { byPhase: true, byWs: true });
+  eq(pb.map(function (e) { return e.name; }),
+    ['Alpha — Product', 'Alpha — Data', 'Next — General'],
+    'phase+workstream split → non-empty combinations only');
+  eq(RMExport.plan(sG, { byPhase: true, phaseId: 'p2' }).map(function (e) { return e.name; }),
+    ['Next'], 'a phase filter narrows the split');
+  var pwFil = RMExport.plan(sG, { byWs: true, ws: 'Data' });
+  eq(pwFil.map(function (e) { return e.name; }), ['Data'], 'a workstream filter narrows the split');
+
+  // every slice of one split shares the SAME date window and column grid
+  var ppL = RMExport.plan(sG, { byPhase: true }).map(function (e) {
+    return RMExport.layout(sG, e.opts);
+  });
+  eq(ppL[0].d0, ppL[1].d0, 'split slices share the window start');
+  eq(ppL[0].d1, ppL[1].d1, 'split slices share the window end');
+  eq(ppL[0].width, ppL[1].width, 'split slices share the lane width');
+  var full2 = RMExport.layout(sG, {});
+  eq(ppL[0].d0, full2.d0, 'the shared window is the unsplit window');
+  eq(ppL[0].d1, full2.d1, 'the shared window spans all slices');
+
+  // ---- legend: one swatch per visible workstream, default last
+  var lg = RMExport.layout(sG, {});
+  eq(lg.legend.map(function (e) { return e.name; }), ['Product', 'Data', 'General'],
+    'legend lists the visible workstreams, default last');
+  ok(lg.legend.every(function (e) { return /^[0-9A-Fa-f]{6}$/.test(e.color); }),
+    'legend entries carry the workstream colors');
+  var lgLast = lg.rows[lg.rows.length - 1];
+  ok(lg.legend[0].y >= lgLast.y + lgLast.h, 'legend sits below the last row');
+  ok(lg.height >= lg.legend[lg.legend.length - 1].y + 16, 'canvas height covers the legend');
+  eq(RMExport.layout(sG, { wsKey: 'Data' }).legend.map(function (e) { return e.name; }),
+    ['Data'], 'a workstream slice keeps only its own legend entry');
+  var sNoWs2 = mkState([{ num: 1, feature: 'A', workstream: 'Product', startDay: 0, durDays: 5 }]);
+  sNoWs2.meta.workstreamsEnabled = false;
+  eq(RMExport.layout(sNoWs2, {}).legend, [], 'no legend when workstreams are disabled');
+
+// ------------------------------------------------------------- pptx export
+section('pptx export');
+  var RMPptx = require('../js/export-pptx.js');
+  eq(RMPptx.fileName(sG), 'T.pptx', 'pptx filename is the exact title');
+
+  var lay = RMExport.layout(sG, { groupWs: true });
+  var slide = RMPptx.slideShapes(lay);
+  ok(slide.shapes.length > 0, 'slideShapes emits shapes');
+  // everything must land inside a 13.33" × 7.5" slide
+  var inBounds = slide.shapes.every(function (s) {
+    return s.x >= -0.01 && s.y >= -0.01 && s.x + (s.w || 0) <= 13.34 && s.y + (s.h || 0) <= 7.51;
+  });
+  ok(inBounds, 'all shapes fit the 16:9 slide');
+  var texts = slide.shapes.filter(function (s) { return s.type === 'text'; })
+    .map(function (s) { return s.text; });
+  ok(texts.indexOf('T') === -1, 'slides carry no title block');
+  ok(!texts.some(function (t) { return /^S\d+/.test(t); }), 'the date header shows dates only, no sprint numbers');
+  ok(texts.indexOf('Alpha') !== -1, 'phase band names carry no item count');
+  ok(texts.some(function (t) { return /Alpha item/.test(t); }), 'item labels are text shapes');
+  ok(texts.some(function (t) { return /Product/.test(t); }), 'workstream band names are text shapes');
+  var flat = RMPptx.slideShapes(RMExport.layout(sG, {}));
+  var flatTexts = flat.shapes.filter(function (s) { return s.type === 'text'; })
+    .map(function (s) { return s.text; });
+  ok(flatTexts.indexOf('Product') !== -1 && flatTexts.indexOf('General') !== -1,
+    'the slide carries a workstream legend');
+  var flatRight = Math.max.apply(null, flat.shapes.map(function (s) { return s.x + (s.w || 0); }));
+  ok(flatRight > 13.33 - 0.5, 'the timeline always spreads to the slide width');
+
+  // split slides share one scale so rows read the same size on every slide
+  var slLays = RMExport.plan(sG, { byPhase: true }).map(function (e) {
+    return RMExport.layout(sG, e.opts);
+  });
+  var shared = RMPptx.slideScale(slLays);
+  function bandH(sl) {
+    return sl.shapes.filter(function (s) { return s.type === 'rect' && s.color === '1A1F26'; })[0].h;
+  }
+  var shA = RMPptx.slideShapes(slLays[0], shared);
+  var shB = RMPptx.slideShapes(slLays[1], shared);
+  ok(Math.abs(bandH(shA) - bandH(shB)) < 1e-9,
+    'phase band rows are the same height on every slide of a split');
+  var bars = slide.shapes.filter(function (s) { return s.type === 'bar'; });
+  eq(bars.length, 4, 'each visible item paints one bar shape');
+  ok(bars.every(function (b) { return /^[0-9A-Fa-f]{6}$/.test(b.color); }), 'bars carry item colors');
+  // a bar wide enough for its label puts the label inside; a narrow one puts it beside
+  var wide = RMPptx.labelPlacement('Hi', 200), narrow = RMPptx.labelPlacement('A very long feature label', 30);
+  eq(wide.inside, true, 'short label on a wide bar sits inside the bar');
+  eq(narrow.inside, false, 'long label on a narrow bar sits beside the bar');
+
+  // milestones render as diamonds, like the live timeline
+  var sM = mkState([
+    { num: 1, feature: 'Launch', milestone: true, startDay: 10, durDays: 1 },
+    { num: 2, feature: 'Work', workstream: 'Product', startDay: 0, durDays: 10 }
+  ]);
+  var lm = RMExport.layout(sM, {});
+  var msRow = lm.rows.filter(function (r) { return r.kind === 'item' && r.feature === 'Launch'; })[0];
+  eq(msRow.bar.ms, true, 'milestone rows are flagged in the layout');
+  var mShapes = RMPptx.slideShapes(lm).shapes;
+  ok(mShapes.some(function (s) { return s.type === 'diamond'; }), 'milestones become diamond shapes');
+  eq(mShapes.filter(function (s) { return s.type === 'bar'; }).length, 1,
+    'a milestone paints no plain bar');
 })();
 
 // ------------------------------------------------------------- excel round-trip

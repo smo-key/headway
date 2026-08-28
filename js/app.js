@@ -62,6 +62,7 @@
   var leftWScope = 538;      // …and scoping view (independently resizable)
   var groupWs = false;       // sub-group rows by workstream inside each phase
   var groupEpic = false;     // …and/or by epic (nested under workstream)
+  var exportPrefs = null;    // last-used Export dialog settings (fmt, split, …)
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
   var detailMode = 'feature'; // Scoping/Planning row detail: phase | feature | story
   var buColW = {};           // budgeting column width overrides (key -> px)
@@ -111,7 +112,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs };
   }
   var sprintSel = 'cur';    // Sprinting view: 'cur' | 'all' | a sprint number
   var sprintMode = 'board'; // Sprinting view: 'board' (kanban) | 'grid'
@@ -130,6 +131,7 @@
     depsMode = ui.depsMode === 'none' ? 'none' : 'on';
     groupWs = ui.groupWs != null ? !!ui.groupWs : ui.groupBy === 'ws';
     groupEpic = ui.groupEpic != null ? !!ui.groupEpic : (ui.groupBy === 'epic' || !!ui.groupByEpic);
+    exportPrefs = ui.exportPrefs && typeof ui.exportPrefs === 'object' ? ui.exportPrefs : null;
     resCollapsed = !!ui.resCollapsed;
     snapDays = [1, 5, 10].indexOf(ui.snapDays) !== -1 ? ui.snapDays : 5;
     scopeColW = ui.scopeColW && typeof ui.scopeColW === 'object' ? ui.scopeColW : {};
@@ -865,6 +867,8 @@
   ];
   function setDetailMode(mode) {
     detailMode = mode;
+    // choosing the Feature level tucks every per-item story expansion away
+    if (mode === 'feature') expanded = {};
     saveLocal();
     render();
   }
@@ -1029,40 +1033,36 @@
     if (window.lucide) lucide.createIcons();
   }
   $('#optBtn').addEventListener('click', function () {
-    var items = [{
-      icon: 'git-branch', label: esc(state.optName), checked: true,
-      fn: function () {}, edit: function () { renameOption(state.optId, state.optName); }
-    }];
-    (state.options || []).forEach(function (o) {
-      items.push({ icon: 'git-branch', label: esc(o.name),
-        fn: function () { activateOption(o.id); },
-        edit: function () { renameOption(o.id, o.name); } });
-    });
-    items.push({ sep: true });
-    items.push({ icon: 'copy-plus', label: 'New option <small>copy of the current plan</small>', fn: createOption });
-    if ((state.options || []).length) {
-      items.push({ sep: true });
-      (state.options || []).forEach(function (o) {
-        items.push({ icon: 'eye', label: 'Compare with ' + esc(o.name), checked: compareOptId === o.id,
-          fn: function () {
-            compareOptId = compareOptId === o.id ? null : o.id;
-            // comparing is a timeline overlay — jump there if elsewhere
-            if (compareOptId && view !== 'planning') {
-              view = 'planning';
-              saveLocal();
-            }
-            render();
-          } });
-      });
-      items.push({ sep: true });
-      items.push({ icon: 'x', label: 'Close “' + esc(state.optName) + '”…',
-        fn: function () { closeOption(state.optId, state.optName); } });
-      (state.options || []).forEach(function (o) {
-        items.push({ icon: 'x', label: 'Close “' + esc(o.name) + '”…',
-          fn: function () { closeOption(o.id, o.name); } });
-      });
+    var hasOthers = (state.options || []).length > 0;
+    function toggleCompare(id) {
+      compareOptId = compareOptId === id ? null : id;
+      // comparing is a timeline overlay — jump there if elsewhere
+      if (compareOptId && view !== 'planning') {
+        view = 'planning';
+        saveLocal();
+      }
+      render();
     }
-    openDropdown($('#optBtn'), items);
+    // one row per option: the active one leads with a check instead of the
+    // branch icon; every row carries its own Compare / Rename / Delete
+    function optionRow(id, name, isCur) {
+      return {
+        icon: isCur ? 'check' : 'git-branch', checked: isCur, label: esc(name),
+        fn: isCur ? function () {} : function () { activateOption(id); },
+        actions: [
+          isCur ? null : { icon: 'eye', title: 'Compare', on: compareOptId === id,
+            fn: function () { toggleCompare(id); } },
+          { icon: 'pencil', title: 'Rename', fn: function () { renameOption(id, name); } },
+          hasOthers ? { icon: 'trash-2', title: 'Delete',
+            fn: function () { closeOption(id, name); } } : null
+        ].filter(Boolean)
+      };
+    }
+    var items = [optionRow(state.optId, state.optName, true)];
+    (state.options || []).forEach(function (o) { items.push(optionRow(o.id, o.name, false)); });
+    items.push({ sep: true });
+    items.push({ icon: 'copy-plus', label: 'New option', fn: createOption });
+    openDropdown($('#optBtn'), items, { minW: 300 });
   });
 
   // ------------------------------------------------------------ render
@@ -2434,13 +2434,12 @@
       '<div class="row-left">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
       // milestones carry no stories; in story detail every feature is open
-      // and the chevron is inert (a fixed level, not a per-row toggle)
-      (it.milestone
+      // (no toggle to show); in feature detail the chevron opens/closes
+      // just this item's stories
+      (it.milestone || detailMode === 'story'
         ? '<span class="r-chev" aria-hidden="true"></span>'
-        : detailMode === 'story'
-          ? '<span class="r-chev open" style="pointer-events:none;opacity:.4"><i data-lucide="chevron-right"></i></span>'
-          : '<span class="r-chev" data-act="stories" title="Stories (' + it.stories.length + ') — opens story detail">' +
-            (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>') +
+        : '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
+          (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>') +
       '<span class="r-num">' + it.num + '</span>' +
       '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
@@ -2472,7 +2471,7 @@
       '<div class="row-lane">' + laneInner + dlHtml + '</div>' +
       '</div>');
 
-    if (detailMode === 'story' && !it.milestone) {
+    if ((detailMode === 'story' || expanded[it.id]) && !it.milestone) {
       it.stories.forEach(function (st) {
         var stSched = st.startDay != null && st.durDays != null;
         html.push(
@@ -3094,7 +3093,7 @@
       (dot ? '<span class="dd-dot" style="background:' + dot + '"></span>' : '') +
       '<span class="dd-label">' + label + '</span><i data-lucide="chevron-down"></i></button>';
   }
-  function openDropdown(anchor, items) {
+  function openDropdown(anchor, items, ddOpts) {
     var r = anchor.getBoundingClientRect();
     // remember which chip opened this so focus can return after the re-render
     var restoreSel = null;
@@ -3109,15 +3108,19 @@
         if (el && el.focus) el.focus({ preventScroll: true });
       });
     }
-    var html = '<div class="menu-list" style="min-width:' + Math.max(210, Math.round(r.width)) + 'px">' +
+    var html = '<div class="menu-list" style="min-width:' + Math.max((ddOpts && ddOpts.minW) || 210, Math.round(r.width)) + 'px">' +
       items.map(function (m, i) {
         if (m.sep) return '<div class="menu-sep"></div>';
         return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
           (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
           (m.icon ? '<i data-lucide="' + m.icon + '"></i>' : '') +
           '<span>' + m.label + '</span>' +
+          (m.actions ? '<span class="mi-acts">' + m.actions.map(function (a, j) {
+            return '<span class="mi-act' + (a.on ? ' on' : '') + '" data-ma="' + i + ':' + j +
+              '" title="' + a.title + '"><i data-lucide="' + a.icon + '"></i></span>';
+          }).join('') + '</span>' : '') +
           (m.edit ? '<span class="mi-edit" data-me="' + i + '" title="Edit"><i data-lucide="pencil"></i></span>' : '') +
-          (m.checked ? '<i data-lucide="check" class="mi-check"></i>' : '') +
+          (m.checked && !m.actions ? '<i data-lucide="check" class="mi-check"></i>' : '') +
           '</button>';
       }).join('') + '</div>';
     openPopover(r.left, r.bottom + 4, html, function (host) {
@@ -3136,6 +3139,15 @@
         btns[n].focus({ preventScroll: true });
       });
       host.addEventListener('click', function (ev) {
+        var ma = ev.target.closest('[data-ma]');
+        if (ma) {
+          ev.stopPropagation();
+          closePopover();
+          var pq = ma.dataset.ma.split(':');
+          items[+pq[0]].actions[+pq[1]].fn();
+          restoreFocus();
+          return;
+        }
         var me = ev.target.closest('[data-me]');
         if (me) {
           ev.stopPropagation();
@@ -3226,9 +3238,12 @@
     var cur = '#' + RM.defaultWsColor(state);
     var setting = state.meta.defaultWsColor || null;
     var count = state.items.filter(function (x) { return !x.workstream; }).length;
-    var sw = RM.PALETTE_KEYS.map(function (k) {
-      return '<button class="swatch' + (('' + setting).toUpperCase() === RM.PALETTE[k] ? ' on' : '') +
-        '" data-esw="' + RM.PALETTE[k] + '" style="background:#' + RM.PALETTE[k] + '" title="' + k + '"></button>';
+    var sw = ['neutral'].concat(RM.PALETTE_KEYS).map(function (k) {
+      var on = ('' + setting).toUpperCase() === RM.PALETTE[k] ||
+        (k === 'neutral' && !setting);
+      return '<button class="swatch' + (on ? ' on' : '') +
+        '" data-esw="' + RM.PALETTE[k] + '" style="background:#' + RM.PALETTE[k] +
+        '" title="' + (k === 'neutral' ? 'gray' : k) + '"></button>';
     }).join('');
     openModal(
       '<div class="modal" style="width:420px">' +
@@ -4089,8 +4104,10 @@
           return;
         }
         case 'stories': {
-          // the chevron jumps into story detail (where every feature is open)
-          if (detailMode !== 'story') setDetailMode('story');
+          // toggle just this item's stories — the view level stays put
+          expanded[itemId] = !expanded[itemId];
+          saveLocal();
+          render();
           return;
         }
         case 'warn': {
@@ -4203,55 +4220,6 @@
     });
   }
 
-  // hovering an unscheduled row's lane previews where a click would place it
-  var placePrev = null;
-  function clearPlacePreview() {
-    if (placePrev) { placePrev.remove(); placePrev = null; }
-  }
-  rowsEl.addEventListener('mousemove', function (e) {
-    if (view !== 'planning' || drag) { clearPlacePreview(); return; }
-    var lane = e.target.closest('.row-lane');
-    // story lanes preview a mini bar where a double-click would land
-    var stRow = e.target.closest('.row.story[data-story]');
-    if (stRow && lane) {
-      var pit = RM.itemById(state, stRow.dataset.id);
-      var pst = pit && storyById(pit, stRow.dataset.story);
-      if (!pst || pst.startDay != null || e.target.closest('[data-stbar]')) { clearPlacePreview(); return; }
-      var sDay = Math.max(0, snapTo(laneDayAt(e.clientX)));
-      var sDur = RM.stretchSpan(state.meta, sDay, 5);
-      if (!placePrev || placePrev.parentNode !== lane || !placePrev.classList.contains('st-bar')) {
-        clearPlacePreview();
-        placePrev = document.createElement('div');
-        placePrev.className = 'st-bar preview place-preview';
-        lane.appendChild(placePrev);
-      }
-      placePrev.style.left = (sDay * dayPx()) + 'px';
-      placePrev.style.width = (sDur * dayPx()) + 'px';
-      placePrev.style.setProperty('--bar-c', '#' + RM.colorForItem(state, pit));
-      placePrev.title = 'Double-click to place here';
-      return;
-    }
-    var rowEl = e.target.closest('.row.item');
-    var it = rowEl && RM.itemById(state, rowEl.dataset.id);
-    if (!lane || !it || isScheduled(it) || e.target.closest('[data-bar],.port')) {
-      clearPlacePreview();
-      return;
-    }
-    var day = Math.max(0, snapTo(laneDayAt(e.clientX)));
-    var dur = it.milestone ? 1
-      : (it.durDays != null ? it.durDays : RM.stretchSpan(state.meta, day, RM.effortDays(state, it) || 5));
-    if (!placePrev || placePrev.parentNode !== lane) {
-      clearPlacePreview();
-      placePrev = document.createElement('div');
-      placePrev.className = 'bar preview place-preview';
-      lane.appendChild(placePrev);
-    }
-    placePrev.style.left = (day * dayPx()) + 'px';
-    placePrev.style.width = (dur * dayPx()) + 'px';
-    placePrev.style.setProperty('--bar-c', '#' + RM.colorForItem(state, it));
-    placePrev.title = 'Double-click to place here';
-  });
-  rowsEl.addEventListener('mouseleave', clearPlacePreview);
 
   // right-click context menus on rows
   // right-clicking an empty timeline slot edits the holiday list in place
@@ -4356,7 +4324,7 @@
       if (!it) return;
       items = [
         it.milestone ? null : { icon: 'plus', label: 'Add story', fn: function () {
-          if (detailMode !== 'story') { detailMode = 'story'; saveLocal(); }
+          if (detailMode !== 'story') { expanded[itemId] = true; saveLocal(); }
           render();
           requestAnimationFrame(function () {
             var inp = rowsEl.querySelector('.row.story-add[data-id="' + itemId + '"] .st-add-input');
@@ -8940,11 +8908,21 @@
         return '<option value="' + esc(v) + '">' + esc(v) + '</option>';
       }).join('');
     }
+    // the last-used settings come back; row grouping falls back to however
+    // the timeline is grouped right now
+    var pref = exportPrefs || {};
+    var pWs = pref.groupWs != null ? !!pref.groupWs : groupWs;
+    var pEpic = pref.groupEpic != null ? !!pref.groupEpic : groupEpic;
+    function ck(on) { return on ? ' checked' : ''; }
     openModal(
       '<div class="modal" style="width:440px">' +
-      '<div class="m-head"><h2>Export PNG</h2>' +
+      '<div class="m-head"><h2>Export</h2>' +
       '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body">' +
+      '<div class="m-sec"><label>Format</label><div class="p-row">' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx') + '> PNG image</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPptx"' + ck(pref.fmt === 'pptx') + '> PowerPoint (editable)</label>' +
+      '</div></div>' +
       '<div class="m-sec"><label>Date range</label><div class="p-grid2">' +
       '<div><label class="p-lab">From</label><select id="exFrom" style="width:100%">' + sprOpts(sprints[0].num) + '</select></div>' +
       '<div><label class="p-lab">To</label><select id="exTo" style="width:100%">' + sprOpts(sprints[sprints.length - 1].num) + '</select></div>' +
@@ -8957,16 +8935,42 @@
       '<option value="">All phases</option>' + state.phases.map(function (p) {
         return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>';
       }).join('') + '</select></div></div>' +
+      '<div class="m-sec"><label>Group rows</label><div class="p-row">' +
+      (state.meta.workstreamsEnabled ?
+        '<label class="p-check"><input type="checkbox" id="exGroupWs"' + ck(pWs) + '> By workstream</label>' : '') +
+      '<label class="p-check"><input type="checkbox" id="exGroupEpic"' + ck(pEpic) + '> By epic</label>' +
+      '</div></div>' +
+      '<div class="m-sec"><label>Slides / files</label><div class="p-row">' +
+      '<label class="p-check"><input type="checkbox" id="exSplitPhase"' + ck(pref.byPhase) + '> One per phase</label>' +
+      (state.meta.workstreamsEnabled ?
+        '<label class="p-check"><input type="checkbox" id="exSplitWs"' + ck(pref.byWs) + '> One per workstream</label>' : '') +
+      '</div><div class="m-hint">Unchecked → everything on a single image or slide. PPTX keeps all slides in one file; a split PNG export saves one image per slice.</div></div>' +
       '<div class="m-sec"><label>Options</label><div class="p-row">' +
-      '<select id="exScale"><option value="1">1× scale</option><option value="2" selected>2× scale</option></select>' +
-      '<label class="p-check"><input type="checkbox" id="exArrows"> Dependency arrows</label>' +
+      '<select id="exScale"><option value="1"' + (pref.scale === 1 ? ' selected' : '') + '>1× scale</option>' +
+      '<option value="2"' + (pref.scale !== 1 ? ' selected' : '') + '>2× scale</option></select>' +
+      '<label class="p-check"><input type="checkbox" id="exArrows"' + ck(pref.arrows) + '> Dependency arrows</label>' +
       '</div><div class="m-hint">The exported dates are bounded by the range AND the filtered bars — empty weeks at either end are trimmed.</div></div>' +
       '</div>' +
       '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
-      '<button id="exGo" class="primary"><i data-lucide="image"></i>Export PNG</button></div></div>',
+      '<button id="exGo" class="primary"><i data-lucide="image"></i>Export</button></div></div>',
       function (host) {
         $('[data-m=x]', host).onclick = closeModal;
         $('[data-m=cancel]', host).onclick = closeModal;
+        // splitting the export by workstream hides the per-workstream grouping
+        // (it would be a single-band no-op inside each slice)
+        var splitWsChk = $('#exSplitWs', host), groupWsChk = $('#exGroupWs', host);
+        if (splitWsChk && groupWsChk) splitWsChk.addEventListener('change', function () {
+          groupWsChk.disabled = splitWsChk.checked;
+        });
+        // pixel scale only means something for the PNG raster
+        ['exFmtPng', 'exFmtPptx'].forEach(function (id) {
+          $('#' + id, host).addEventListener('change', function () {
+            $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
+          });
+        });
+        // restored settings get the same dependent-control states
+        if (groupWsChk && splitWsChk) groupWsChk.disabled = splitWsChk.checked;
+        $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
         $('#exGo', host).onclick = function () {
           var exOpts = {
             fromSprint: parseInt($('#exFrom', host).value, 10),
@@ -8975,47 +8979,109 @@
             epic: $('#exEpic', host).value || null,
             phaseId: $('#exPhase', host).value || null,
             scale: parseInt($('#exScale', host).value, 10),
-            arrows: $('#exArrows', host).checked
+            arrows: $('#exArrows', host).checked,
+            groupWs: !!(groupWsChk && groupWsChk.checked && !(splitWsChk && splitWsChk.checked)),
+            groupEpic: $('#exGroupEpic', host).checked,
+            byPhase: $('#exSplitPhase', host).checked,
+            byWs: !!(splitWsChk && splitWsChk.checked)
           };
+          var fmt = $('#exFmtPptx', host).checked ? 'pptx' : 'png';
+          // remember the settings for next time (persisted in the ui snapshot)
+          exportPrefs = {
+            fmt: fmt, scale: exOpts.scale, arrows: exOpts.arrows,
+            groupWs: !!(groupWsChk && groupWsChk.checked), groupEpic: exOpts.groupEpic,
+            byPhase: exOpts.byPhase, byWs: exOpts.byWs
+          };
+          saveLocal();
           closeModal();
-          exportPngTo(exOpts);
+          if (fmt === 'pptx') exportPptxTo(exOpts);
+          else exportPngTo(exOpts);
         };
       });
   }
   $('#btnExport').addEventListener('click', exportModal);
 
-  // Where the PNG lands: desktop asks for a destination via the native save
-  // dialog and OPENS the file afterwards; browsers with a save-file picker
-  // let the user choose the folder; anything else falls back to a download.
+  // Where an exported file lands: desktop asks for a destination via the
+  // native save dialog and OPENS the file afterwards; browsers with a
+  // save-file picker let the user choose the folder; anything else falls
+  // back to a download. `kind` = { desc, mime, ext }.
+  function saveExport(r, kind) {
+    if (window.HeadwayDesktop && window.HeadwayDesktop.saveFileAndOpen) {
+      return window.HeadwayDesktop.saveFileAndOpen(r.blob, r.name, kind.desc, kind.ext).then(function (p) {
+        if (p) toast('Exported ' + p.replace(/^.*[\\/]/, ''));
+      });
+    }
+    if (window.showSaveFilePicker) {
+      var accept = {};
+      accept[kind.mime] = ['.' + kind.ext];
+      return window.showSaveFilePicker({
+        suggestedName: r.name,
+        types: [{ description: kind.desc, accept: accept }]
+      }).then(function (handle) {
+        return handle.createWritable().then(function (w) {
+          return w.write(r.blob).then(function () { return w.close(); });
+        }).then(function () { toast('Exported ' + handle.name); });
+      }).catch(function (err) {
+        if (err && err.name === 'AbortError') return; // user canceled
+        throw err;
+      });
+    }
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(r.blob);
+    a.download = r.name;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    toast('Exported ' + r.name);
+  }
+  var PNG_KIND = { desc: 'PNG image', mime: 'image/png', ext: 'png' };
+  var PPTX_KIND = {
+    desc: 'PowerPoint presentation',
+    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ext: 'pptx'
+  };
+  function safeName(s) { return String(s).replace(/[\\/:*?"<>|]+/g, '').trim(); }
+
   function exportPngTo(exOpts) {
-    RM_EXPORT.toBlob(state, exOpts).then(function (r) {
-      if (window.HeadwayDesktop && window.HeadwayDesktop.savePngAndOpen) {
-        return window.HeadwayDesktop.savePngAndOpen(r.blob, r.name).then(function (p) {
-          if (p) toast('Exported ' + p.replace(/^.*[\\/]/, ''));
+    var entries = RM_EXPORT.plan(state, exOpts);
+    if (!entries.length) { toast('Nothing to export in this selection', 'err'); return; }
+    var split = exOpts.byPhase || exOpts.byWs;
+    if (!split) {
+      RM_EXPORT.toBlob(state, entries[0].opts)
+        .then(function (r) { return saveExport(r, PNG_KIND); })
+        .catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
+      return;
+    }
+    var docName = safeName(state.meta.title || '') || 'Roadmap';
+    Promise.all(entries.map(function (e) {
+      return RM_EXPORT.toBlob(state, e.opts).then(function (r) {
+        return { blob: r.blob, name: docName + ' — ' + safeName(e.name) + '.png' };
+      });
+    })).then(function (files) {
+      if (window.HeadwayDesktop && window.HeadwayDesktop.saveManyToFolder) {
+        return window.HeadwayDesktop.saveManyToFolder(files).then(function (dir) {
+          if (dir) toast('Exported ' + files.length + ' images to ' + dir.replace(/^.*[\\/]/, ''));
         });
       }
-      if (window.showSaveFilePicker) {
-        return window.showSaveFilePicker({
-          suggestedName: r.name,
-          types: [{ description: 'PNG image', accept: { 'image/png': ['.png'] } }]
-        }).then(function (handle) {
-          return handle.createWritable().then(function (w) {
-            return w.write(r.blob).then(function () { return w.close(); });
-          }).then(function () { toast('Exported ' + handle.name); });
-        }).catch(function (err) {
-          if (err && err.name === 'AbortError') return; // user canceled
-          throw err;
-        });
-      }
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(r.blob);
-      a.download = r.name;
-      a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
-      toast('Exported ' + r.name);
+      // plain browser: a download per file, spaced so none get dropped
+      files.forEach(function (f, i) {
+        setTimeout(function () {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(f.blob);
+          a.download = f.name;
+          a.click();
+          setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+        }, i * 350);
+      });
+      toast('Exporting ' + files.length + ' images');
     }).catch(function (err) {
       toast('Export failed: ' + (err && err.message || err), 'err');
     });
+  }
+
+  function exportPptxTo(exOpts) {
+    RM_PPTX.toBlob(state, exOpts)
+      .then(function (r) { return saveExport(r, PPTX_KIND); })
+      .catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
   }
 
   // ------------------------------------------------------------ boot

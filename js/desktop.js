@@ -181,14 +181,15 @@
       });
     },
 
-    // PNG export: ask where via the native dialog, write, then OPEN the file
-    savePngAndOpen: function (blob, suggestedName) {
+    // file export (PNG, PPTX, …): ask where via the native dialog, write,
+    // then OPEN the file
+    saveFileAndOpen: function (blob, suggestedName, filterName, ext) {
       return dialog.save({
         defaultPath: suggestedName,
-        filters: [{ name: 'PNG image', extensions: ['png'] }]
+        filters: [{ name: filterName || 'File', extensions: [ext || 'png'] }]
       }).then(function (p) {
         if (!p) return null;
-        if (!/\.png$/i.test(p)) p += '.png';
+        if (!new RegExp('\\.' + (ext || 'png') + '$', 'i').test(p)) p += '.' + (ext || 'png');
         return blob.arrayBuffer().then(function (buf) {
           return fs.writeFile(p, new Uint8Array(buf));
         }).then(function () {
@@ -199,6 +200,22 @@
           }
           return p;
         });
+      });
+    },
+
+    // a split export writes several files at once: pick a folder, write all
+    saveManyToFolder: function (files) {
+      return dialog.open({ directory: true, multiple: false }).then(function (dir) {
+        if (!dir) return null;
+        var chain = Promise.resolve();
+        files.forEach(function (f) {
+          chain = chain.then(function () {
+            return f.blob.arrayBuffer().then(function (buf) {
+              return fs.writeFile(dir + '/' + f.name, new Uint8Array(buf));
+            });
+          });
+        });
+        return chain.then(function () { return dir; });
       });
     },
 

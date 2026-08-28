@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -1088,6 +1088,10 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 {
   const chev = doc.querySelector('#rows .row.item .r-chev');
   click(chev); // expand stories
+  ok(/Feature/.test(doc.querySelector('#detailBtn').textContent),
+    'expanding an item stays in Feature view');
+  ok(doc.querySelectorAll('#rows .row.story-add').length === 1,
+    'only the expanded item opens its stories');
   const inp = doc.querySelector('#rows .row.story-add .st-add-input');
   ok(!!inp, 'story add input rendered');
   click(inp);
@@ -1117,10 +1121,12 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
     const stId = stRow.dataset.story;
     ok(!stRow.querySelector('.st-bar'), 'story starts without a timeline bar');
     ok(!stRow.querySelector('.st-tick'), 'no start tick on story lanes — one rectangle only');
-    // hovering the empty lane previews the landing slot
+    // hovering the empty lane previews the landing slot with the dashed
+    // ghost alone (the old low-opacity preview bar is gone)
     stRow.querySelector('.row-lane')
-      .dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 600, clientY: 300 }));
-    ok(!!stRow.querySelector('.st-bar.place-preview'), 'hovering an empty story lane previews the mini bar');
+      .dispatchEvent(new window.PointerEvent('pointermove', { bubbles: true, clientX: 600, clientY: 300 }));
+    ok(!!stRow.querySelector('.place-ghost'), 'hovering an empty story lane shows the dashed place ghost');
+    ok(!stRow.querySelector('.place-preview'), 'no low-opacity preview bar on story lanes');
     // double-click the story lane → timeline appears
     stRow.querySelector('.row-lane')
       .dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true, clientX: 600, clientY: 300 }));
@@ -1473,12 +1479,56 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(wsOpts.length > 1 && wsOpts.some(t => /Product/.test(t)), 'dialog lists workstreams to filter by');
   ok(!!doc.querySelector('#modalHost #exEpic') && !!doc.querySelector('#modalHost #exPhase'),
     'dialog offers epic and phase filters');
+  ok(!!doc.querySelector('#modalHost #exFmtPng') && !!doc.querySelector('#modalHost #exFmtPptx'),
+    'dialog offers PNG and PPTX formats');
+  ok(!!doc.querySelector('#modalHost #exSplitPhase') && !!doc.querySelector('#modalHost #exSplitWs'),
+    'dialog offers per-phase and per-workstream splitting');
+  ok(!!doc.querySelector('#modalHost #exGroupWs') && !!doc.querySelector('#modalHost #exGroupEpic'),
+    'dialog offers timeline-style grouping');
+  ok(/Export/.test(doc.querySelector('#modalHost .m-head h2').textContent) &&
+    !/Export PNG/.test(doc.querySelector('#modalHost .m-head h2').textContent),
+    'dialog is titled Export, format is a choice inside it');
+  ok(typeof window.RM_PPTX === 'object' && typeof window.RM_PPTX.toBlob === 'function',
+    'PPTX export module is loaded in the page');
+  ok(typeof window.RM_EXPORT.plan === 'function' &&
+    window.RM_EXPORT.plan(state(), { byPhase: true }).length >= 1,
+    'export plan splits the live document');
+  // export settings persist between sessions (via the ui snapshot)
+  doc.querySelector('#modalHost #exFmtPptx').checked = true;
+  doc.querySelector('#modalHost #exSplitPhase').checked = true;
+  doc.querySelector('#modalHost #exArrows').checked = true;
+  click(doc.querySelector('#modalHost #exGo'));
+  const savedPrefs = JSON.parse(window.localStorage.getItem('headway-ui-v1')).exportPrefs;
+  ok(savedPrefs && savedPrefs.fmt === 'pptx' && savedPrefs.byPhase === true && savedPrefs.arrows === true,
+    'exporting writes the chosen settings to the ui snapshot');
+  window.eval("document.querySelector('#btnExport').click()");
+  ok(doc.querySelector('#modalHost #exFmtPptx').checked &&
+    doc.querySelector('#modalHost #exSplitPhase').checked &&
+    doc.querySelector('#modalHost #exArrows').checked,
+    'reopening the export dialog restores the saved settings');
   const lay = window.RM_EXPORT.layout(state(), {});
   ok(lay.rows.filter(r => r.kind === 'item').length ===
     state().items.filter(i => i.startDay != null).length,
     'export layout covers every scheduled item of the live document');
   click(doc.querySelector('#modalHost [data-m=cancel], #modalHost [data-m=x]'));
   ok(doc.querySelector('#modalHost').hidden, 'export dialog closes');
+}
+
+// hovering an unscheduled row's lane shows ONLY the dashed place ghost —
+// the old low-opacity preview bar is gone
+{
+  const unRow = [...doc.querySelectorAll('#rows .row.item')].find(r => {
+    const it = state().items.find(i => i.id === r.dataset.id);
+    return it && it.startDay == null;
+  });
+  if (unRow) {
+    const lane = unRow.querySelector('.row-lane');
+    lane.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 400 }));
+    ok(!doc.querySelector('.place-preview'),
+      'hovering an unscheduled lane paints no low-opacity preview bar');
+  } else {
+    ok(true, 'no unscheduled row rendered to hover (skipped)');
+  }
 }
 
 // ---------------------------------------------------------------- batch 4: toasts, tooltips, filter, titles, schemes
@@ -1523,6 +1573,8 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(!!doc.querySelector('#setupView .su-defws'), 'default workstream row leads the Workstreams tab');
   click(doc.querySelector('#setupView [data-sudefws]'));
   ok(!!doc.querySelector('#modalHost #dwsName'), 'default workstream modal opens');
+  ok(!!doc.querySelector('#modalHost .swatch[data-esw="6E7883"]'),
+    'default workstream picker offers gray');
   doc.querySelector('#modalHost #dwsName').value = 'Core';
   click(doc.querySelector('#modalHost #dwsSave'));
   ok(state().meta.defaultWsName === 'Core', 'default workstream renames');
@@ -2115,6 +2167,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     doc.querySelectorAll('#rows .row.story-add').length + '/' + visNonMs.length + ')');
   ok(!doc.querySelector('#rows .row.item .r-chev[data-act="stories"]'),
     'story detail disables the per-row expand toggles');
+  ok(![...doc.querySelectorAll('#rows .row.item .r-chev svg')].length,
+    'story detail shows no collapse chevrons at all');
   const msRow = visItems.find(r => {
     const it = state().items.find(i => i.id === r.dataset.id);
     return it && it.milestone;
@@ -2199,9 +2253,18 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const menuBtn = (re) =>
     [...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => re.test(b.textContent.trim()));
 
+  const rowAct = (re, title) => {
+    const row = [...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => re.test(b.textContent.trim()));
+    return row && row.querySelector('.mi-act[title="' + title + '"]');
+  };
   click(optBtn);
   ok(!!menuBtn(/New option/), 'options menu offers New option');
-  ok(!menuBtn(/Compare with/), 'no compare entries while Default is alone');
+  ok(!/copy of the current plan/.test(doc.querySelector('#popover').textContent),
+    'New option carries no explainer text');
+  ok(!doc.querySelector('#popover .mi-act[title="Compare"]') &&
+    !doc.querySelector('#popover .mi-act[title="Delete"]'),
+    'no Compare or Delete actions while Default is alone');
+  ok(!!rowAct(/^Default$/, 'Rename'), 'the option row carries a Rename action');
   click(menuBtn(/New option/));
   const nameIn = doc.querySelector('#modalHost #optNameIn');
   ok(!!nameIn, 'New option asks for a name');
@@ -2224,8 +2287,14 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 
   // compare with Default: the untouched schedule ghosts behind the live bars
   click(doc.querySelector('#optBtn'));
-  ok(!!menuBtn(/Compare with Default/), 'options menu offers Compare with Default');
-  click(menuBtn(/Compare with Default/));
+  ok(!!doc.querySelector('#popover .menu-list button.on [data-lucide="check"]'),
+    'the active option marks itself with a leading check');
+  ok(!doc.querySelector('#popover .menu-list .mi-check'),
+    'no trailing checkmark on option rows');
+  ok(!!rowAct(/^Default$/, 'Compare'), 'the other option row carries a Compare action');
+  ok(!!rowAct(/^Default$/, 'Delete') && !!rowAct(/Plan B/, 'Delete'),
+    'every option row carries a Delete action');
+  click(rowAct(/^Default$/, 'Compare'));
   ok(doc.querySelectorAll('#rows .bar.cmp').length > 0, 'comparing paints ghost bars for differing items');
   const ghost = [...doc.querySelectorAll('#rows .row.item[data-id="' + vId + '"] .bar.cmp')][0];
   ok(!!ghost && /^Default: /.test(ghost.title), 'the edited feature carries a ghost titled with the option name');
@@ -2245,9 +2314,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(state().options.length === 1 && state().options[0].name === 'Plan B' &&
     state().options[0].doc.items.find(i => i.id === vId).durDays === editedDays,
     'Plan B is parked with its own edited schedule');
-  // close Plan B out
+  // delete Plan B out via its row action
   click(doc.querySelector('#optBtn'));
-  click(menuBtn(/Close “Plan B”/));
+  click(rowAct(/Plan B/, 'Delete'));
   ok(!!doc.querySelector('#modalHost [data-m="ok"]'), 'closing an option asks for confirmation');
   click(doc.querySelector('#modalHost [data-m="ok"]'));
   ok((state().options || []).length === 0 && state().optName === 'Default',
@@ -2279,7 +2348,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   w2.ExcelJS = ExcelJS;
   w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
   w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js']) {
     w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   const d2 = w2.document;
@@ -2296,7 +2365,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   dom3.window.ExcelJS = ExcelJS;
   dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js']) {
     dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   dom3.window.document.querySelector('#startBody [data-sp-continue]')
