@@ -36,9 +36,9 @@
   <div class="tabs-center">
     <div class="view-tabs" id="viewTabs">
       <button data-view="scoping" title="Spreadsheet of descriptions and scope"><i data-lucide="table-properties"></i>Scoping</button>
+      <button data-view="prio" title="Prioritizing board — problems, RICE scores and themes by phase"><i data-lucide="square-kanban"></i>Prioritizing</button>
       <button data-view="planning" title="Timeline / gantt"><i data-lucide="chart-gantt"></i>Planning</button>
       <button data-view="budget" title="Resources — rates, costs and timelines"><i data-lucide="wallet"></i>Budgeting</button>
-      <button data-view="sprints" title="Sprint board — statuses and execution"><i data-lucide="square-kanban"></i>Sprinting</button>
       <button data-view="reports" title="Project reporting dashboard"><i data-lucide="chart-pie"></i>Reporting</button>
     </div>
     <div id="setupSplit">
@@ -49,7 +49,7 @@
   </div>
 
   <div class="tb-right">
-    <button id="btnExport" title="Export the timeline (or a filtered slice) as a PNG"><i data-lucide="image"></i>Export</button>
+    <button id="btnExport" title="Export the timeline as PNG, PowerPoint or split Excel files"><i data-lucide="share"></i>Export</button>
     <button id="btnSave" class="primary" title="Save as .xlsx (styled, re-loadable)"><i data-lucide="download"></i>Save</button>
     <button id="btnValidation" class="chip" title="Preflight — validation report" hidden><span id="valDot"></span><span id="valCount">0</span></button>
   </div>
@@ -60,7 +60,7 @@
   <div id="setupView"></div>
   <div id="reportsView"></div>
   <div id="historyView"></div>
-  <div id="sprintView"></div>
+  <div id="prioView"></div>
     <div id="board">
     <div id="grid">
       <div id="bgcols"></div>

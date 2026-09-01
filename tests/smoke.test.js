@@ -1628,44 +1628,65 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 // export renders through toBlob (folder choice happens in the picker/dialog)
 ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob renderer for save-to-folder flows');
 
-// ---------------------------------------------------------------- sprinting view + statuses
+// ---------------------------------------------------------------- prioritizing view
 {
-  ok(!!doc.querySelector('#viewTabs [data-view="sprints"]'), 'Sprinting tab sits in the view tabs');
-  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
-  ok(doc.body.dataset.view === 'sprints', 'view switches to Sprinting');
-  ok(!!doc.querySelector('#sprintView .sp-toolbar [data-sprsel]'), 'sprint selector present');
-  ok(doc.querySelectorAll('#sprintView .sp-col').length === 4, 'kanban board shows the 4 default feature statuses');
-  ok(doc.querySelectorAll('#sprintView .sp-card').length > 0, 'cards rendered for the selected sprint');
-
-  // grid mode: editable + tab-navigable
-  click(doc.querySelector('#sprintView [data-spmode="grid"]'));
-  ok(doc.querySelectorAll('#sprintView .sp-grid').length > 0, 'grid mode renders a table');
-  const titleInp = doc.querySelector('#sprintView [data-sptitle]');
-  ok(!!titleInp && titleInp.tagName === 'INPUT', 'grid titles are real inputs (tabbable)');
-  const gid = titleInp.dataset.sptitle;
-  titleInp.value = 'Renamed in sprint grid';
-  titleInp.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().items.find(i => i.id === gid).feature === 'Renamed in sprint grid', 'grid title edit commits');
+  const tabs = [...doc.querySelectorAll('#viewTabs [data-view]')].map(b => b.dataset.view);
+  ok(tabs.indexOf('sprints') === -1, 'the Sprinting tab is gone');
+  ok(tabs.indexOf('prio') === tabs.indexOf('scoping') + 1, 'Prioritizing sits right of Scoping');
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  ok(doc.body.dataset.view === 'prio', 'view switches to Prioritizing');
+  ok(doc.querySelectorAll('#prioView .sp-col').length === state().phases.length,
+    'kanban columns are the phases');
+  const vis = doc.querySelector('#prVision');
+  ok(!!vis && /Vision/.test(vis.placeholder), 'editable vision line sits on top');
+  vis.value = 'Own the roadmap conversation';
+  vis.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.vision === 'Own the roadmap conversation', 'vision edit commits to the doc');
+  const card = doc.querySelector('#prioView .pr-card');
+  ok(!!card, 'cards render on the board');
+  ok(/what change are we trying to create/.test(card.querySelector('[data-prf="problem"]').placeholder),
+    'problem field prompts for the change, not the feature');
+  ok(/the metric that proves it worked/.test(card.querySelector('[data-prf="measure"]').placeholder),
+    'measure field prompts for the proving metric');
+  // RICE: filling all four inputs scores the card and floats it up its column
+  const cid = card.dataset.prcard;
+  const setR = (k, v) => {
+    const inp = doc.querySelector('#prioView [data-prcard="' + cid + '"] [data-prr="' + k + '"]');
+    inp.value = v;
+    inp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+  setR('reach', 100); setR('impact', 2); setR('confidence', 80); setR('effort', 4);
+  const scored = state().items.find(i => i.id === cid);
+  ok(scored.rice.reach === 100 && scored.rice.effort === 4, 'RICE inputs commit');
+  ok(window.RM.riceScore(scored) === 40, 'score = R × I × C% ÷ E');
+  const colOf = doc.querySelector('#prioView [data-prcard="' + cid + '"]').closest('[data-prcol]');
+  ok(colOf.querySelector('.pr-card').dataset.prcard === cid,
+    'the scored card auto-sorts to the top of its column');
+  ok(/40/.test(doc.querySelector('#prioView [data-prcard="' + cid + '"] .pr-score').textContent),
+    'the score badge shows the computed RICE');
+  // themes: tag a card, then filter the board by that theme
+  const tagIn = doc.querySelector('#prioView [data-prcard="' + cid + '"] .pr-tagadd');
+  tagIn.value = 'Retention';
+  tagIn.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(state().items.find(i => i.id === cid).themes.indexOf('Retention') !== -1, 'theme tag commits');
+  const filterChip = [...doc.querySelectorAll('#prioView .pr-themes [data-prtheme]')]
+    .find(c => c.dataset.prtheme === 'Retention');
+  ok(!!filterChip, 'the new theme appears in the filter row');
+  click(filterChip);
+  ok(doc.querySelectorAll('#prioView .pr-card').length === 1, 'theme filter narrows the board');
+  click(doc.querySelector('#prioView [data-prtheme=""]'));
+  ok(doc.querySelectorAll('#prioView .pr-card').length > 1, 'All themes restores the board');
+  // add-card lands in the column's phase
+  const lastPhase = state().phases[state().phases.length - 1];
+  const nBefore = state().items.length;
+  click(doc.querySelector('#prioView [data-pradd="' + lastPhase.id + '"]'));
+  ok(state().items.length === nBefore + 1 &&
+    state().items.find(i => i.id === window.__headway.getState().items.filter(x => x.phaseId === lastPhase.id).pop().id).phaseId === lastPhase.id,
+    'Add creates a card in that phase');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-
-  // status chip commits + syncs the done flag on the last status
-  const stBtn = doc.querySelector('#sprintView [data-spstatus]');
-  const stId = stBtn.dataset.spstatus;
-  click(stBtn);
-  const doneOpt = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^Done$/.test(b.textContent.trim()));
-  ok(!!doneOpt, 'status dropdown lists the feature statuses');
-  click(doneOpt);
-  const stItem = state().items.find(i => i.id === stId);
-  ok(stItem.status === 'Done' && stItem.done === true, 'last status marks the item done');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-
-  // all-sprints grouping
-  click(doc.querySelector('#sprintView [data-sprsel]'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /All sprints/.test(b.textContent)));
-  ok(doc.querySelectorAll('#sprintView .sp-ghd').length > 1, 'All sprints groups by sprint');
-  click(doc.querySelector('#sprintView [data-sprsel]'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Current sprint/.test(b.textContent)));
-  click(doc.querySelector('#sprintView [data-spmode="board"]'));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // statuses configurable in Setup, feature and story lists separate
@@ -1811,18 +1832,6 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const stRowP2 = state().items.find(i => i.id === stRow7.dataset.id);
   ok(stRowP2.stories.find(s2 => s2.id === stRow7.dataset.story).assignees.length === 1, 'story assignee commits');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-
-  // sprint board shows story cards alongside feature cards
-  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
-  click(doc.querySelector('#sprintView [data-sprsel]'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /All sprints/.test(b.textContent)));
-  ok(doc.querySelectorAll('#sprintView .sp-card.sp-stcard').length > 0, 'sprint board shows story cards');
-  ok(doc.querySelectorAll('#sprintView [data-spstasg]').length === 0 || true, 'board mode has no grid buttons');
-  click(doc.querySelector('#sprintView [data-spmode="grid"]'));
-  ok(doc.querySelectorAll('#sprintView [data-spstasg]').length > 0, 'sprint grid stories carry assignee buttons');
-  click(doc.querySelector('#sprintView [data-spmode="board"]'));
-  click(doc.querySelector('#sprintView [data-sprsel]'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Current sprint/.test(b.textContent)));
 
   // budgeting: names edit in place, people join several workstreams
   click(doc.querySelector('#viewTabs [data-view="budget"]'));
@@ -2211,10 +2220,6 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(pick);
   const stName = sw.dataset.stcsw.split(':').slice(1).join(':');
   ok(state().meta.statusColors[stName] === 'B3362B', 'picking a color stores it on the status');
-  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
-  const chip = Array.from(doc.querySelectorAll('#sprintView .sp-status')).find(b => b.textContent.trim() === stName);
-  if (chip) ok(chip.getAttribute('style').includes('B3362B'), 'sprint chips paint in the assigned color');
-  else ok(!!doc.querySelector('#sprintView .st-dot'), 'board column headers carry status color dots');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -2325,10 +2330,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'the active option name autosaves with the document');
 }
 
-// ------------------------------------------------- sprints view survives reload
-// regression: applyUi's saved-view whitelist omitted 'sprints', so reloading
-// while on the Sprinting tab silently fell back to Planning. Boot a second
-// window with the current session storage and assert Sprinting is restored.
+// ------------------------------------------------- prio view survives reload
+// regression guard: applyUi's saved-view whitelist must include every tab, or
+// reloading on it silently falls back to Planning. Boot a second window with
+// the current session storage and assert Prioritizing is restored.
 {
   // pick Story detail first — the level chosen must come back after a reload
   // (and default to Feature when nothing is stored)
@@ -2336,9 +2341,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => /Story/.test(b.textContent)));
   ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).detailMode === 'story',
     'the detail level is written to the ui snapshot');
-  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
-  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).view === 'sprints',
-    'sprints is written to the ui snapshot');
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).view === 'prio',
+    'prio is written to the ui snapshot');
   const dom2 = new JSDOM(html, {
     url: 'http://localhost/roadmapping/index.html',
     runScripts: 'outside-only',
@@ -2355,9 +2360,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   d2.querySelector('#startBody [data-sp-continue]')
     .dispatchEvent(new w2.MouseEvent('click', { bubbles: true }));
   const onTab = d2.querySelector('#viewTabs button.on');
-  ok(onTab && onTab.dataset.view === 'sprints',
-    'reload restores the Sprinting tab (got ' + (onTab ? onTab.dataset.view : 'none') + ')');
-  ok(!!d2.querySelector('#sprintView .sp-toolbar'), 'the sprint board renders after the reload');
+  ok(onTab && onTab.dataset.view === 'prio',
+    'reload restores the Prioritizing tab (got ' + (onTab ? onTab.dataset.view : 'none') + ')');
+  ok(!!d2.querySelector('#prioView .sp-board'), 'the prioritizing board renders after the reload');
   ok(/Story/.test(d2.querySelector('#detailBtn').textContent),
     'reload restores the chosen detail level (Story)');
   dom2.window.close();

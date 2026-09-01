@@ -114,16 +114,15 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs };
   }
-  var sprintSel = 'cur';    // Sprinting view: 'cur' | 'all' | a sprint number
-  var sprintMode = 'board'; // Sprinting view: 'board' (kanban) | 'grid'
+  var prioTheme = null;     // Prioritizing view: active theme filter (null = all)
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
   function applyUi(ui) {
     if (!ui) return;
     weekPx = ui.weekPx || 28;
-    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'sprints'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'prio'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
     detailMode = ['phase', 'feature', 'story'].indexOf(ui.detailMode) !== -1 ? ui.detailMode : 'feature';
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
@@ -154,8 +153,6 @@
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
-    sprintSel = ui.sprintSel != null ? ui.sprintSel : 'cur';
-    sprintMode = ui.sprintMode === 'grid' ? 'grid' : 'board';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -1228,8 +1225,8 @@
       renderPanel();
       return;
     }
-    if (view === 'sprints') {
-      renderSprintPage();
+    if (view === 'prio') {
+      renderPrioPage();
       renderPanel();
       return;
     }
@@ -1469,7 +1466,7 @@
     if (window.lucide) lucide.createIcons();
   }
 
-  // ------------------------------------------------------------ sprinting view
+  // --------------------------------------------- sprint helpers (reports page)
   function currentSprintNum() {
     var meta = state.meta;
     var now = new Date();
@@ -1499,7 +1496,6 @@
       return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
     });
   }
-
   // stories ride along: their own schedule decides sprint membership when
   // set, otherwise they follow their feature
   function storiesInSprint(num, items) {
@@ -1517,23 +1513,6 @@
     });
     return out;
   }
-  // feature and story statuses are separate lists; the board's columns are
-  // the feature ones, so story statuses map across by name, else position
-  function mapStatusAcross(val, fromList, toList) {
-    var byName = toList.indexOf(val);
-    if (byName !== -1) return toList[byName];
-    var i = fromList.indexOf(val);
-    if (i <= 0) return toList[0];
-    if (i >= fromList.length - 1) return toList[toList.length - 1];
-    return toList[Math.max(1, Math.min(toList.length - 2, i))];
-  }
-  function storyColFor(stStatus) {
-    return mapStatusAcross(stStatus, RM.statusesOf(state, 'story'), RM.statusesOf(state, 'feature'));
-  }
-  function storyStatusForCol(colName) {
-    return mapStatusAcross(colName, RM.statusesOf(state, 'feature'), RM.statusesOf(state, 'story'));
-  }
-
   // pick a color for one status (Setup → Statuses): preset swatches or a
   // custom color; "automatic" clears back to position-based defaults
   var STATUS_SWATCHES = ['6E7883', '0057B8', '08875B', 'A66A00', 'B3362B', 'A14FBF', '0E7C86', 'C25E0E'];
@@ -1570,369 +1549,186 @@
       });
     });
   }
-  function spStatusChip(kind, cur, act, id) {
-    var c = RM.statusColor(state, kind, cur);
-    return '<button class="sp-status" data-stc data-' + act + '="' + id + '" style="--st-c:#' + c +
-      '" title="Status \u2014 click to change">' + esc(cur) + '</button>';
-  }
 
-  function spCardHtml(it) {
-    var color = '#' + RM.colorForItem(state, it);
-    var dates = isScheduled(it)
-      ? RM.fmtShort(RM.dayToDate(state.meta, it.startDay)) +
-        (it.milestone ? '' : ' \u2192 ' + RM.fmtShort(RM.spanEndDate(state.meta, it.startDay, RM.itemSpan(it))))
-      : '';
-    return '<div class="sp-card" data-spcard="' + it.id + '" tabindex="0">' +
-      '<div class="sp-card-top">' +
-      '<span class="r-num">#' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
-      '<span class="sp-card-dates">' + esc(dates) + '</span>' +
-      avatarStack(it.assignees) +
+  // ---------------------------------------------------------- prioritizing view
+  // Kanban of the phases (the horizons). Cards force outcome framing — the
+  // problem being attacked and the measure that proves it worked — carry RICE
+  // inputs that auto-score and auto-sort each column, and wear theme tags for
+  // strategic grouping. The vision line on top is the destination everything
+  // below ladders up to.
+  function prThemes() {
+    var seen = {}, out = [];
+    state.items.forEach(function (it) {
+      (it.themes || []).forEach(function (t) { if (!seen[t]) { seen[t] = true; out.push(t); } });
+    });
+    return out.sort();
+  }
+  function prScoreHtml(it) {
+    var sc = RM.riceScore(it);
+    return '<span class="pr-score' + (sc == null ? ' none' : '') +
+      '" title="RICE — reach × impact × confidence ÷ effort">' +
+      (sc == null ? '·' : (Math.round(sc * 10) / 10)) + '</span>';
+  }
+  function prCardHtml(it) {
+    var r = it.rice || {};
+    function rv(v) { return v == null ? '' : v; }
+    return '<div class="sp-card pr-card" data-prcard="' + it.id + '">' +
+      '<div class="sp-card-top"><span class="r-num">#' + it.num + '</span>' + prScoreHtml(it) + '</div>' +
+      '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
+      '<textarea class="pr-prob" data-prf="problem" rows="2" placeholder="Problem — what change are we trying to create?">' + esc(it.problem || '') + '</textarea>' +
+      '<textarea class="pr-meas" data-prf="measure" rows="2" placeholder="Measure — the metric that proves it worked">' + esc(it.measure || '') + '</textarea>' +
+      '<div class="pr-rice">' +
+      '<label title="Reach — people or events per quarter">R<input type="number" min="0" data-prr="reach" value="' + rv(r.reach) + '"></label>' +
+      '<label title="Impact — 0.25 minimal · 0.5 low · 1 medium · 2 high · 3 massive">I<input type="number" min="0" step="0.25" data-prr="impact" value="' + rv(r.impact) + '"></label>' +
+      '<label title="Confidence — percent">C%<input type="number" min="0" max="100" step="5" data-prr="confidence" value="' + rv(r.confidence) + '"></label>' +
+      '<label title="Effort — person-weeks">E<input type="number" min="0" step="0.5" data-prr="effort" value="' + rv(r.effort) + '"></label>' +
       '</div>' +
-      '<div class="sp-card-title">' + esc(it.feature || '(untitled)') + '</div>' +
-      (it.size || it.epic
-        ? '<div class="sp-card-meta">' + (it.size ? '<span class="r-size">' + esc(it.size) + '</span>' : '') +
-          (it.epic ? '<span class="r-epic">' + esc(shorten(it.epic, 18)) + '</span>' : '') + '</div>'
-        : '') +
-      '</div>';
+      '<div class="pr-tags">' +
+      (it.themes || []).map(function (t) {
+        return '<span class="pr-tag">' + esc(t) +
+          '<button class="pr-tagx" data-prtagx="' + esc(t) + '" title="Remove theme">×</button></span>';
+      }).join('') +
+      '<input class="pr-tagadd" data-prtagadd placeholder="+ theme">' +
+      '</div></div>';
   }
-
-  function spStoryCardHtml(it, st) {
-    return '<div class="sp-card sp-stcard" data-spcardst="' + st.id + '" data-pid="' + it.id + '" tabindex="0">' +
-      '<div class="sp-card-top">' +
-      '<span class="sp-sttag">story</span>' +
-      '<span class="sp-card-dates" title="' + esc(it.feature) + '">#' + it.num + ' · ' + esc(shorten(it.feature, 20)) + '</span>' +
-      avatarStack(st.assignees) +
-      '</div>' +
-      '<div class="sp-card-title">' + esc(st.title || '(untitled)') + '</div>' +
-      (st.size ? '<div class="sp-card-meta"><span class="r-size">' + esc(st.size) + '</span></div>' : '') +
-      '</div>';
-  }
-
-  function spGroupHtml(num, items) {
-    var out = [];
-    var label = sprintSel === 'all' ? '<div class="sp-ghd">' + esc(sprintLabel(num)) + '</div>' : '';
-    var stories = storiesInSprint(num, items);
-    if (sprintMode === 'board') {
-      var cols = RM.statusesOf(state, 'feature').map(function (st) {
-        var mine = items.filter(function (it) { return RM.statusOf(state, it, 'feature') === st; });
-        var mineSt = stories.filter(function (p) { return storyColFor(RM.statusOf(state, p.st, 'story')) === st; });
-        return '<div class="sp-col" data-spcol="' + esc(st) + '">' +
-          '<div class="sp-colhd"><span class="st-dot" style="background:#' + RM.statusColor(state, 'feature', st) + '"></span>' +
-          esc(st) + '<span class="band-count">' + (mine.length + mineSt.length) + '</span></div>' +
-          '<div class="sp-colbody">' + mine.map(spCardHtml).join('') +
-          mineSt.map(function (p) { return spStoryCardHtml(p.it, p.st); }).join('') + '</div>' +
-          '</div>';
-      }).join('');
-      out.push(label + '<div class="sp-board">' + cols + '</div>');
-    } else {
-      var rows = [];
-      items.forEach(function (it) {
-        rows.push('<tr class="sp-r" data-id="' + it.id + '">' +
-          '<td class="sp-c-num">#' + it.num + '</td>' +
-          '<td class="sp-c-title"><span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:#' + RM.colorForItem(state, it) + '"></span>' +
-          '<input class="sp-title" data-sptitle="' + it.id + '" value="' + esc(it.feature) + '"></td>' +
-          '<td>' + spStatusChip('feature', RM.statusOf(state, it, 'feature'), 'spstatus', it.id) + '</td>' +
-          '<td class="sp-c-asg"><button class="sp-asgbtn" data-spasg="' + it.id + '" title="Assignees">' +
-          (avatarStack(it.assignees) || '<i data-lucide="user-plus"></i>') + '</button></td>' +
-          '<td>' + (RM.sizingEnabled(state) && !it.milestone
-            ? '<button class="sp-szbtn" data-spsize="' + it.id + '">' + (it.size ? esc(it.size) : '\u2014') + '</button>' : '') + '</td>' +
-          '<td class="sp-c-dur">' + (it.milestone ? '\u25C6' : (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '')) + '</td>' +
-          '</tr>');
-        (it.stories || []).forEach(function (st) {
-          rows.push('<tr class="sp-r sp-story" data-id="' + it.id + '" data-spst="' + st.id + '">' +
-            '<td class="sp-c-num"></td>' +
-            '<td class="sp-c-title sp-ind"><input class="sp-title" data-spsttitle="' + st.id + '" value="' + esc(st.title) + '"></td>' +
-            '<td>' + spStatusChip('story', RM.statusOf(state, st, 'story'), 'spststatus', st.id) + '</td>' +
-            '<td class="sp-c-asg"><button class="sp-asgbtn" data-spstasg="' + st.id + '" title="Story assignees">' +
-            (avatarStack(st.assignees) || '<i data-lucide="user-plus"></i>') + '</button></td>' +
-            '<td>' + (RM.sizingEnabled(state)
-              ? '<button class="sp-szbtn" data-spstsize="' + st.id + '" title="Story size">' + (st.size ? esc(st.size) : '—') + '</button>' : '') + '</td>' +
-            '<td class="sp-c-dur">' + (st.durDays != null ? totalWeeks(st) : '') + '</td>' +
-            '</tr>');
-        });
-      });
-      out.push(label +
-        '<table class="sp-grid"><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Assignees</th><th>Size</th><th>Dur</th></tr></thead>' +
-        '<tbody>' + (rows.join('') || '<tr><td colspan="6" class="p-none">Nothing scheduled in this sprint.</td></tr>') + '</tbody></table>');
-    }
-    return out.join('');
-  }
-
-  function renderSprintPage() {
-    var host = $('#sprintView');
+  function renderPrioPage() {
+    var host = $('#prioView');
     if (!host) return;
-    var meta = state.meta;
-    var withS = RM.sprintsEnabled(meta);
-    var selNum = sprintSel === 'cur' ? currentSprintNum() : sprintSel;
-    var selLabel = sprintSel === 'all' ? (withS ? 'All sprints' : 'All weeks')
-      : sprintSel === 'cur' ? (withS ? 'Current sprint' : 'This week') + ' \u2014 ' + sprintLabel(selNum)
-      : sprintLabel(selNum);
-    var groups;
-    if (sprintSel === 'all') {
-      groups = sprintNums().map(function (n) { return { num: n, items: itemsInSprint(n) }; })
-        .filter(function (g) { return g.items.length; });
-    } else {
-      groups = [{ num: selNum, items: itemsInSprint(selNum) }];
-    }
+    var themes = prThemes();
+    if (prioTheme && themes.indexOf(prioTheme) === -1) prioTheme = null;
+    var themeRow = '<div class="pr-themes">' +
+      '<span class="pr-tag' + (!prioTheme ? ' on' : '') + '" data-prtheme="">All themes</span>' +
+      themes.map(function (t) {
+        return '<span class="pr-tag' + (prioTheme === t ? ' on' : '') + '" data-prtheme="' + esc(t) + '">' + esc(t) + '</span>';
+      }).join('') + '</div>';
+    var cols = state.phases.map(function (p) {
+      var mine = state.items.filter(function (it) {
+        return it.phaseId === p.id && (!prioTheme || (it.themes || []).indexOf(prioTheme) !== -1);
+      });
+      // evidence first: RICE score descending; unscored keep document order below
+      mine = mine.map(function (it, i) { return { it: it, i: i, sc: RM.riceScore(it) }; })
+        .sort(function (a, b) {
+          if (a.sc == null && b.sc == null) return a.i - b.i;
+          if (a.sc == null) return 1;
+          if (b.sc == null) return -1;
+          return (b.sc - a.sc) || (a.i - b.i);
+        }).map(function (x) { return x.it; });
+      return '<div class="sp-col" data-prcol="' + p.id + '">' +
+        '<div class="sp-colhd">' + esc(p.name) + '<span style="margin-left:auto">' + mine.length + '</span></div>' +
+        '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
+        '<button class="pr-add" data-pradd="' + p.id + '"><i data-lucide="plus"></i> Add</button>' +
+        '</div>';
+    }).join('');
     host.innerHTML =
       '<div class="sp-page">' +
-      '<div class="sp-toolbar">' +
-      '<button class="dd-btn" data-sprsel><span>' + esc(selLabel) + '</span><i data-lucide="chevron-down"></i></button>' +
-      '<div class="seg sp-modeseg">' +
-      '<button data-spmode="board"' + (sprintMode === 'board' ? ' class="on"' : '') + ' title="Kanban board"><i data-lucide="square-kanban"></i>Board</button>' +
-      '<button data-spmode="grid"' + (sprintMode === 'grid' ? ' class="on"' : '') + ' title="Editable list"><i data-lucide="rows-3"></i>Grid</button>' +
-      '</div>' +
-      '</div>' +
-      groups.map(function (g) { return spGroupHtml(g.num, g.items); }).join('') +
-      (groups.length ? '' : '<div class="p-none" style="padding:30px">Nothing scheduled' + (sprintSel === 'all' ? '' : ' in this sprint') + '.</div>') +
-      '</div>';
+      '<input id="prVision" class="pr-vision" placeholder="Vision — where is this product going? Everything below should ladder up to it." value="' + esc(state.meta.vision || '') + '">' +
+      themeRow +
+      '<div class="sp-board">' + cols + '</div></div>';
     if (window.lucide) lucide.createIcons();
   }
 
-  // sprint view interactions
-  $('#sprintView').addEventListener('click', function (e) {
-    if (dragConsumedClick) { dragConsumedClick = false; return; }
-    var selBtn = e.target.closest('[data-sprsel]');
-    if (selBtn) {
-      var withS = RM.sprintsEnabled(state.meta);
-      var items = [
-        { label: withS ? 'Current sprint' : 'This week', checked: sprintSel === 'cur', fn: function () { sprintSel = 'cur'; saveLocal(); render(); } },
-        { label: withS ? 'All sprints' : 'All weeks', checked: sprintSel === 'all', fn: function () { sprintSel = 'all'; saveLocal(); render(); } },
-        { sep: true }
-      ];
-      sprintNums().forEach(function (n) {
-        items.push({ label: esc(sprintLabel(n)), checked: sprintSel === n, fn: function () {
-          sprintSel = n; saveLocal(); render();
-        } });
-      });
-      openDropdown(selBtn, items);
-      return;
-    }
-    var modeBtn = e.target.closest('[data-spmode]');
-    if (modeBtn) {
-      sprintMode = modeBtn.dataset.spmode;
-      saveLocal();
-      render();
-      return;
-    }
-    var stBtn = e.target.closest('[data-spstatus]');
-    if (stBtn) {
-      var sid = stBtn.dataset.spstatus;
-      openDropdown(stBtn, RM.statusesOf(state, 'feature').map(function (stName) {
-        var cur = RM.statusOf(state, RM.itemById(state, sid), 'feature');
-        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'feature', stName), checked: cur === stName, fn: function () {
-          commit('status', function (s) { RM.setStatus(s, RM.itemById(s, sid), 'feature', stName); });
-        } };
-      }));
-      return;
-    }
-    var ssBtn = e.target.closest('[data-spststatus]');
-    if (ssBtn) {
-      var stId = ssBtn.dataset.spststatus;
-      var rowElS = ssBtn.closest('[data-id]');
-      var pid = rowElS && rowElS.dataset.id;
-      var pIt = pid && RM.itemById(state, pid);
-      var stObj = pIt && storyById(pIt, stId);
-      if (!stObj) return;
-      openDropdown(ssBtn, RM.statusesOf(state, 'story').map(function (stName) {
-        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'story', stName), checked: RM.statusOf(state, stObj, 'story') === stName, fn: function () {
-          commit('status', function (s) {
-            var t = storyById(RM.itemById(s, pid) || {}, stId);
-            if (t) RM.setStatus(s, t, 'story', stName);
-          });
-        } };
-      }));
-      return;
-    }
-    var asgBtn = e.target.closest('[data-spasg]');
-    if (asgBtn) {
-      var aid2 = asgBtn.dataset.spasg;
-      var itA = RM.itemById(state, aid2);
-      if (!itA) return;
-      if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-      openDropdown(asgBtn, state.team.map(function (mm) {
-        var onA = (itA.assignees || []).indexOf(mm.id) !== -1;
-        return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
-          commit('assignees', function (s) {
-            var t = RM.itemById(s, aid2);
-            t.assignees = t.assignees || [];
-            var at = t.assignees.indexOf(mm.id);
-            if (at === -1) t.assignees.push(mm.id);
-            else t.assignees.splice(at, 1);
-          });
-        } };
-      }));
-      return;
-    }
-    var szBtn = e.target.closest('[data-spsize]');
-    if (szBtn) {
-      var szId = szBtn.dataset.spsize;
-      var itZ = RM.itemById(state, szId);
-      openDropdown(szBtn, [{ label: '<i>no size</i>', checked: !itZ.size, fn: function () { setItemSize(szId, null); } }]
-        .concat(RM.sizeOrderOf(state).map(function (sz) {
-          return { label: esc(sz), checked: itZ.size === sz, fn: function () { setItemSize(szId, sz); } };
-        })));
-      return;
-    }
-    var stAsgBtn = e.target.closest('[data-spstasg]');
-    if (stAsgBtn) {
-      var rowA = stAsgBtn.closest('[data-id]');
-      var pidA = rowA && rowA.dataset.id;
-      var stIdA = stAsgBtn.dataset.spstasg;
-      var stA = pidA && storyById(RM.itemById(state, pidA) || {}, stIdA);
-      if (!stA) return;
-      if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-      openDropdown(stAsgBtn, state.team.map(function (mm) {
-        var onA2 = (stA.assignees || []).indexOf(mm.id) !== -1;
-        return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA2, fn: function () {
-          commit('story assignees', function (s) {
-            var t = storyById(RM.itemById(s, pidA) || {}, stIdA);
-            if (!t) return;
-            t.assignees = t.assignees || [];
-            var at2 = t.assignees.indexOf(mm.id);
-            if (at2 === -1) t.assignees.push(mm.id);
-            else t.assignees.splice(at2, 1);
-          });
-        } };
-      }));
-      return;
-    }
-    var stSzBtn = e.target.closest('[data-spstsize]');
-    if (stSzBtn) {
-      var rowZ = stSzBtn.closest('[data-id]');
-      var pidZ = rowZ && rowZ.dataset.id;
-      var stIdZ = stSzBtn.dataset.spstsize;
-      var stZ = pidZ && storyById(RM.itemById(state, pidZ) || {}, stIdZ);
-      if (!stZ) return;
-      openDropdown(stSzBtn, [{ label: '<i>no size</i>', checked: !stZ.size, fn: function () {
-        commit('story size', function (s) {
-          var t = storyById(RM.itemById(s, pidZ) || {}, stIdZ);
-          if (t) t.size = null;
-        });
-      } }].concat(RM.sizeOrderOf(state).map(function (sz) {
-        return { label: esc(sz), checked: stZ.size === sz, fn: function () {
-          commit('story size', function (s) {
-            var t = storyById(RM.itemById(s, pidZ) || {}, stIdZ);
-            if (t) t.size = sz;
-          });
-        } };
-      })));
-      return;
-    }
-  });
-  $('#sprintView').addEventListener('change', function (e) {
+  $('#prioView').addEventListener('change', function (e) {
     var t = e.target;
-    if (t.dataset.sptitle) {
-      var nv = t.value;
-      commit('rename', function (s) { RM.itemById(s, t.dataset.sptitle).feature = nv; });
+    if (t.id === 'prVision') {
+      var v = t.value.trim();
+      if (v !== (state.meta.vision || '')) commit('vision', function (s) { s.meta.vision = v; });
       return;
     }
-    if (t.dataset.spsttitle) {
-      var rowT = t.closest('[data-id]');
-      var pidT = rowT && rowT.dataset.id;
-      var nv2 = t.value;
-      commit('rename story', function (s) {
-        var stT = storyById(RM.itemById(s, pidT) || {}, t.dataset.spsttitle);
-        if (stT) stT.title = nv2;
+    var card = t.closest('[data-prcard]');
+    if (!card) return;
+    var id = card.dataset.prcard;
+    if (t.dataset.prf) {
+      var f = t.dataset.prf, val = t.value;
+      commit(f === 'feature' ? 'rename' : f, function (s) {
+        var x = RM.itemById(s, id);
+        if (x) x[f] = val;
+      });
+      return;
+    }
+    if (t.dataset.prr) {
+      var k = t.dataset.prr;
+      var n = t.value === '' ? null : parseFloat(t.value);
+      if (n != null && (!isFinite(n) || n < 0)) n = null;
+      commit('rice', function (s) {
+        var x = RM.itemById(s, id);
+        if (x) x.rice[k] = n;
       });
     }
   });
-  // kanban: drag a card (feature or story) between status columns
-  $('#sprintView').addEventListener('pointerdown', function (e) {
-    if (e.button !== 0) return;
-    var card = e.target.closest('.sp-card');
-    if (!card || e.target.closest('button,input')) return;
-    drag = { kind: 'spcard', itemId: card.dataset.spcard || card.dataset.pid, stId: card.dataset.spcardst || null,
-      x0: e.clientX, y0: e.clientY, moved: false, ghost: null };
+  $('#prioView').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    var t = e.target;
+    if (t.dataset && t.dataset.prtagadd != null) {
+      var v = t.value.trim();
+      var card = t.closest('[data-prcard]');
+      if (!v || !card) return;
+      var id2 = card.dataset.prcard;
+      commit('theme', function (s) {
+        var x = RM.itemById(s, id2);
+        if (x && x.themes.indexOf(v) === -1) x.themes.push(v);
+      });
+    } else if (t.id === 'prVision' || (t.dataset && t.dataset.prf === 'feature')) {
+      t.blur(); // the change event commits
+    }
   });
-  function spCardDragMove(e) {
+  $('#prioView').addEventListener('click', function (e) {
+    var tagx = e.target.closest('[data-prtagx]');
+    if (tagx) {
+      var cardX = tagx.closest('[data-prcard]');
+      var tv = tagx.dataset.prtagx, cid = cardX.dataset.prcard;
+      commit('theme', function (s) {
+        var x = RM.itemById(s, cid);
+        if (x) x.themes = x.themes.filter(function (t2) { return t2 !== tv; });
+      });
+      return;
+    }
+    var th = e.target.closest('[data-prtheme]');
+    if (th) { prioTheme = th.dataset.prtheme || null; render(); return; }
+    var add = e.target.closest('[data-pradd]');
+    if (add) addFeature(add.dataset.pradd);
+  });
+  // cards drag between horizons (the phase columns)
+  $('#prioView').addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || drag) return;
+    if (e.target.closest('input,textarea,button')) return;
+    var card = e.target.closest('[data-prcard]');
+    if (!card) return;
+    drag = { kind: 'prcard', id: card.dataset.prcard, el: card,
+      x0: e.clientX, y0: e.clientY, moved: false, ghost: null, col: null };
+    e.preventDefault();
+  });
+  function prCardDragMove(e) {
     if (!drag.ghost) {
-      var src = $('#sprintView .sp-card[' + (drag.stId
-        ? 'data-spcardst="' + drag.stId + '"' : 'data-spcard="' + drag.itemId + '"') + ']');
       drag.ghost = document.createElement('div');
       drag.ghost.className = 'sp-card sp-card-ghost';
-      drag.ghost.textContent = drag.stId
-        ? (storyById(RM.itemById(state, drag.itemId) || {}, drag.stId) || {}).title || ''
-        : (RM.itemById(state, drag.itemId) || {}).feature || '';
+      var t = RM.itemById(state, drag.id);
+      drag.ghost.textContent = (t && t.feature) || 'Card';
       document.body.appendChild(drag.ghost);
-      if (src) src.classList.add('sp-dragging');
+      drag.el.classList.add('sp-dragging');
     }
     drag.ghost.style.left = (e.clientX + 10) + 'px';
     drag.ghost.style.top = (e.clientY + 8) + 'px';
-    var col = document.elementFromPoint(e.clientX, e.clientY);
-    col = col && col.closest ? col.closest('.sp-col') : null;
-    $$('#sprintView .sp-col').forEach(function (c) { c.classList.toggle('drop', c === col); });
-    drag.overCol = col ? col.dataset.spcol : null;
+    var under = document.elementFromPoint(e.clientX, e.clientY);
+    var col = under && under.closest ? under.closest('[data-prcol]') : null;
+    drag.col = col ? col.dataset.prcol : null;
+    $$('#prioView .sp-col').forEach(function (c) { c.classList.toggle('drop', c.dataset.prcol === drag.col); });
   }
-  function spCardDragEnd(d) {
+  function prCardDragEnd(d) {
     if (d.ghost) d.ghost.remove();
-    $$('#sprintView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
-    if (!d.overCol) { render(); return; }
-    var target = d.overCol;
-    if (d.stId) {
-      var stTarget = storyStatusForCol(target);
-      commit('status', function (s) {
-        var t = storyById(RM.itemById(s, d.itemId) || {}, d.stId);
-        if (t) RM.setStatus(s, t, 'story', stTarget);
-      });
-      return;
-    }
-    commit('status', function (s) {
-      var t = RM.itemById(s, d.itemId);
-      if (t) RM.setStatus(s, t, 'feature', target);
+    d.el.classList.remove('sp-dragging');
+    $$('#prioView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
+    var t = RM.itemById(state, d.id);
+    if (!d.col || !t || t.phaseId === d.col) { render(); return; }
+    var toId = d.col;
+    commit('move phase', function (s) {
+      var x = RM.itemById(s, d.id);
+      s.items = s.items.filter(function (y) { return y.id !== d.id; });
+      x.phaseId = toId;
+      var lastIdx = -1;
+      s.items.forEach(function (y, i2) { if (y.phaseId === toId) lastIdx = i2; });
+      s.items.splice(lastIdx + 1, 0, x);
     });
   }
-  // right-click a card / grid row: quick status + jump to Planning
-  $('#sprintView').addEventListener('contextmenu', function (e) {
-    var card = e.target.closest('.sp-card,[data-id].sp-r');
-    if (!card || e.target.closest('input')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    var ctxStId = card.dataset.spcardst || card.dataset.spst;
-    if (ctxStId) {
-      // story card / row: story statuses + open the story panel
-      var ctxPid = card.dataset.pid || card.dataset.id;
-      var ctxIt = RM.itemById(state, ctxPid);
-      var ctxSt = ctxIt && storyById(ctxIt, ctxStId);
-      if (!ctxSt) return;
-      var stItems = RM.statusesOf(state, 'story').map(function (stName) {
-        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'story', stName), checked: RM.statusOf(state, ctxSt, 'story') === stName, fn: function () {
-          commit('status', function (s) {
-            var t = storyById(RM.itemById(s, ctxPid) || {}, ctxStId);
-            if (t) RM.setStatus(s, t, 'story', stName);
-          });
-        } };
-      });
-      stItems.push({ sep: true });
-      stItems.push({ icon: 'chart-gantt', label: 'Show in Planning', fn: function () {
-        view = 'planning';
-        expanded[ctxPid] = true;
-        selectStory(ctxPid, ctxStId);
-        saveLocal();
-        render();
-      } });
-      openContextMenu(e.clientX, e.clientY, stItems);
-      return;
-    }
-    var cid = card.dataset.spcard || card.dataset.id;
-    var itC = RM.itemById(state, cid);
-    if (!itC) return;
-    var items = RM.statusesOf(state, 'feature').map(function (stName) {
-      return { label: esc(stName), dot: '#' + RM.statusColor(state, 'feature', stName), checked: RM.statusOf(state, itC, 'feature') === stName, fn: function () {
-        commit('status', function (s) { RM.setStatus(s, RM.itemById(s, cid), 'feature', stName); });
-      } };
-    });
-    items.push({ sep: true });
-    items.push({ icon: 'chart-gantt', label: 'Show in Planning', fn: function () {
-      view = 'planning';
-      selectedId = cid;
-      panelOpen = true;
-      saveLocal();
-      render();
-    } });
-    openContextMenu(e.clientX, e.clientY, items);
-  });
 
   function renderScopeHeader() {
     var out = ['<div class="sc-hrow">'];
@@ -5464,7 +5260,7 @@
     else if (drag.kind === 'port') portDragMove(e);
     else if (drag.kind === 'scol') scolDragMove(e);
     else if (drag.kind === 'scolmove') scolMoveMove(e);
-    else if (drag.kind === 'spcard') spCardDragMove(e);
+    else if (drag.kind === 'prcard') prCardDragMove(e);
     else if (drag.kind === 'rfill') rfillMove(e);
     else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
@@ -5535,7 +5331,7 @@
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
     else if (d.kind === 'scolmove') scolMoveEnd(d);
-    else if (d.kind === 'spcard') spCardDragEnd(d);
+    else if (d.kind === 'prcard') prCardDragEnd(d);
     else if (d.kind === 'rfill') rfillEnd(d);
     else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
@@ -6227,7 +6023,7 @@
         { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
         { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
         { sep: true },
-        { icon: 'image', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'share', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         { sep: true },
         { icon: 'circle-help', nativeIcon: 'Info', label: 'Help', fn: helpModal }
       ];
@@ -6247,7 +6043,7 @@
           ? { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave }
           : null,
         { sep: true },
-        { icon: 'image', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         { icon: 'circle-help', label: 'Shortcuts & help', fn: helpModal }
@@ -7634,7 +7430,7 @@
           '<table class="hol-table"><thead><tr><th></th><th>Status</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
           '<div class="p-row" style="margin-top:8px"><input id="suStAdd-' + kind + '" placeholder="New status\u2026"><button data-sustatadd="' + kind + '" class="fixed">Add</button></div>' +
           (kind === 'feature'
-            ? '<div class="m-hint">Used on the Sprinting board and grid. The last status counts as done.</div>'
+            ? '<div class="m-hint">Workflow statuses for features and stories. The last status counts as done.</div>'
             : '') +
           '</section>';
       }).join(''),

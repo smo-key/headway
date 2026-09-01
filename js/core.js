@@ -162,6 +162,14 @@
     feature: ['Not started', 'In progress', 'Blocked', 'Done'],
     story: ['To do', 'In progress', 'Done']
   };
+  // RICE: reach × impact × confidence% ÷ effort. Null until every input is
+  // in — a partial score would sort above honestly-unscored work.
+  RM.riceScore = function (it) {
+    var r = it && it.rice;
+    if (!r || r.reach == null || r.impact == null || r.confidence == null || !r.effort) return null;
+    return r.reach * r.impact * (r.confidence / 100) / r.effort;
+  };
+
   RM.statusesOf = function (state, kind) {
     var st = state.meta && state.meta.statuses;
     var list = st && Array.isArray(st[kind]) ? st[kind] : null;
@@ -765,6 +773,8 @@
     state.meta = state.meta || {};
     var m = state.meta;
     m.title = m.title || 'Roadmap';
+    // Prioritizing view: the product vision line every card ladders up to
+    m.vision = typeof m.vision === 'string' ? m.vision : '';
     m.timelineStart = m.timelineStart || '2026-07-27';
     // work week shape: first day of week + which weekdays work (≤5).
     // Legacy daysPerWeek (3/4/5 from Monday) migrates to an explicit list.
@@ -1048,6 +1058,17 @@
             });
           }
           return out;
+        })(),
+        // Prioritizing view: outcome framing (the problem being attacked and
+        // the metric that proves it worked), strategy themes, RICE inputs
+        problem: typeof it.problem === 'string' ? it.problem : '',
+        measure: typeof it.measure === 'string' ? it.measure : '',
+        themes: Array.isArray(it.themes)
+          ? it.themes.map(String).filter(function (t) { return t.trim(); }) : [],
+        rice: (function () {
+          var r = it.rice || {};
+          function num(v) { return v != null && isFinite(v) && +v >= 0 ? +v : null; }
+          return { reach: num(r.reach), impact: num(r.impact), confidence: num(r.confidence), effort: num(r.effort) };
         })(),
         colorOverride: it.colorOverride || null,
         // team-member ids working on this feature (validated against the

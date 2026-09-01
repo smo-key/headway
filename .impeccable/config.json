@@ -8,6 +8,15 @@
         "value": "helvetica",
         "createdAt": "2026-08-17T13:22:08.056Z",
         "reason": "System-font stack for offline standalone tool"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "css/app.css"
+        ],
+        "createdAt": "2026-09-01T18:30:06.973Z",
+        "reason": "sel-parent edge marker mirrors the app's long-standing .row.selected / .row.link-source inset selection accent; user confirmed intentional"
       }
     ]
   }
