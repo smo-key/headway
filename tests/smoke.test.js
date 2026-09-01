@@ -2379,6 +2379,112 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => /Feature/.test(b.textContent)));
 }
 
+// ---------------------------------------------- panel edits flush on click-out
+// Click-out targets can suppress the blur that normally commits a panel field
+// (drag surfaces preventDefault on pointerdown; macOS WebKit buttons never
+// take focus) — re-rendering the panel must flush the pending edit first.
+{
+  // render() rebuilds #rows, so address rows by item id, freshly each time
+  const scheduled = state().items.filter((i) => i.startDay != null &&
+    !state().phases.find((p) => p.id === i.phaseId).collapsed);
+  const [id1, id2] = [scheduled[0].id, scheduled[1].id];
+  const rowFor = (id) => doc.querySelector('#rows .row.item[data-id="' + id + '"] .row-left');
+  const itemById = (id) => state().items.find((i) => i.id === id);
+  click(rowFor(id1));
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  ok(!!ed, 'panel shows the rich description editor');
+  ed.focus();
+  ed.innerHTML = '<p>typed but never blurred</p>';
+  click(rowFor(id2)); // select another row without a blur
+  ok(/typed but never blurred/.test(window.RM.scopeValue(itemById(id1), 'description')),
+    'switching selection commits a rich edit that never blurred');
+  const din = doc.querySelector('#panel input[data-f="durWeeks"]');
+  ok(!!din, 'panel shows the duration input for the second item');
+  din.focus();
+  din.value = '7';
+  click(rowFor(id1)); // again: no blur, no change event
+  const spw = window.RM.slotsOf(state().meta);
+  ok(itemById(id2).durDays === Math.max(1, Math.round(7 * spw)),
+    'switching selection commits a modified input that never fired change');
+}
+
+// ------------------------------------------------- story selection highlight
+// A selected story carries the same selected look a selected feature does;
+// its parent feature drops to a distinct, quieter marker — never the same
+// background as the selection itself.
+{
+  click(doc.querySelector('#detailBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find((b) => /Story/.test(b.textContent)));
+  const stRow = doc.querySelector('#rows .row.story[data-story]');
+  ok(!!stRow, 'a story row renders in Story detail');
+  const host = state().items.find((i) => i.id === stRow.dataset.id);
+  const stId = stRow.dataset.story;
+  click(stRow.querySelector('.st-pad') || stRow);
+  const stRow2 = doc.querySelector('#rows .row.story[data-story="' + stId + '"]');
+  const itRow2 = doc.querySelector('#rows .row.item[data-id="' + host.id + '"]');
+  ok(stRow2.classList.contains('selected'), 'clicking a story selects the story row');
+  ok(!itRow2.classList.contains('selected') && itRow2.classList.contains('sel-parent'),
+    'the parent feature shows the quiet parent marker, not the selected background');
+  click(itRow2.querySelector('.row-left'));
+  const itRow3 = doc.querySelector('#rows .row.item[data-id="' + host.id + '"]');
+  ok(itRow3.classList.contains('selected') && !itRow3.classList.contains('sel-parent'),
+    'selecting the feature itself restores the full selected background');
+  click(doc.querySelector('#detailBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find((b) => /Feature/.test(b.textContent)));
+}
+
+// ------------------------------------------------------------- multi-select
+{
+  const visIds = () => [...doc.querySelectorAll('#rows .row.item')].map((r) => r.dataset.id);
+  const rowFor = (id) => doc.querySelector('#rows .row.item[data-id="' + id + '"] .row-left');
+  const selRows = () => [...doc.querySelectorAll('#rows .row.item.selected')].map((r) => r.dataset.id);
+  const key = (opts) => window.dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({ bubbles: true }, opts)));
+  const ids = visIds();
+  click(rowFor(ids[0]));
+  rowFor(ids[2]).dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  ok(selRows().join() === ids.slice(0, 3).join(),
+    'shift-click selects the contiguous range from the anchor');
+  key({ key: 'a', metaKey: true });
+  ok(selRows().length === visIds().length && selRows().length > 3, 'Cmd+A selects all visible items');
+  // group nudge: every selected, scheduled, unlocked item moves one day
+  const before = {};
+  state().items.forEach((i) => { before[i.id] = i.startDay; });
+  key({ key: 'ArrowRight' });
+  const movable = (i) => selRows().indexOf(i.id) !== -1 && before[i.id] != null && !i.locked;
+  ok(state().items.filter(movable).every((i) => i.startDay === before[i.id] + 1),
+    'ArrowRight nudges the whole selection');
+  ok(state().items.filter((i) => !movable(i) && before[i.id] != null)
+    .every((i) => i.startDay === before[i.id]), 'unselected items hold their start');
+  key({ key: 'z', metaKey: true }); // undo the nudge
+  key({ key: 'Escape' });
+  ok(selRows().length === 1, 'Escape collapses a multi-selection to the anchor');
+  // bulk edit through the context menu: set the epic on a range of two
+  click(rowFor(ids[0]));
+  rowFor(ids[1]).dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  rowFor(ids[0]).dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
+  const epicBtn = [...doc.querySelectorAll('#popover .menu-list [data-mi]')].find((b) => /Set epic/.test(b.textContent));
+  ok(!!epicBtn && /2 selected/.test(doc.querySelector('#popover').textContent),
+    'right-click on a multi-selection offers bulk actions labeled with the count');
+  click(epicBtn);
+  const epicPick = [...doc.querySelectorAll('#popover .menu-list [data-mi]')].filter((b) => !/none|New epic/.test(b.textContent))[0];
+  click(epicPick);
+  const epicName = state().items.find((i) => i.id === ids[0]).epic;
+  ok(!!epicName && state().items.find((i) => i.id === ids[1]).epic === epicName,
+    'the picked epic lands on every selected item');
+  key({ key: 'z', metaKey: true }); // undo the bulk epic
+  // bulk delete asks once with the count, then removes the whole selection
+  click(rowFor(ids[0]));
+  rowFor(ids[1]).dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  key({ key: 'Delete' });
+  const mh = () => doc.querySelector('#modalHost');
+  ok(!mh().hidden && /2 items/.test(mh().textContent), 'Delete on a multi-selection confirms with the count');
+  click(mh().querySelector('[data-m="ok"]'));
+  ok(!state().items.some((i) => i.id === ids[0] || i.id === ids[1]),
+    'confirming deletes every selected item');
+  key({ key: 'z', metaKey: true }); // put them back
+  ok(state().items.some((i) => i.id === ids[0]), 'undo restores the deleted selection');
+}
+
 // ------------------------------------------------------------ unsaved guard
 {
   // the suite has edited the doc and never saved it — the guard must be live

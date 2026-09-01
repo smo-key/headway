@@ -73,6 +73,7 @@
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
   var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
+  var multiSel = null;       // multi-selection: item ids (null = single-select mode; selectedId stays the anchor)
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
   var sessionEdited = false; // an actual edit happened this session (guards never nag a doc that was only opened)
   var autoSave = true;       // desktop: write to the open file after each change
@@ -457,6 +458,7 @@
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     state = next;
+    multiSel = null; // ids from the previous document mean nothing here
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
@@ -2274,7 +2276,7 @@
       var msTip = it.feature + '  ·  ' + RM.fmtShort(RM.dayToDate(meta, it.startDay)) + '  ·  milestone' +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       laneInner =
-        '<div class="bar ms' + (selectedId === it.id && !selStory ? ' selected' : '') +
+        '<div class="bar ms' + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -2302,7 +2304,7 @@
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
       laneInner =
-        '<div class="bar' + (selectedId === it.id ? ' selected' : '') +
+        '<div class="bar' + (isSel(it.id) ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -2432,7 +2434,9 @@
     }
     html.push(
       '<div class="row item' + (view === 'scoping' ? ' scope' : '') +
-      (selectedId === it.id ? ' selected' : '') + (it.done ? ' done' : '') +
+      // when one of its stories is the selection, the feature is only the
+      // selection's parent — marked, but never in the selected background
+      (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') +
       '" data-id="' + it.id + '">' +
       '<div class="row-left">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
@@ -2755,7 +2759,12 @@
 
   // ------------------------------------------------------------ selection & panel
   var selStory = null; // story id when the panel shows a story (selectedId = its item)
+  function selIds() { return multiSel || (selectedId ? [selectedId] : []); }
+  function isSel(id) { return multiSel ? multiSel.indexOf(id) !== -1 : selectedId === id; }
+
   function select(id, scrollTo) {
+    flushPanelEdit();
+    multiSel = null;
     selectedId = id;
     selStory = null;
     selectedEdge = null;
@@ -2773,7 +2782,22 @@
       }
     }
   }
+  // shift-click: contiguous range from the anchor, in visible row order
+  function extendSelectionTo(itemId) {
+    if (!selectedId || selectedId === itemId) { select(itemId); return; }
+    flushPanelEdit();
+    var order = $$('#rows .row.item').map(function (r) { return r.dataset.id; });
+    var a = order.indexOf(selectedId), b = order.indexOf(itemId);
+    if (a === -1 || b === -1) { select(itemId); return; }
+    multiSel = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+    selStory = null;
+    selectedEdge = null;
+    render();
+  }
+
   function selectStory(itemId, stId) {
+    flushPanelEdit();
+    multiSel = null;
     selectedId = itemId;
     selStory = stId;
     selectedEdge = null;
@@ -3610,6 +3634,9 @@
   $('#panel').addEventListener('focusout', function (e) {
     var ed = e.target.classList && e.target.classList.contains('wz-ed') ? e.target : null;
     if (!ed || !ed.dataset.f) return;
+    commitPanelEd(ed);
+  });
+  function commitPanelEd(ed) {
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
     var f = ed.dataset.f;
@@ -3638,7 +3665,27 @@
       if (v === RM.scopeValue(it, key)) return;
       commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, it.id), key, v); });
     }
-  });
+  }
+
+  // Blur is not a reliable commit trigger: the drag surfaces preventDefault
+  // on pointerdown (so focus never leaves the field) and macOS WebKit
+  // buttons don't take focus on click at all. Anything that re-renders the
+  // panel goes through here first so the focused field's pending edit lands.
+  var flushingEdit = false;
+  function flushPanelEdit() {
+    if (flushingEdit) return;
+    var ae = document.activeElement;
+    var panel = $('#panel');
+    if (!ae || !panel || panel.hidden || !panel.contains(ae)) return;
+    flushingEdit = true;
+    try {
+      if (ae.classList.contains('wz-ed') && ae.dataset.f) commitPanelEd(ae);
+      else if ((ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && !ae.readOnly &&
+        (ae.type === 'checkbox' ? ae.checked !== ae.defaultChecked : ae.value !== ae.defaultValue)) {
+        ae.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } finally { flushingEdit = false; }
+  }
 
   $('#panel').addEventListener('change', function (e) {
     var it = selectedId && RM.itemById(state, selectedId);
@@ -4153,6 +4200,7 @@
       select(itemId);
       return;
     }
+    if (e.shiftKey && rowEl.classList.contains('item')) { extendSelectionTo(itemId); return; }
     select(itemId);
   });
 
@@ -4325,6 +4373,10 @@
       var itemId = rowEl.dataset.id;
       var it = RM.itemById(state, itemId);
       if (!it) return;
+      if (multiSel && multiSel.length > 1 && multiSel.indexOf(itemId) !== -1) {
+        openContextMenu(cx, cy, bulkMenuItems(multiSel.slice(), cx, cy));
+        return;
+      }
       items = [
         it.milestone ? null : { icon: 'plus', label: 'Add story', fn: function () {
           if (detailMode !== 'story') { expanded[itemId] = true; saveLocal(); }
@@ -4453,6 +4505,86 @@
     e.preventDefault();
     openContextMenu(e.clientX, e.clientY, themeMenuItems());
   });
+
+  // right-click on a multi-selection: every action applies to the whole group
+  function bulkMenuItems(ids, cx, cy) {
+    var sel = ids.map(function (id) { return RM.itemById(state, id); }).filter(Boolean);
+    function each(label, fn) {
+      commit(label, function (s) {
+        ids.forEach(function (id) {
+          var t = RM.itemById(s, id);
+          if (t) fn(s, t);
+        });
+      });
+    }
+    var allDone = sel.every(function (t) { return t.done; });
+    var allLocked = sel.every(function (t) { return t.locked; });
+    return [
+      { label: '<i>' + ids.length + ' selected</i>', fn: function () {} },
+      { sep: true },
+      { icon: 'folder-input', label: 'Move to phase…', fn: function () {
+        openContextMenu(cx, cy, state.phases.map(function (p) {
+          return { label: esc(p.name) + (p.bucket ? ' <small>(backlog)</small>' : ''),
+            checked: sel.every(function (t) { return t.phaseId === p.id; }),
+            fn: function () {
+              commit('move phase', function (s) {
+                // the group lands at the end of the target phase, in its own order
+                var moving = s.items.filter(function (x) { return ids.indexOf(x.id) !== -1; });
+                s.items = s.items.filter(function (x) { return ids.indexOf(x.id) === -1; });
+                moving.forEach(function (t) { t.phaseId = p.id; });
+                var lastIdx = -1;
+                s.items.forEach(function (x, i2) { if (x.phaseId === p.id) lastIdx = i2; });
+                s.items.splice.apply(s.items, [lastIdx + 1, 0].concat(moving));
+              });
+            } };
+        }));
+      } },
+      { icon: 'tag', label: 'Set epic…', fn: function () {
+        var eItems = [{ label: '<i>— none —</i>', checked: sel.every(function (t) { return !t.epic; }),
+          fn: function () { each('epic', function (s, t) { t.epic = ''; }); } }];
+        allEpics().forEach(function (ep) {
+          eItems.push({ label: esc(ep), icon: RM.iconForEpic(state, ep) || 'tag',
+            checked: sel.every(function (t) { return t.epic === ep; }),
+            fn: function () { each('epic', function (s, t) { t.epic = ep; }); } });
+        });
+        openContextMenu(cx, cy, eItems);
+      } },
+      state.meta.workstreamsEnabled
+        ? { icon: 'layers', label: 'Set workstream…', fn: function () {
+            var wItems = [{ label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>',
+              dot: '#' + RM.defaultWsColor(state),
+              checked: sel.every(function (t) { return !t.workstream; }),
+              fn: function () { each('workstream', function (s, t) { t.workstream = ''; }); } }];
+            allWorkstreams().forEach(function (w) {
+              wItems.push({ label: esc(w), dot: '#' + RM.colorForWs(state, w),
+                checked: sel.every(function (t) { return t.workstream === w; }),
+                fn: function () { each('workstream', function (s, t) { t.workstream = w; }); } });
+            });
+            openContextMenu(cx, cy, wItems);
+          } }
+        : null,
+      { sep: true },
+      { icon: allDone ? 'circle' : 'circle-check', label: allDone ? 'Unmark as done' : 'Mark as done',
+        fn: function () { each('done', function (s, t) { t.done = !allDone; }); } },
+      { icon: allLocked ? 'lock-open' : 'lock', label: allLocked ? 'Unlock' : 'Lock',
+        fn: function () { each('lock', function (s, t) { t.locked = !allLocked; }); } },
+      sel.some(function (t) { return isScheduled(t); })
+        ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
+            each('unschedule', function (s, t) { t.startDay = null; t.durDays = null; t.riskDays = 0; });
+          } }
+        : null,
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete ' + ids.length + '…', danger: true, fn: function () {
+        confirmBox('Delete ' + ids.length + ' items?', 'Every selected item is removed.', 'Delete', function () {
+          commit('delete', function (s) {
+            s.items = s.items.filter(function (x) { return ids.indexOf(x.id) === -1; });
+            selectedId = null;
+            multiSel = null;
+          });
+        }, true);
+      } }
+    ].filter(Boolean);
+  }
 
   // menu-item builders shared by the panel dropdowns and row context menus
   function movePhaseMenu(itemId) {
@@ -5234,13 +5366,63 @@
     if (e.button !== 0 || drag || view === 'scoping') return;
     if (e.target.closest('[data-bar],[data-ghost],[data-port],.row-left,.hdr-left,button,input,textarea,select,.ghost-pill')) return;
     if (!e.target.closest('#grid')) return;
+    if (e.shiftKey && view === 'planning') {
+      // shift-drag on empty lane: rubber-band select the bars it touches
+      drag = { kind: 'marquee', x0: e.clientX, y0: e.clientY, moved: false, box: null, ids: [] };
+      e.preventDefault();
+      return;
+    }
     drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, sl: board.scrollLeft, st: board.scrollTop, moved: false };
   });
 
+  function marqueeMove(e) {
+    if (!drag.box) {
+      drag.box = document.createElement('div');
+      drag.box.id = 'marquee';
+      document.body.appendChild(drag.box);
+    }
+    var x1 = Math.min(drag.x0, e.clientX), x2 = Math.max(drag.x0, e.clientX);
+    var y1 = Math.min(drag.y0, e.clientY), y2 = Math.max(drag.y0, e.clientY);
+    drag.box.style.left = x1 + 'px';
+    drag.box.style.top = y1 + 'px';
+    drag.box.style.width = (x2 - x1) + 'px';
+    drag.box.style.height = (y2 - y1) + 'px';
+    drag.ids = [];
+    $$('#rows .bar[data-bar]').forEach(function (b) {
+      var r = b.getBoundingClientRect();
+      var hit = r.right >= x1 && r.left <= x2 && r.bottom >= y1 && r.top <= y2;
+      if (hit) drag.ids.push(b.dataset.bar);
+      b.classList.toggle('selected', hit);
+    });
+  }
+
+  function marqueeEnd(d) {
+    flushPanelEdit();
+    if (!d.ids.length) { multiSel = null; selectedId = null; selStory = null; render(); return; }
+    if (d.ids.length === 1) { select(d.ids[0]); return; }
+    multiSel = d.ids;
+    if (multiSel.indexOf(selectedId) === -1) selectedId = d.ids[0];
+    selStory = null;
+    selectedEdge = null;
+    render();
+  }
+
   function startBarDrag(e, itemId, mode, barEl) {
     var it = RM.itemById(state, itemId);
+    // dragging one bar of a multi-selection moves the whole group with it
+    var group = null;
+    if (mode === 'move' && multiSel && multiSel.indexOf(itemId) !== -1) {
+      group = [];
+      multiSel.forEach(function (id) {
+        if (id === itemId) return;
+        var g = RM.itemById(state, id);
+        if (!g || !isScheduled(g) || g.locked) return;
+        group.push({ id: id, start0: g.startDay, el: rowsEl.querySelector('[data-bar="' + id + '"]') });
+      });
+      if (!group.length) group = null;
+    }
     drag = {
-      kind: 'bar', mode: mode, itemId: itemId,
+      kind: 'bar', mode: mode, itemId: itemId, group: group,
       x0: e.clientX, y0: e.clientY,
       start0: it.startDay, dur0: it.durDays, risk0: it.riskDays || 0,
       ripple: e.metaKey || e.ctrlKey, // ⌘-drag pushes dependents along
@@ -5276,6 +5458,7 @@
     else if (drag.kind === 'stbar') stBarDragMove(e, dx);
     else if (drag.kind === 'ghost') ghostDragMove(e);
     else if (drag.kind === 'row') rowDragMove(e);
+    else if (drag.kind === 'marquee') marqueeMove(e);
     else if (drag.kind === 'strow') strowMove(e);
     else if (drag.kind === 'phspan') phSpanDragMove(e, dx);
     else if (drag.kind === 'port') portDragMove(e);
@@ -5336,6 +5519,7 @@
     if (d.indicator) d.indicator.remove();
     if (d.vIndicator) d.vIndicator.remove();
     if (d.preview) d.preview.remove();
+    if (d.box) d.box.remove();
     if (d.kind === 'port') { $('#tempLink').setAttribute('hidden', ''); }
     if (!d.moved) { return; }
     dragConsumedClick = true;
@@ -5346,6 +5530,7 @@
     else if (d.kind === 'ghost') ghostDragEnd(d, e);
     else if (d.kind === 'row') rowDragEnd(d, e);
     else if (d.kind === 'strow') strowEnd(d);
+    else if (d.kind === 'marquee') marqueeEnd(d);
     else if (d.kind === 'phspan') phSpanDragEnd(d);
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
@@ -5384,10 +5569,17 @@
     drag.el.style.left = (ns * dayPx()) + 'px';
     if (!it.milestone) drag.el.style.width = (Math.max(6, nd * dayPx()) + nr * dayPx()) + 'px';
     drag.ns = ns; drag.nd = nd; drag.nr = nr;
+    if (drag.group) {
+      var gd = ns - drag.start0;
+      drag.group.forEach(function (g) {
+        if (g.el) { g.el.classList.add('dragging'); g.el.style.left = (Math.max(0, g.start0 + gd) * dayPx()) + 'px'; }
+      });
+    }
 
     // vertical: dragging the bar across other rows reorders / re-phases the
-    // item (same drop logic as dragging the row's left pane)
-    if (drag.mode === 'move') {
+    // item (same drop logic as dragging the row's left pane) — a group drag
+    // moves in time only
+    if (drag.mode === 'move' && !drag.group) {
       var srcRow = rowsEl.querySelector('.row[data-id="' + drag.itemId + '"]');
       var sr = srcRow && srcRow.getBoundingClientRect();
       drag.vTarget = (sr && (e.clientY < sr.top || e.clientY > sr.bottom)) ? dropTargetAt(e.clientY) : null;
@@ -5419,6 +5611,7 @@
         (nr > 0 ? ' + ' + fmtDays(riskWork) + ' risk' : '');
       if (drag.ripple) dragTip.innerHTML += ' · moves chain';
     }
+    if (drag.group) dragTip.innerHTML += ' · ' + (drag.group.length + 1) + ' items';
   }
 
   function barDragEnd(d) {
@@ -5437,6 +5630,16 @@
         // \u2318-drag moves the whole dependent chain rigidly with the bar
         var endDelta = (d.ns + d.nd + d.nr) - endBefore;
         rippleMoved = RM.shiftDependents(s, t.id, endDelta, { rigid: true });
+      }
+      if (d.group) {
+        var gd2 = d.ns - d.start0;
+        d.group.forEach(function (g) {
+          var gt = RM.itemById(s, g.id);
+          if (!gt || gt.startDay == null) return;
+          var gns = Math.max(0, g.start0 + gd2);
+          RM.shiftStories(gt, gns - gt.startDay);
+          gt.startDay = gns;
+        });
       }
       if (vr) applyDrop(s, d.itemId, vr);
       if (autoOrder) RM.sortItemsByStart(s);
@@ -5624,6 +5827,8 @@
         if (bi !== -1) at = bi;
       }
       to.stories.splice(at, 0, st);
+      // the selection follows the moved story to its new feature
+      if (selStory === d.stId) selectedId = toItemId;
     });
   }
 
@@ -5764,6 +5969,7 @@
   function switchView(e) {
     var b = e.target.closest('[data-view]');
     if (!b || b.dataset.view === view) return;
+    flushPanelEdit();
     view = b.dataset.view;
     // entering Version History always lands on the newest change
     if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
@@ -8748,6 +8954,7 @@
   // another project — runs through here first.
   function unsavedNow() { return sessionEdited && !docSaved; }
   function guardUnsaved(proceed) {
+    flushPanelEdit(); // typing still in the field counts as an edit too
     if (!unsavedNow()) { proceed(); return; }
     // autosave already owns this doc's file: flush the pending write instead
     // of asking a question the user has answered by turning autosave on
@@ -8848,6 +9055,7 @@
       if (!modalHost.hidden) { closeModal(); return; }
       if (inField) { document.activeElement.blur(); return; }
       if (selectedEdge) { selectedEdge = null; requestAnimationFrame(renderArrows); return; }
+      if (multiSel) { multiSel = null; render(); return; } // collapse to the anchor first
       if (selectedId) { select(null); return; }
       if (presentMode) { setPresent(false); return; }
       return;
@@ -8869,6 +9077,18 @@
       return;
     }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if (mod && e.key.toLowerCase() === 'a' && (view === 'planning' || view === 'scoping')) {
+      e.preventDefault();
+      var all = $$('#rows .row.item').map(function (r) { return r.dataset.id; });
+      if (all.length) {
+        flushPanelEdit();
+        if (!selectedId || all.indexOf(selectedId) === -1) selectedId = all[0];
+        multiSel = all;
+        selStory = null;
+        render();
+      }
+      return;
+    }
     if (mod && e.key.toLowerCase() === 's') {
       e.preventDefault(); $('#btnSave').click(); return;
     }
@@ -8879,6 +9099,17 @@
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
       e.preventDefault();
+      var del = selIds();
+      if (del.length > 1) {
+        confirmBox('Delete ' + del.length + ' items?', 'Every selected item is removed.', 'Delete', function () {
+          commit('delete', function (s) {
+            s.items = s.items.filter(function (x) { return del.indexOf(x.id) === -1; });
+            selectedId = null;
+            multiSel = null;
+          });
+        }, true);
+        return;
+      }
       var it = RM.itemById(state, selectedId);
       if (it) {
         confirmBox('Delete #' + it.num + '?', esc(it.feature), 'Delete', function () {
@@ -8891,15 +9122,20 @@
       return;
     }
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && selectedId) {
-      var it2 = RM.itemById(state, selectedId);
-      if (it2 && isScheduled(it2) && !it2.locked) {
+      var nudgeIds = selIds().filter(function (id) {
+        var t = RM.itemById(state, id);
+        return t && isScheduled(t) && !t.locked;
+      });
+      if (nudgeIds.length) {
         e.preventDefault();
         var delta = (e.key === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 5 : 1);
         commit('nudge', function (s) {
-          var t = RM.itemById(s, selectedId);
-          var ns2 = Math.max(0, t.startDay + delta);
-          RM.shiftStories(t, ns2 - t.startDay);
-          t.startDay = ns2;
+          nudgeIds.forEach(function (id) {
+            var t = RM.itemById(s, id);
+            var ns2 = Math.max(0, t.startDay + delta);
+            RM.shiftStories(t, ns2 - t.startDay);
+            t.startDay = ns2;
+          });
         });
       }
     }

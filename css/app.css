@@ -428,6 +428,11 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .row-lane { position: relative; flex: 1; border-bottom: 1px solid rgba(var(--ink-rgb), .045); }
 .row:hover .row-left { background: var(--paper-2); }
 .row.selected .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--blue); }
+/* parent feature of the selected story: the guide bar only — the selected
+   background belongs to the selection itself (the story row) */
+.row.sel-parent .row-left { box-shadow: inset 3px 0 0 var(--blue); }
+/* shift-drag rubber band on the timeline */
+#marquee { position: fixed; z-index: 90; border: 1px solid var(--blue); background: var(--blue-soft); opacity: .4; pointer-events: none; }
 .row.link-source .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--c-mixed); }
 .row.done input.r-name { text-decoration: line-through; }
 
@@ -2006,7 +2011,8 @@ body.chrome-mac #startBar { padding-left: 96px; }
 /* stories are clickable rows (they open in the panel) */
 .st-title { cursor: pointer; }
 .row.story .row-left { cursor: pointer; }
-.row.story.selected .row-left { background: var(--blue-soft); }
+/* a selected story wears the same selected look a selected feature does */
+.row.story.selected .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--blue); }
 .row.story.selected .st-title { color: var(--ink); }
 
 /* -------------------------------------------------- interaction polish */
