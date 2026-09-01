@@ -2379,6 +2379,29 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click([...doc.querySelectorAll('#popover .menu-list [data-mi]')].find(b => /Feature/.test(b.textContent)));
 }
 
+// ------------------------------------------------------------ unsaved guard
+{
+  // the suite has edited the doc and never saved it — the guard must be live
+  ok(window.HeadwayApp.unsavedNow() === true, 'edited, never-saved doc counts as unsaved');
+  const mh = () => doc.querySelector('#modalHost'); // openModal swaps the node
+  let proceeded = 0;
+  window.HeadwayApp.guardUnsaved(() => proceeded++);
+  ok(!mh().hidden && /Unsaved changes/.test(mh().textContent),
+    'guard on an unsaved doc opens the warning dialog');
+  ok(mh().querySelector('[data-m="gsave"]') && mh().querySelector('[data-m="gdiscard"]') &&
+    mh().querySelector('[data-m="cancel"]'),
+    'dialog offers Save, Don’t save and Cancel');
+  click(mh().querySelector('[data-m="cancel"]'));
+  ok(mh().hidden && proceeded === 0, 'Cancel keeps the doc and does not proceed');
+  window.HeadwayApp.guardUnsaved(() => proceeded++);
+  click(mh().querySelector('[data-m="gdiscard"]'));
+  ok(mh().hidden && proceeded === 1, 'Don’t save closes the dialog and proceeds');
+  // browser build: closing the tab with unsaved work asks the native question
+  const bu = new window.Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(bu);
+  ok(bu.defaultPrevented, 'beforeunload is blocked while work is unsaved');
+}
+
 // ---------------------------------------------------------------- export smoke
 ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   'save uses the exact project title as the filename (no slug, no date)');

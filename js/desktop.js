@@ -264,6 +264,21 @@
     }).catch(function () { /* fine without it */ });
   }
 
+  // ------------------------------------------------------ close guard
+  // Closing the window (caption ✕, Alt+F4, the red traffic light) with
+  // unsaved work asks first — app.js owns the Save / Don't save / Cancel
+  // dialog, and flushes silently when autosave already owns the file.
+  // destroy() tears the window down without another close-requested event,
+  // so an approved close cannot re-prompt.
+  window.__TAURI__.window.getCurrentWindow().onCloseRequested(function (ev) {
+    var a = app();
+    if (!a || !a.unsavedNow || !a.unsavedNow()) return;
+    ev.preventDefault();
+    a.guardUnsaved(function () {
+      window.__TAURI__.window.getCurrentWindow().destroy();
+    });
+  });
+
   // ------------------------------------------------------- window chrome
   // The header doubles as the titlebar. macOS: native titlebar hidden with
   // overlay traffic lights (see tauri.macos.conf.json) — the header gets

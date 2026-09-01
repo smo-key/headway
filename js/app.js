@@ -74,6 +74,7 @@
   var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
+  var sessionEdited = false; // an actual edit happened this session (guards never nag a doc that was only opened)
   var autoSave = true;       // desktop: write to the open file after each change
   var resPanelH = 150;       // resources panel height (px)
   var resCollapsed = false;  // resources section collapsed
@@ -506,6 +507,7 @@
   }
   function afterChange() {
     docSaved = false;
+    sessionEdited = true;
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -932,6 +934,7 @@
     if (compareOptId === id) compareOptId = prevId;
     state = next;
     docSaved = false;
+    sessionEdited = true;
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -8578,12 +8581,14 @@
     var drop = e.target.closest('[data-sp-drop]');
     if (drop) { dropRecent(drop.dataset.spDrop); renderStartPage(); return; }
     var open = e.target.closest('[data-sp-open]');
-    if (open) { openRecent(open.dataset.spOpen); return; }
+    if (open) { guardUnsaved(function () { openRecent(open.dataset.spOpen); }); return; }
     if (e.target.closest('[data-sp-continue]')) { enterEditor(); return; }
-    if (e.target.closest('[data-sp-new]')) { newProjectModal(); return; }
+    if (e.target.closest('[data-sp-new]')) { guardUnsaved(newProjectModal); return; }
     if (e.target.closest('[data-sp-opendlg]')) {
-      if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
-      else $('#filePick').click();
+      guardUnsaved(function () {
+        if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+        else $('#filePick').click();
+      });
       return;
     }
     if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
@@ -8737,6 +8742,52 @@
   }
   $('#btnSave').addEventListener('click', function () { doSave(false); });
 
+  // ------------------------------------------------- unsaved-work guard
+  // Anything that would drop the open document — closing the window (the
+  // desktop shell calls this from onCloseRequested), opening or creating
+  // another project — runs through here first.
+  function unsavedNow() { return sessionEdited && !docSaved; }
+  function guardUnsaved(proceed) {
+    if (!unsavedNow()) { proceed(); return; }
+    // autosave already owns this doc's file: flush the pending write instead
+    // of asking a question the user has answered by turning autosave on
+    if (autoSave && window.HeadwayDesktop && HeadwayDesktop.currentPath()) {
+      clearTimeout(autoSaveTimer);
+      (doSave(false, true) || Promise.resolve()).then(function () {
+        if (docSaved) proceed();
+      });
+      return;
+    }
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>Unsaved changes</h2></div>' +
+      '<div class="m-body"><div style="font-size:13px;color:var(--ink-2);line-height:1.5">' +
+      '“' + esc(state.meta.title || 'This roadmap') + '” has changes that aren’t saved' +
+      (window.HeadwayDesktop ? ' to a file' : ' to an .xlsx file') + ' yet.</div></div>' +
+      '<div class="m-foot"><button data-m="gdiscard">Don’t save</button>' +
+      '<button data-m="cancel">Cancel</button>' +
+      '<button data-m="gsave" class="primary"><i data-lucide="download"></i>Save</button></div></div>',
+      function (host) {
+        $('[data-m=cancel]', host).onclick = closeModal;
+        $('[data-m=gdiscard]', host).onclick = function () { closeModal(); proceed(); };
+        $('[data-m=gsave]', host).onclick = function () {
+          closeModal();
+          (doSave(false) || Promise.resolve()).then(function () {
+            // a canceled Save dialog leaves the doc unsaved — stay put
+            if (docSaved) proceed();
+          });
+        };
+      });
+  }
+
+  // browser build: the tab is the app — closing it with unsaved work gets the
+  // native "leave site?" question (the desktop shell asks via onCloseRequested)
+  window.addEventListener('beforeunload', function (e) {
+    if (window.__TAURI__ || !unsavedNow()) return;
+    e.preventDefault();
+    e.returnValue = ''; // legacy engines need the assignment to show the prompt
+  });
+
   function loadWorkbookBuffer(buf, name, quiet) {
     return RMExcel.importWorkbook(buf).then(function (r) {
       if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
@@ -8773,6 +8824,8 @@
     loadBuffer: loadWorkbookBuffer,
     saveFileName: saveFileName,
     save: doSave,
+    unsavedNow: unsavedNow,
+    guardUnsaved: guardUnsaved,
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage
