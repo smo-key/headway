@@ -115,9 +115,10 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel };
   }
   var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
+  var sprLevel = 'feature'; // Sprinting view rows: 'feature' | 'story'
   var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
   var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
   var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
@@ -127,7 +128,7 @@
   function applyUi(ui) {
     if (!ui) return;
     weekPx = ui.weekPx || 28;
-    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'prio'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
     detailMode = ['phase', 'feature', 'story'].indexOf(ui.detailMode) !== -1 ? ui.detailMode : 'feature';
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
@@ -160,6 +161,7 @@
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
     prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
+    sprLevel = ui.sprLevel === 'story' ? 'story' : 'feature';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
     prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
@@ -1215,7 +1217,7 @@
     document.body.dataset.view = view;
     // a view switch or re-render can replace the rich cell the floating
     // B/I toolbar is anchored to — never leave the bar orphaned on screen
-    if (scFmtTarget && ((view !== 'scoping' && view !== 'prio') || !scFmtTarget.isConnected)) hideScFmtBar();
+    if (scFmtTarget && ((view !== 'scoping' && view !== 'prio' && view !== 'sprints') || !scFmtTarget.isConnected)) hideScFmtBar();
 
     renderTopbar();
     syncZoomCtl();
@@ -1236,6 +1238,11 @@
     }
     if (view === 'prio') {
       renderPrioPage();
+      renderPanel();
+      return;
+    }
+    if (view === 'sprints') {
+      renderSprintPage();
       renderPanel();
       return;
     }
@@ -1745,15 +1752,18 @@
           phases.map(function (p) { return prColHtml(p, laneItems, laneAttr); }).join('');
       }).join('') || '<div class="p-none" style="grid-column:1/-1;padding:30px">Nothing matches.</div>';
     }
+    // an active filter wears what it picked: the epic's own icon, the
+    // workstream's color dot, and a blue outline
     var epicFilterDd = allEpics().length
-      ? '<button class="dd-btn" data-prdd="fepic" title="Filter by epic">' +
+      ? '<button class="dd-btn' + (prioFEpic == null ? '' : ' pr-on') + '" data-prdd="fepic" title="Filter by epic">' +
         '<span class="dd-label">' + (prioFEpic == null ? '<i data-lucide="tag"></i>All epics'
-          : '<i data-lucide="tag"></i>' + esc(prioFEpic || 'No epic')) + '</span>' +
+          : '<i data-lucide="' + (prioFEpic ? (RM.iconForEpic(state, prioFEpic) || 'tag') : 'tag') + '"></i>' + esc(prioFEpic || 'No epic')) + '</span>' +
         '<i data-lucide="chevron-down"></i></button>' : '';
     var wsFilterDd = state.meta.workstreamsEnabled
-      ? '<button class="dd-btn" data-prdd="fws" title="Filter by workstream">' +
+      ? '<button class="dd-btn' + (prioFWs == null ? '' : ' pr-on') + '" data-prdd="fws" title="Filter by workstream">' +
         '<span class="dd-label">' + (prioFWs == null ? '<i data-lucide="layers"></i>All workstreams'
-          : esc(prioFWs || RM.defaultWsName(state))) + '</span>' +
+          : '<span class="dd-dot" style="background:#' + (prioFWs ? RM.colorForWs(state, prioFWs) : RM.defaultWsColor(state)) + '"></span>' +
+            esc(prioFWs || RM.defaultWsName(state))) + '</span>' +
         '<i data-lucide="chevron-down"></i></button>' : '';
     host.innerHTML = '<div class="sp-page">' +
       '<div class="pr-bar">' +
@@ -1992,6 +2002,358 @@
       var lastIdx = -1;
       s.items.forEach(function (y, i2) { if (y.phaseId === toId) lastIdx = i2; });
       s.items.splice(lastIdx + 1, 0, x);
+    });
+  }
+
+  // ------------------------------------------------------------ sprinting page
+  // Sprint by sprint: a sidebar of sprints (Unscheduled first) and ONE
+  // scrolling page of sections, rows per sprint — features or stories.
+  // Dragging a row to another sprint moves it on the timeline (start = that
+  // sprint's first day, span kept, stories ride along) and reorders the
+  // shared items array, so the new order shows in every view.
+  var sprScroll = 0;   // #spvMain scroll offset, kept across re-renders
+  function sprSecKey(num) { return num == null ? 'u' : String(num); }
+  function sprSecNum(key) { return key === 'u' ? null : Number(key); }
+  function sprHasOwn(st) { return st.startDay != null && st.durDays != null; }
+  // stories of one feature that belong to sprint `num` (null = unscheduled):
+  // a story's own timeline decides when it has one, else it follows the feature
+  function sprStoriesOf(it, num, featIn) {
+    var meta = state.meta, r = num == null ? null : RM.sprintRange(meta, num);
+    return (it.stories || []).filter(function (st) {
+      if (sprHasOwn(st)) return r ? RM.itemInWeeks(meta, st, r.w0, r.w1) : false;
+      return num == null ? it.startDay == null : featIn;
+    });
+  }
+  function sprSections() {
+    var meta = state.meta;
+    var nums = [null].concat(sprintNums());
+    return nums.map(function (n) {
+      var items = n == null
+        ? state.items.filter(function (it) { return it.startDay == null && matchesFilter(it); })
+        : itemsInSprint(n);
+      var inIds = {};
+      items.forEach(function (it) { inIds[it.id] = true; });
+      var feats = [];
+      if (sprLevel === 'story') {
+        state.items.forEach(function (it) {
+          if (!matchesFilter(it)) return;
+          var sts = sprStoriesOf(it, n, !!inIds[it.id]);
+          if (sts.length) feats.push({ it: it, stories: sts });
+        });
+      }
+      var w0 = n == null ? 0 : Math.max(0, RM.sprintRange(meta, n).w0);
+      var d0 = n == null ? 0 : RM.sprintStartDay(meta, n);
+      var wps = RM.sprintInfo(meta).wps;
+      return {
+        num: n, key: sprSecKey(n),
+        title: n == null ? 'Unscheduled' : (RM.sprintsEnabled(meta) ? 'Sprint ' + n : 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w0))),
+        dates: n == null ? '' : RM.fmtShort(RM.weekStartDate(meta, w0)) + ' – ' +
+          RM.fmtShort(RM.spanEndDate(meta, d0, Math.min(wps * SPW(), meta.numWeeks * SPW() - d0))),
+        items: items, feats: feats,
+        count: sprLevel === 'story'
+          ? feats.reduce(function (a, f) { return a + f.stories.length; }, 0) : items.length
+      };
+    });
+  }
+  function sprTag(it, num) {
+    if (num == null || !isScheduled(it)) return '';
+    var meta = state.meta, r = RM.sprintRange(meta, num), S = SPW();
+    var s0 = RM.sprintNumForWeek(meta, Math.floor(it.startDay / S));
+    var s1 = RM.sprintNumForWeek(meta, Math.max(0, Math.ceil(RM.itemEnd(it) / S) - 1));
+    var out = '';
+    if (it.startDay < r.w0 * S) out += '<span class="spv-tag" title="Started in an earlier sprint">from ' + (RM.sprintsEnabled(meta) ? 'S' + s0 : 'W' + s0) + '</span>';
+    if (RM.itemEnd(it) > r.w1 * S) out += '<span class="spv-tag" title="Continues into a later sprint">to ' + (RM.sprintsEnabled(meta) ? 'S' + s1 : 'W' + s1) + '</span>';
+    return out;
+  }
+  function sprDates(x) {
+    if (!isScheduled(x)) return '';
+    return RM.fmtShort(RM.dayToDate(state.meta, x.startDay)) + ' → ' +
+      RM.fmtShort(RM.spanEndDate(state.meta, x.startDay, RM.itemSpan(x)));
+  }
+  function sprPhaseName(it) {
+    var p = state.phases.filter(function (x) { return x.id === it.phaseId; })[0];
+    return p ? p.name : '';
+  }
+  function sprRowHtml(it, num) {
+    var color = '#' + RM.colorForItem(state, it);
+    return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
+      '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
+      '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      '<span class="r-num">#' + it.num + '</span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
+      '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
+      sprTag(it, num) +
+      '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic — click to change">' +
+      '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
+      (RM.sizingEnabled(state) && !it.milestone
+        ? '<span class="r-size" tabindex="0" role="button" data-spact="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>' : '') +
+      '<span class="spv-dates">' + esc(sprDates(it)) + '</span>' +
+      '<span class="spv-phase" title="Phase">' + esc(sprPhaseName(it)) + '</span>' +
+      '</div>';
+  }
+  function sprStoryRowHtml(it, st, num) {
+    var own = sprHasOwn(st);
+    return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
+      '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
+      '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
+      (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own — follows the feature">with feature</span>')) +
+      '<span class="spv-dates">' + esc(own ? sprDates(st) : '') + '</span>' +
+      '</div>';
+  }
+  function sprSectionHtml(sec) {
+    var body;
+    if (sprLevel === 'story') {
+      body = sec.feats.map(function (f) {
+        return '<div class="spv-feat" data-spfeat="' + f.it.id + '">' +
+          '<span class="r-num">#' + f.it.num + '</span>' +
+          '<span class="r-dot" style="background:#' + RM.colorForItem(state, f.it) + '"></span>' +
+          '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span>' +
+          '<span class="spv-phase">' + esc(sprPhaseName(f.it)) + '</span></div>' +
+          f.stories.map(function (st) { return sprStoryRowHtml(f.it, st, sec.num); }).join('');
+      }).join('');
+    } else {
+      body = sec.items.map(function (it) { return sprRowHtml(it, sec.num); }).join('');
+    }
+    return '<section class="spv-sec" data-spsec="' + sec.key + '">' +
+      '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
+      (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
+      '<span class="pr-lanect">' + sec.count + '</span></div>' +
+      '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (filterText ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
+      (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>Add feature</button>' : '') +
+      '</section>';
+  }
+  function renderSprintPage() {
+    var host = $('#sprintView');
+    if (!host) return;
+    var secs = sprSections();
+    var cur = RM.sprintsEnabled(state.meta) ? currentSprintNum() : null;
+    var side = secs.map(function (sec) {
+      return '<button class="spv-sbtn' + (sec.num != null && sec.num === cur ? ' today' : '') +
+        '" data-spside="' + sec.key + '" title="' + esc(sec.title + (sec.dates ? ' · ' + sec.dates : '')) + '">' +
+        '<i data-lucide="' + (sec.num == null ? 'inbox' : 'calendar-range') + '"></i>' +
+        '<span class="spv-sbtxt"><span class="spv-sbname">' + esc(sec.title) + '</span>' +
+        (sec.dates ? '<small>' + esc(sec.dates) + '</small>' : '') + '</span>' +
+        '<span class="pr-lanect">' + sec.count + '</span></button>';
+    }).join('');
+    host.innerHTML = '<div class="spv">' +
+      '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
+      '<div class="spv-main" id="spvMain"><div class="pr-bar">' +
+      '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
+      '<input id="spFilter" type="search" placeholder="Filter rows" aria-label="Filter rows" value="' + esc(filterText) + '">' +
+      '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
+      '<div class="seg spv-seg">' +
+      '<button data-splevel="feature"' + (sprLevel === 'feature' ? ' class="on"' : '') + ' title="One row per feature"><i data-lucide="rows-3"></i>Features</button>' +
+      '<button data-splevel="story"' + (sprLevel === 'story' ? ' class="on"' : '') + ' title="One row per story, grouped by feature"><i data-lucide="list-tree"></i>Stories</button>' +
+      '</div></div>' +
+      secs.map(sprSectionHtml).join('') + '</div></div>';
+    if (window.lucide) lucide.createIcons();
+    var main = $('#spvMain');
+    main.scrollTop = sprScroll;
+    sprSyncSide();
+  }
+  // the sidebar tracks the section under the top of the scroll area
+  function sprSyncSide() {
+    var main = $('#spvMain');
+    if (!main) return;
+    var secs = $$('#spvMain .spv-sec');
+    var top = main.getBoundingClientRect().top + 60, on = secs[0];
+    secs.forEach(function (s) { if (s.getBoundingClientRect().top <= top) on = s; });
+    $$('#sprintView .spv-sbtn').forEach(function (b) {
+      b.classList.toggle('on', !!on && b.dataset.spside === on.dataset.spsec);
+    });
+  }
+  $('#sprintView').addEventListener('scroll', function (e) {
+    if (e.target.id !== 'spvMain') return;
+    sprScroll = e.target.scrollTop;
+    sprSyncSide();
+  }, true);
+  // adds a feature scheduled at the section's sprint (or unscheduled)
+  function sprAddFeature(key) {
+    var num = sprSecNum(key);
+    doAddFeature();
+    var nid = selectedId;
+    if (nid && num != null) {
+      commit('schedule', function (s) { RM.moveItemToSprint(s, nid, num, null); });
+    }
+  }
+  var spFilterTimer = null;
+  $('#sprintView').addEventListener('input', function (e) {
+    if (e.target.id !== 'spFilter') return;
+    var v = e.target.value;
+    clearTimeout(spFilterTimer);
+    spFilterTimer = setTimeout(function () {
+      filterText = v.trim();
+      render();
+      var nf = $('#spFilter');
+      if (nf) { nf.focus(); nf.setSelectionRange(nf.value.length, nf.value.length); }
+    }, 120);
+  });
+  $('#sprintView').addEventListener('change', function (e) {
+    var t = e.target;
+    if (!t.dataset || !t.dataset.spf) return;
+    var row = t.closest('[data-spid]');
+    if (!row) return;
+    var id = row.dataset.spid, stId = row.dataset.spst, val = t.value;
+    if (t.dataset.spf === 'story') {
+      commit('rename story', function (s) {
+        var st = storyById(RM.itemById(s, id) || {}, stId);
+        if (st) st.title = val;
+      });
+    } else {
+      commit('rename', function (s) {
+        var x = RM.itemById(s, id);
+        if (x) x.feature = val;
+      });
+    }
+  });
+  $('#sprintView').addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t.id === 'spFilter' && e.key === 'Escape') {
+      e.stopPropagation();
+      t.value = '';
+      filterText = '';
+      render();
+      return;
+    }
+    if (e.key === 'Enter' && t.dataset && t.dataset.spf) t.blur();
+  });
+  $('#sprintView').addEventListener('click', function (e) {
+    if (dragConsumedClick) { dragConsumedClick = false; return; }
+    var sb = e.target.closest('[data-spside]');
+    if (sb) {
+      var sec = $('#spvMain .spv-sec[data-spsec="' + sb.dataset.spside + '"]');
+      var main = $('#spvMain');
+      if (sec && main) {
+        main.scrollTop = sec.offsetTop - main.offsetTop - 8;
+        sprScroll = main.scrollTop;
+        sprSyncSide();
+      }
+      return;
+    }
+    var lv = e.target.closest('[data-splevel]');
+    if (lv) {
+      if (sprLevel !== lv.dataset.splevel) { sprLevel = lv.dataset.splevel; saveLocal(); render(); }
+      return;
+    }
+    var add = e.target.closest('[data-spadd]');
+    if (add) { sprAddFeature(add.dataset.spadd); return; }
+    var chip = e.target.closest('[data-spact]');
+    var row = e.target.closest('[data-spid]');
+    if (chip && row) {
+      var cid = row.dataset.spid;
+      var itC = RM.itemById(state, cid);
+      if (!itC) return;
+      if (chip.dataset.spact === 'size') {
+        openDropdown(chip, [{ label: '<i>no size</i>', checked: !itC.size, fn: function () { setItemSize(cid, null); } }]
+          .concat(RM.sizeOrderOf(state).map(function (sz) {
+            return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itC.size === sz, fn: function () { setItemSize(cid, sz); } };
+          })));
+      } else if (chip.dataset.spact === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      return;
+    }
+    if (row && !e.target.closest('input,button')) {
+      if (row.dataset.spst) {
+        var wasSt = selStory;
+        select(row.dataset.spid);
+        if (wasSt !== row.dataset.spst) { selStory = row.dataset.spst; render(); }
+      } else if (selectedId !== row.dataset.spid || selStory) select(row.dataset.spid);
+    }
+  });
+  $('#sprintView').addEventListener('contextmenu', function (e) {
+    var row = e.target.closest('[data-spid]');
+    if (!row || row.dataset.spst || e.target.closest('input,textarea,select')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var cid = row.dataset.spid;
+    var itX = RM.itemById(state, cid);
+    if (!itX) return;
+    var cx = e.clientX, cy = e.clientY;
+    openContextMenu(cx, cy, [
+      { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
+      { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
+      state.meta.workstreamsEnabled
+        ? { icon: 'layers', label: 'Set workstream…', fn: function () { openContextMenu(cx, cy, wsMenuItems(cid, function () { return null; })); } }
+        : null,
+      isScheduled(itX) ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
+        commit('unschedule', function (s) { RM.moveItemToSprint(s, cid, null, null); });
+      } } : null,
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(cid); } }
+    ].filter(Boolean));
+  });
+  // rows drag between sprints (sections or sidebar entries) and reorder
+  // inside one; stories only reorder among their own feature's stories
+  $('#sprintView').addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || drag) return;
+    if (e.target.closest('input,textarea,button,select,[data-spact]')) return;
+    var row = e.target.closest('.spv-row');
+    if (!row) return;
+    drag = { kind: 'sprow', id: row.dataset.spid, stId: row.dataset.spst || null, fromSec: row.dataset.spsec,
+      el: row, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: null };
+    e.preventDefault();
+  });
+  function sprClearDrop() {
+    $$('#sprintView .drop-before,#sprintView .drop-after,#sprintView .drop').forEach(function (n) {
+      n.classList.remove('drop-before', 'drop-after', 'drop');
+    });
+  }
+  function sprDragMove(e) {
+    if (!drag.ghost) {
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'sp-card sp-card-ghost';
+      var t = RM.itemById(state, drag.id);
+      var st = t && drag.stId ? storyById(t, drag.stId) : null;
+      drag.ghost.textContent = st ? (st.title || 'Story') : ((t && t.feature) || 'Feature');
+      document.body.appendChild(drag.ghost);
+      drag.el.classList.add('sp-dragging');
+    }
+    drag.ghost.style.left = (e.clientX + 10) + 'px';
+    drag.ghost.style.top = (e.clientY + 8) + 'px';
+    var under = (document.elementFromPoint && document.elementFromPoint(e.clientX, e.clientY)) || e.target;
+    sprClearDrop();
+    drag.target = null;
+    if (!under || !under.closest) return;
+    var sb = under.closest('[data-spside]');
+    if (sb) { sb.classList.add('drop'); drag.target = { sec: sb.dataset.spside, beforeId: null, beforeStId: null }; return; }
+    var row = under.closest('.spv-row');
+    var sec = under.closest('.spv-sec');
+    if (!sec) return;
+    var tgt = { sec: sec.dataset.spsec, beforeId: null, beforeStId: null };
+    if (row && row !== drag.el) {
+      var r = row.getBoundingClientRect();
+      var before = e.clientY < r.top + r.height / 2;
+      var ref = before ? row : row.nextElementSibling;
+      while (ref && !ref.classList.contains('spv-row')) ref = ref.nextElementSibling; // skip feature headings
+      if (ref && ref !== drag.el) {
+        if (drag.stId) {
+          // a story only has a "before" among its own feature's stories
+          if (ref.dataset.spid === drag.id) tgt.beforeStId = ref.dataset.spst;
+        } else tgt.beforeId = ref.dataset.spid;
+      }
+      row.classList.add(before ? 'drop-before' : 'drop-after');
+    } else sec.classList.add('drop');
+    drag.target = tgt;
+  }
+  function sprDragEnd(d) {
+    if (d.ghost) d.ghost.remove();
+    d.el.classList.remove('sp-dragging');
+    sprClearDrop();
+    var t = d.target;
+    if (!t) { render(); return; }
+    var num = sprSecNum(t.sec), moved = t.sec !== d.fromSec;
+    if (d.stId) {
+      if (!moved && !t.beforeStId) { render(); return; }
+      commit(moved ? 'move story to sprint' : 'reorder story', function (s) {
+        RM.moveStoryToSprint(s, d.id, d.stId, moved ? num : sprHasOwn(storyById(RM.itemById(s, d.id) || {}, d.stId)) ? num : null, t.beforeStId);
+      });
+      return;
+    }
+    if (!moved && !t.beforeId) { render(); return; }
+    commit(moved ? 'move to sprint' : 'reorder', function (s) {
+      if (moved) RM.moveItemToSprint(s, d.id, num, t.beforeId);
+      else RM.reorderItem(s, d.id, t.beforeId);
+      if (moved && autoOrder) RM.sortItemsByStart(s);
     });
   }
 
@@ -2682,7 +3044,8 @@
         }
         return { keys: keys, by: by };
       }
-      function epicBands(list, sub) {
+      function epicBands(list, sub, wsOf) {
+        wsKey = wsOf == null ? null : wsOf;
         var g = partition(list, 'epic', false);
         g.keys.forEach(function (key) {
           html.push(
@@ -2694,8 +3057,25 @@
             '</span><span class="band-count">' + g.by[key].length + '</span></div>' +
             '<div class="row-lane"></div></div>');
           g.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
+          html.push(addRowHtml(p, { epic: key, workstream: wsKey }, true));
         });
       }
+      // click-to-add row; group rows (indented) put the feature into that
+      // epic / workstream, the phase row adds it at the phase's end
+      function addRowHtml(ph, group, sub) {
+        var where = ph.name;
+        if (group && group.epic) where = group.epic;
+        else if (group && group.epic === '') where = 'no epic';
+        else if (group && group.workstream) where = group.workstream;
+        else if (group && group.workstream === '') where = RM.defaultWsName(state);
+        return '<div class="row addrow' + (sub ? ' sub' : '') + '" data-kind="addrow" data-phase="' + ph.id + '"' +
+          (group && group.epic != null ? ' data-epic="' + esc(group.epic) + '"' : '') +
+          (group && group.workstream != null ? ' data-ws="' + esc(group.workstream) + '"' : '') +
+          ' title="Add a feature to ' + esc(where) + '">' +
+          '<div class="row-left"><span class="addrow-lab"><i data-lucide="plus"></i> Add feature</span></div>' +
+          '<div class="row-lane"></div></div>';
+      }
+      var wsKey = null;
       if (groupWs && state.meta.workstreamsEnabled) {
         var wg = partition(items, 'workstream', true);
         wg.keys.forEach(function (key) {
@@ -2707,8 +3087,11 @@
             '<span class="eb-name">' + (key ? esc(key) : esc(RM.defaultWsName(state)) + ' <i style="font-weight:400">default</i>') +
             '</span><span class="band-count">' + wg.by[key].length + '</span></div>' +
             '<div class="row-lane"></div></div>');
-          if (groupEpic) epicBands(wg.by[key], true);
-          else wg.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
+          if (groupEpic) epicBands(wg.by[key], true, key);
+          else {
+            wg.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
+            html.push(addRowHtml(p, { workstream: key }, true));
+          }
         });
       } else if (groupEpic) {
         epicBands(items, false);
@@ -2717,10 +3100,7 @@
       }
 
       // blank click-to-add row at the bottom of every phase
-      html.push(
-        '<div class="row addrow" data-kind="addrow" data-phase="' + p.id + '" title="Add an item to ' + esc(p.name) + '">' +
-        '<div class="row-left"><span class="addrow-lab"><i data-lucide="plus"></i> New item</span></div>' +
-        '<div class="row-lane"></div></div>');
+      html.push(addRowHtml(p, null, false));
     });
 
     rowsEl.innerHTML = html.join('');
@@ -3966,7 +4346,13 @@
     if (!rowEl) return;
 
     if (rowEl.dataset.kind === 'addrow') {
-      addFeature(rowEl.dataset.phase);
+      var grp = null;
+      if (rowEl.dataset.epic != null || rowEl.dataset.ws != null) {
+        grp = {};
+        if (rowEl.dataset.epic != null) grp.epic = rowEl.dataset.epic;
+        if (rowEl.dataset.ws != null) grp.workstream = rowEl.dataset.ws;
+      }
+      addFeature(rowEl.dataset.phase, grp);
       return;
     }
 
@@ -4747,7 +5133,8 @@
     commit('add feature', function (s) {
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
-        items: [{ id: newId, num: RM.nextNum(s), phaseId: anchor.phaseId, feature: '', size: 'M', headcount: 1 }]
+        items: [{ id: newId, num: RM.nextNum(s), phaseId: anchor.phaseId, feature: '', size: 'M', headcount: 1,
+          epic: anchor.epic || '', workstream: anchor.workstream || '', teamType: anchor.teamType }]
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
@@ -5547,6 +5934,7 @@
     else if (drag.kind === 'scol') scolDragMove(e);
     else if (drag.kind === 'scolmove') scolMoveMove(e);
     else if (drag.kind === 'prcard') prCardDragMove(e);
+    else if (drag.kind === 'sprow') sprDragMove(e);
     else if (drag.kind === 'rfill') rfillMove(e);
     else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
@@ -5618,6 +6006,7 @@
     else if (d.kind === 'scol') saveLocal();
     else if (d.kind === 'scolmove') scolMoveEnd(d);
     else if (d.kind === 'prcard') prCardDragEnd(d);
+    else if (d.kind === 'sprow') sprDragEnd(d);
     else if (d.kind === 'rfill') rfillEnd(d);
     else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
@@ -6512,17 +6901,27 @@
   $('#zoomInBtn').addEventListener('click', function () { zoomBy(1.2); });
   $('#zoomOutBtn').addEventListener('click', function () { zoomBy(1 / 1.2); });
 
-  function addFeature(phaseId) {
+  // group = { epic?, workstream? }: the feature joins that group (its values
+  // set) and lands right after the group's last row, not the phase's end
+  function addFeature(phaseId, group) {
     var newId = RM.uid('i');
     commit('add feature', function (s) {
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
-        items: [{ id: newId, num: RM.nextNum(s), phaseId: phaseId, feature: '', size: 'M', headcount: 1 }]
+        items: [{ id: newId, num: RM.nextNum(s), phaseId: phaseId, feature: '', size: 'M', headcount: 1,
+          epic: group && group.epic != null ? group.epic : '',
+          workstream: group && group.workstream != null ? group.workstream : '' }]
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
       var lastIdx = -1;
-      s.items.forEach(function (x, i2) { if (x.phaseId === phaseId) lastIdx = i2; });
+      var inGroup = function (x) {
+        return x.phaseId === phaseId &&
+          (!group || group.epic == null || (x.epic || '') === group.epic) &&
+          (!group || group.workstream == null || (x.workstream || '') === group.workstream);
+      };
+      s.items.forEach(function (x, i2) { if (inGroup(x)) lastIdx = i2; });
+      if (lastIdx === -1) s.items.forEach(function (x, i2) { if (x.phaseId === phaseId) lastIdx = i2; });
       s.items.splice(lastIdx === -1 ? s.items.length : lastIdx + 1, 0, it);
       s.phases.forEach(function (p) { if (p.id === phaseId) p.collapsed = false; });
       selectedId = newId;
@@ -9148,9 +9547,9 @@
     // on the start page only Escape (above, for its modals) applies
     if (document.body.classList.contains('start')) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' &&
-        (view === 'planning' || view === 'scoping' || view === 'prio')) {
+        (view === 'planning' || view === 'scoping' || view === 'prio' || view === 'sprints')) {
       e.preventDefault();
-      var ff = view === 'prio' ? $('#prFilter') : $('#rowFilter');
+      var ff = view === 'prio' ? $('#prFilter') : view === 'sprints' ? $('#spFilter') : $('#rowFilter');
       if (ff) { ff.focus(); ff.select(); }
       return;
     }

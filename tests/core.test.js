@@ -1340,6 +1340,59 @@ eq(sJk2.epicJira, {}, 'epicJira defaults to an empty map');
 
 // ------------------------------------------------------------- jira csv export
 section('jira csv export');
+// ------------------------------------------------------------ sprint moves
+section('sprint moves');
+{
+  var sSp = mkState([
+    { id: 'a', num: 1, phaseId: 'p1', feature: 'A', size: 'M', startDay: 0, durDays: 5,
+      stories: [{ id: 'a1', title: 's1', startDay: 2, durDays: 3 }, { id: 'a2', title: 's2' }] },
+    { id: 'b', num: 2, phaseId: 'p1', feature: 'B', size: 'M', startDay: 0, durDays: 5 },
+    { id: 'c', num: 3, phaseId: 'p1', feature: 'C', size: 'L' },
+    { id: 'd', num: 4, phaseId: 'p2', feature: 'D', size: 'S', startDay: 20, durDays: 3 }
+  ]);
+  eq(RM.sprintStartDay(sSp.meta, 1), 0, 'sprint 1 starts on day 0');
+  eq(RM.sprintStartDay(sSp.meta, 3), 20, 'sprint 3 starts on day 20 (2-week sprints)');
+  eq(RM.sprintStartDay(sSp.meta, -5), 0, 'sprints before the timeline clamp to day 0');
+
+  RM.moveItemToSprint(sSp, 'a', 3, null);
+  var a = RM.itemById(sSp, 'a');
+  eq(a.startDay, 20, 'moving to sprint 3 lands the item on its first day');
+  eq(a.durDays, 5, 'the duration is kept');
+  eq(a.stories[0].startDay, 22, 'stories with a timeline ride along by the same delta');
+  ok(a.stories[1].startDay == null, 'stories without a timeline stay put');
+  eq(sSp.items.map(function (x) { return x.id; }), ['b', 'c', 'a', 'd'], 'no before-item: it moves to the end of its phase');
+
+  RM.moveItemToSprint(sSp, 'c', 2, 'a');
+  var c = RM.itemById(sSp, 'c');
+  eq(c.startDay, 10, 'an unscheduled item dropped in sprint 2 gets that start');
+  eq(c.durDays, RM.stretchSpan(sSp.meta, 10, RM.effortDays(sSp, c)), 'and a span from its size');
+  eq(sSp.items.map(function (x) { return x.id; }), ['b', 'c', 'a', 'd'], 'reordered before the given item');
+
+  RM.moveItemToSprint(sSp, 'b', 1, 'd');
+  var b = RM.itemById(sSp, 'b');
+  eq(b.phaseId, 'p2', 'dropping before an item in another phase adopts that phase');
+  eq(sSp.items.map(function (x) { return x.id; }), ['c', 'a', 'b', 'd'], 'and sits right before it');
+  eq(b.startDay, 0, 'same sprint: the start does not change');
+
+  RM.moveItemToSprint(sSp, 'd', null, null);
+  var d = RM.itemById(sSp, 'd');
+  ok(d.startDay == null && d.durDays == null, 'dropping on Unscheduled clears the timeline');
+
+  ok(RM.reorderItem(sSp, 'a', 'a') === false, 'reordering before itself is a no-op');
+  a.holdPos = true;
+  RM.reorderItem(sSp, 'a', 'c');
+  ok(!a.holdPos, 'a manual reorder clears holdPos');
+  eq(sSp.items.map(function (x) { return x.id; }), ['a', 'c', 'b', 'd'], 'reorder before another item');
+
+  RM.moveStoryToSprint(sSp, 'a', 'a2', 2, 'a1');
+  eq(a.stories.map(function (x) { return x.id; }), ['a2', 'a1'], 'story reorders before its sibling');
+  eq(a.stories[0].startDay, 10, 'story lands on the sprint start');
+  eq(a.stories[0].durDays, 5, 'a story without a span gets one week');
+  RM.moveStoryToSprint(sSp, 'a', 'a2', null, null);
+  ok(a.stories[1].id === 'a2' && a.stories[1].startDay == null && a.stories[1].durDays == null,
+    'unscheduling a story clears its timeline and moves it last');
+}
+
 var RMJira = require('../js/export-jira.js');
 var sJc = mkState([
   { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',

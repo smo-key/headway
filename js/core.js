@@ -2060,6 +2060,77 @@
     });
   };
 
+  // ---- sprint view moves (pure; app.js wraps them in commits)
+  // first working-day index of a numbered sprint (never before the timeline)
+  RM.sprintStartDay = function (meta, num) {
+    return Math.max(0, RM.sprintRange(meta, num).w0 * RM.slotsOf(meta));
+  };
+  // reorder one item in document order: before another item (adopting its
+  // phase, like a row drop in Planning) or to the end of its own phase
+  RM.reorderItem = function (state, itemId, beforeId) {
+    var t = RM.itemById(state, itemId);
+    if (!t || beforeId === itemId) return false;
+    var before = beforeId ? RM.itemById(state, beforeId) : null;
+    state.items = state.items.filter(function (x) { return x.id !== itemId; });
+    var at;
+    if (before) {
+      t.phaseId = before.phaseId;
+      at = state.items.indexOf(before);
+    } else {
+      at = -1;
+      state.items.forEach(function (x, i) { if (x.phaseId === t.phaseId) at = i; });
+      at = at === -1 ? state.items.length : at + 1;
+    }
+    state.items.splice(at, 0, t);
+    delete t.holdPos;
+    return true;
+  };
+  // Sprinting view drop: land the item in sprint `num` (null = unscheduled)
+  // keeping its duration, ride its stories along, then reorder it before
+  // `beforeId` (or to the end of its phase). Returns true when anything moved.
+  RM.moveItemToSprint = function (state, itemId, num, beforeId) {
+    var t = RM.itemById(state, itemId);
+    if (!t) return false;
+    var meta = state.meta;
+    if (num == null) {
+      if (t.startDay != null) { t.startDay = null; t.durDays = null; t.riskDays = 0; }
+    } else {
+      var day = RM.sprintStartDay(meta, num);
+      var was = t.startDay;
+      if (t.durDays == null) {
+        t.durDays = t.milestone ? 1 : RM.stretchSpan(meta, day, RM.effortDays(state, t) || RM.slotsOf(meta));
+      }
+      t.startDay = day;
+      if (was != null) RM.shiftStories(t, day - was);
+    }
+    RM.reorderItem(state, itemId, beforeId);
+    return true;
+  };
+  // story variant: a story gets its own timeline in sprint `num` (one week
+  // unless it already has a span), or loses it (num = null); reorders only
+  // inside its feature's story list (before `beforeStId`, else last)
+  RM.moveStoryToSprint = function (state, itemId, stId, num, beforeStId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return false;
+    var st = (it.stories || []).filter(function (x) { return x.id === stId; })[0];
+    if (!st) return false;
+    if (num == null) { st.startDay = null; st.durDays = null; }
+    else {
+      st.startDay = RM.sprintStartDay(state.meta, num);
+      if (st.durDays == null) st.durDays = RM.slotsOf(state.meta);
+    }
+    if (beforeStId !== stId) {
+      it.stories = it.stories.filter(function (x) { return x.id !== stId; });
+      var at = it.stories.length;
+      if (beforeStId) {
+        var bi = it.stories.map(function (x) { return x.id; }).indexOf(beforeStId);
+        if (bi !== -1) at = bi;
+      }
+      it.stories.splice(at, 0, st);
+    }
+    return true;
+  };
+
   // Rename a role everywhere it appears: the role list, people, items and
   // the rate card. Returns false when the new name is empty or taken.
   RM.renameRole = function (state, oldName, newName) {

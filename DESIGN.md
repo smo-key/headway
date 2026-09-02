@@ -61,6 +61,21 @@ rows by start day after moves/resizes.
   document (deletions stick). Edit menu → Setup and the resources "manage" button land here.
 - **Planning** — the timeline. Sprint header shows dates first (sprint numbers secondary).
   Drag empty lane space to pan; ⌘/ctrl-scroll zooms around the cursor.
+- **Sprinting** — sprint by sprint (`renderSprintPage`, `#sprintView`): a sidebar of sections
+  (Unscheduled first, then every sprint of the timeline; today's sprint carries a dot; the entry
+  under the scroll top is lit) beside ONE scrolling page of sections, each a list of rows. Rows are
+  features (`itemsInSprint`: any item overlapping the sprint, tagged `from S2` / `to S5` when it
+  spills either way) or stories (Features / Stories toggle, `sprLevel` in the UI snapshot): stories
+  with their own timeline sit where it falls, the rest ride "with feature". Rows drag (kind `sprow`)
+  onto a sidebar entry or a section (start = that sprint's first day, span kept, stories shifted —
+  `RM.moveItemToSprint` / `RM.moveStoryToSprint`) or before another row (`RM.reorderItem`, adopting
+  its phase like a Planning row drop); the order IS `state.items`, so it shows everywhere. A same-
+  section reorder never touches the start; a cross-sprint drop re-sorts by start when auto-order is
+  on, like a bar drag. Rows carry an inline title, epic and size chips, dates and phase; the context
+  menu offers move / epic / workstream / unschedule / delete; every section ends with Add feature.
+- **Prioritizing** — kanban of the phases (`renderPrioPage`). Its filter bar: search input with
+  icon + ⌘F, epic and workstream filters that, when active, wear the epic's icon / the workstream's
+  color dot and a blue outline (`pr-on`), then Group / Sort / Fields.
 - **Budgeting** — planning's own board, resources only: same timeline header (phase lane +
   dates/sprints), frozen left pane, one scroll surface, no cards or rounded borders. One
   row per role: workstream color dot + name, then LEFT-aligned spelled-out columns —
@@ -128,8 +143,10 @@ rows by start day after moves/resizes.
   `holdPos` flag keeps auto-order from moving it until it gets a start date), Unschedule
   (scheduled items only), Lock/Unlock and Mark/Unmark as done. Drag the grip / number area to reorder or move
   between phases; a blank
-  click-to-add row closes every phase (and the resources panel adds people the same way); near-edge
-  auto-scroll during drags. Story chevron sits left of the ID. Chips: size · risk · total weeks ·
+  click-to-add "Add feature" row closes every phase AND every workstream / epic group when grouping
+  is on (a group's row files the feature into that group, right after its last row; Insert feature
+  above/below inherits the anchor's epic and workstream); the resources panel adds people the same
+  way; near-edge auto-scroll during drags. Story chevron sits left of the ID. Chips: size · risk · total weeks ·
   headcount, aligned under header labels.
 - **Workstreams, epics & grouping**: color follows the workstream (editable via any workstream
   dropdown's pencil or right-clicking a workstream band — rename + palette/custom color; known

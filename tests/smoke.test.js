@@ -770,6 +770,38 @@ const groupBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).
 click(groupBtn);
 ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands rendered (' + doc.querySelectorAll('#rows .row.eband').length + ')');
 {
+  // every epic group ends with its own "Add feature" row that files the new
+  // feature into that epic, right after the group's last row
+  const subAdds = doc.querySelectorAll('#rows .row.addrow.sub[data-epic]');
+  ok(subAdds.length === doc.querySelectorAll('#rows .row.eband').length, 'every epic group ends with an Add feature row');
+  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add feature/.test(l.textContent)), 'add rows say "Add feature"');
+  const gAdd = [...subAdds].find(r => r.dataset.epic);
+  const gEpic = gAdd.dataset.epic, gPhase = gAdd.dataset.phase;
+  const nBefore = state().items.length;
+  click(gAdd);
+  const s2 = state();
+  const added = s2.items.filter(i => i.feature === '' && i.epic === gEpic).pop();
+  ok(s2.items.length === nBefore + 1 && added && added.phaseId === gPhase, 'clicking a group add row adds a feature to that epic');
+  const lastOfGroup = s2.items.map((i, idx) => ({ i, idx })).filter(x => x.i.phaseId === gPhase && x.i.epic === gEpic).pop();
+  ok(lastOfGroup.i.id === added.id, 'the new feature lands at the end of its epic group');
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.length === nBefore, 'undo removes the added feature');
+  // Insert feature above inherits the anchor's epic while grouped
+  const anchorRow = [...doc.querySelectorAll('#rows .row.item')].find(r => (state().items.find(i => i.id === r.dataset.id) || {}).epic);
+  const anchorIt = state().items.find(i => i.id === anchorRow.dataset.id);
+  anchorRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 220, clientY: 220 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert feature above/.test(b.textContent)));
+  const s3 = state();
+  const ins = s3.items[s3.items.findIndex(i => i.id === anchorIt.id) - 1];
+  ok(ins && ins.feature === '' && ins.epic === anchorIt.epic && (ins.workstream || '') === (anchorIt.workstream || ''),
+    'insert above inherits the anchor\'s epic and workstream');
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.length === nBefore, 'undo removes the inserted feature');
+}
+{
   const eb = Array.from(doc.querySelectorAll('#rows .row.eband')).find(r => r.dataset.epic);
   eb.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 220, clientY: 220 }));
   const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent);
@@ -794,6 +826,8 @@ window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by workstream/.test(b.textContent)));
 ok(doc.querySelectorAll('#rows .row.eband[data-ws]').length > 1,
   'workstream group bands rendered (' + doc.querySelectorAll('#rows .row.eband[data-ws]').length + ')');
+ok(doc.querySelectorAll('#rows .row.addrow.sub[data-ws]').length === doc.querySelectorAll('#rows .row.eband[data-ws]').length,
+  'every workstream group ends with an Add feature row');
 window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by workstream/.test(b.textContent)));
 ok(doc.querySelectorAll('#rows .row.eband').length === 0, 'workstream grouping toggles back off');
@@ -1655,7 +1689,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ---------------------------------------------------------------- prioritizing view
 {
   const tabs = [...doc.querySelectorAll('#viewTabs [data-view]')].map(b => b.dataset.view);
-  ok(tabs.indexOf('sprints') === -1, 'the Sprinting tab is gone');
+  ok(tabs.indexOf('sprints') === tabs.indexOf('planning') + 1, 'Sprinting sits right of Planning');
   ok(tabs.indexOf('prio') === tabs.indexOf('scoping') + 1, 'Prioritizing sits right of Scoping');
   click(doc.querySelector('#viewTabs [data-view="prio"]'));
   ok(doc.body.dataset.view === 'prio', 'view switches to Prioritizing');
@@ -1716,6 +1750,19 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(visibleCards.length > 0 && visibleCards.every(c =>
     state().items.find(i => i.id === c.dataset.prcard).epic === epName),
     'the epic filter narrows the board to that epic');
+  const fepicBtn = doc.querySelector('#prioView [data-prdd="fepic"]');
+  ok(fepicBtn.classList.contains('pr-on') && fepicBtn.querySelector('.dd-label i, .dd-label svg') &&
+    (fepicBtn.querySelector('.dd-label i, .dd-label svg').getAttribute('data-lucide') === (state().epicIcons[epName] || 'tag')),
+    'an active epic filter lights up and wears the epic\'s icon');
+  click(doc.querySelector('#prioView [data-prdd="fws"]'));
+  const wsPick = [...doc.querySelectorAll('#popover .menu-list button')].filter(b => !/All workstreams|default/.test(b.textContent))[0];
+  click(wsPick);
+  const fwsBtn = doc.querySelector('#prioView [data-prdd="fws"]');
+  ok(fwsBtn.classList.contains('pr-on') && !!fwsBtn.querySelector('.dd-label .dd-dot'),
+    'an active workstream filter lights up and shows its color dot');
+  click(doc.querySelector('#prioView [data-prdd="fws"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /All workstreams/.test(b.textContent)));
+  ok(!doc.querySelector('#prioView [data-prdd="fws"]').classList.contains('pr-on'), 'clearing the filter dims the button');
   click(doc.querySelector('#prioView [data-prdd="fepic"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /All epics/.test(b.textContent)));
   // swimlanes: Group dropdown, labels in the leftmost column of one table
@@ -1735,6 +1782,72 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- sprinting view
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  ok(doc.body.dataset.view === 'sprints', 'view switches to Sprinting');
+  const side = doc.querySelectorAll('#sprintView .spv-sbtn');
+  const secs = doc.querySelectorAll('#sprintView .spv-sec');
+  ok(side.length > 2 && side.length === secs.length,
+    'sidebar lists Unscheduled plus every sprint, one page section each (' + side.length + ')');
+  ok(side[0].dataset.spside === 'u' && /Unscheduled/.test(side[0].textContent), 'Unscheduled comes first');
+  const unsched = state().items.filter(i => i.startDay == null).length;
+  ok(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length === unsched,
+    'the Unscheduled section lists every unscheduled item');
+  const spf = doc.querySelector('#spFilter');
+  ok(!!spf && !!spf.closest('.filter-wrap').querySelector('.filter-ico'), 'the row filter carries the search icon');
+  const sched = state().items.find(i => i.startDay != null);
+  const schedRow = doc.querySelector('#sprintView .spv-row[data-spid="' + sched.id + '"]');
+  ok(!!schedRow && schedRow.dataset.spsec !== 'u', 'scheduled items list under a sprint');
+  ok(!!schedRow.querySelector('[data-spact="epic"]') && !!schedRow.querySelector('[data-spact="size"]') &&
+    !!schedRow.querySelector('input[data-spf="feature"]'), 'rows carry an inline title, epic and size chips');
+  ok(doc.querySelectorAll('#sprintView .spv-add').length === secs.length, 'every section ends with an Add feature button');
+  // drag an unscheduled row onto a sprint in the sidebar: it gets that
+  // sprint's start day and a span, and lists under that sprint
+  const uRow = doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-row');
+  const uId = uRow.dataset.spid;
+  const target = side[2];
+  const tnum = Number(target.dataset.spside);
+  uRow.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+  target.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 60, clientY: 60 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 60, clientY: 60 }));
+  const moved = state().items.find(i => i.id === uId);
+  ok(moved.startDay != null && moved.durDays != null, 'dropping on a sidebar sprint schedules the item');
+  ok(doc.querySelector('#sprintView .spv-row[data-spid="' + uId + '"]').dataset.spsec === String(tnum),
+    'and it now lists under that sprint');
+  // drop the row before another row of the same section: document order
+  // changes (the shared items array), which every view reads
+  const secRows = doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + tnum + '"] .spv-row');
+  ok(secRows.length >= 2, 'the target sprint has rows to reorder among');
+  const first = secRows[0], mine = doc.querySelector('#sprintView .spv-row[data-spid="' + uId + '"]');
+  mine.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+  first.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 60, clientY: -5 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 60, clientY: -5 }));
+  const ids = state().items.map(i => i.id);
+  ok(ids.indexOf(uId) === ids.indexOf(first.dataset.spid) - 1, 'dropping before a row reorders the items array');
+  ok(state().items.find(i => i.id === uId).startDay === moved.startDay, 'a same-sprint reorder leaves the start alone');
+  // dragging to another sprint's section (empty space) moves the start
+  const other = [...doc.querySelectorAll('#sprintView .spv-sec')].find(sc => sc.dataset.spsec !== 'u' && sc.dataset.spsec !== String(tnum));
+  const onum = Number(other.dataset.spsec);
+  const mine2 = doc.querySelector('#sprintView .spv-row[data-spid="' + uId + '"]');
+  mine2.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+  other.querySelector('.spv-sechd').dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 60, clientY: 60 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 60, clientY: 60 }));
+  ok(doc.querySelector('#sprintView .spv-row[data-spid="' + uId + '"]').dataset.spsec === String(onum) &&
+    state().items.find(i => i.id === uId).durDays === moved.durDays,
+    'dropping into another section moves the start and keeps the span');
+  click(doc.querySelector('#sprintView')); // the click a browser fires after the drag's pointerup
+  // stories level: rows are stories grouped under their feature
+  click(doc.querySelector('#sprintView [data-splevel="story"]'));
+  ok(doc.querySelector('#sprintView .spv-seg .on').dataset.splevel === 'story', 'the Stories level toggles');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).sprLevel === 'story', 'the level persists with the view prefs');
+  ok(!doc.querySelector('#sprintView .spv-row[data-spid]:not([data-spst])'), 'story level lists no feature rows');
+  click(doc.querySelector('#sprintView [data-splevel="feature"]'));
+  // undo the three moves so later blocks see the fixture's schedule
+  for (let k = 0; k < 3; k++) window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === uId).startDay == null, 'undo restores the item to Unscheduled');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 // ------------------------------------------------------- RICE priority scheme
 {
   suTab('sizing');
