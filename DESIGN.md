@@ -12,7 +12,7 @@ state = {
   meta:   { title, timelineStart (Mon ISO date), numWeeks, endDate,  // endDate (last working day) wins on load
             holidays: [ISO dates],                               // individual days, drawn as day-level segments
             sprintAnchor (Mon ISO), sprintAnchorNum,             // e.g. S1 starts Sep 7
-            scopeCols: [ { key, label? } ],                      // scoping columns: built-ins + custom ('c…' keys)
+            scopeCols: [ { key, label?, scope? } ],              // scoping columns: built-ins + custom ('c…' keys); scope 'feature' | 'story' (absent = both)
             sizeDays: { XS:2, S:5, M:10, L:20, XL:40 } }        // working days per t-shirt size (week scale)
   phases: [ { id, name, description, bucket, collapsed,          // bucket = backlog shelf (Next/Future)
               startDay, endDay } ]                               // optional pinned window (null = auto from items)
@@ -73,6 +73,29 @@ rows by start day after moves/resizes.
   section reorder never touches the start; a cross-sprint drop re-sorts by start when auto-order is
   on, like a bar drag. Rows carry an inline title, epic and size chips, dates and phase; the context
   menu offers move / epic / workstream / unschedule / delete; every section ends with Add feature.
+- **Detail panel** (`renderPanel` / `renderStoryPanel`): `.p-top` (number, milestone chip, collapse) is
+  `position: sticky` with `top: -16px` — the sticky rectangle is inset by the panel's padding, so 0
+  would pin it 16px down and over the title. Fields come from `panelScopeCols(kind)`: text columns in
+  `meta.scopeColOrder` (the Scoping tab's order) filtered by `RM.scopeColShows(col, kind)`; excluded
+  columns render `.sc-na` cells in the grid. Section order: Fields, Details, Size & schedule, People,
+  Dependencies, Stories, Checks, Integrations (Jira key); stories: Rolls up to, Fields, Acceptance
+  criteria, People (assignees only), Timeline, Integrations. A document-level Enter handler blurs any
+  single-line input in `#panel`/`#rows`/`#resPanel` (and the `.p-name` textarea) and re-fires `change`
+  when blur left a dirty value uncommitted. `.wz-bar` shows only under `.wz:focus-within`.
+- **Opening is not an edit**: `loadWorkbookBuffer` goes through `adoptState`, not `replaceState` —
+  no version-history entry, `docSaved = true`, `sessionEdited = false`, undo/redo cleared (an undo
+  across an open would autosave the previous document into the new file). Only real commits
+  (`commit` / `replaceState`) record history, mark the doc unsaved and arm autosave.
+- **Panes**: `leftCollapsed` (UI snapshot) sets `--left-w` to 0 and stamps `body.left-collapsed`
+  (`.hdr-left`, `.row-left` and `.rleft` display none). Like the right panel, only a floating reopen
+  button remains: `#leftPeek` (top-left) mirrors `#panelPeek` (top-right), both absolute in `#main`
+  where the collapse buttons sat. `[` / `]` toggle left / right in the app keydown handler, after the
+  `inField` bail-out.
+- **Milestone markers**: `item.msStyle` ∈ `RM.MS_STYLES` (`diamond` default, absent; `star`; `circle`),
+  kept on bars too so a round-trip conversion remembers it. Rendered via `.bar.ms.ms-<style>`
+  (`--ms-star` clip-path polygon, circle = border-radius), `.r-dot.msdot.<style>`, the placement
+  ghost, PNG canvas paths, PPTX `star5` / `ellipse`, Excel `◆ ★ ●`. Picked from `msStyleItems` (context
+  menus) or the panel chip (`data-act="msstyle"`).
 - **Prioritizing** — kanban of the phases (`renderPrioPage`). Its filter bar: search input with
   icon + ⌘F, epic and workstream filters that, when active, wear the epic's icon / the workstream's
   color dot and a blue outline (`pr-on`), then Group / Sort / Fields.

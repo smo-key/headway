@@ -560,6 +560,45 @@ eq(RM.scopeColLabel(sSc.meta.scopeCols[0]), 'Notes', 'clearing a rename restores
 RM.setScopeValue(sSc.items[0], 'x9', 'keep');
 eq(RM.normalizeState(sSc).items[0].custom.x9, 'keep', 'custom values survive normalize');
 
+// ------------------------------------------------------------- column scope
+section('column scope');
+var sCol = mkState([{ num: 1, feature: 'a' }]);
+RM.addScopeCol(sCol, null, 'notes');
+RM.addScopeCol(sCol, null, 'enables');
+sCol.meta.scopeCols[0].scope = 'story';
+sCol.meta.scopeCols[1].scope = 'bogus';
+var sCol2 = RM.normalizeState(sCol);
+eq(sCol2.meta.scopeCols[0].scope, 'story', 'a column scope survives normalize');
+eq(sCol2.meta.scopeCols[1].scope, undefined, 'an unknown scope drops back to both');
+eq(sCol2.meta.scopeCols[2].scope, undefined, 'missing scope stays absent (both)');
+eq(RM.scopeColShows({ key: 'x' }, 'feature'), true, 'no scope shows on features');
+eq(RM.scopeColShows({ key: 'x' }, 'story'), true, 'no scope shows on stories');
+eq(RM.scopeColShows({ key: 'x', scope: 'story' }, 'feature'), false, 'story-only hides on features');
+eq(RM.scopeColShows({ key: 'x', scope: 'story' }, 'story'), true, 'story-only shows on stories');
+eq(RM.scopeColShows({ key: 'x', scope: 'feature' }, 'story'), false, 'feature-only hides on stories');
+RM.setScopeColScope(sCol2, 'notes', 'feature');
+eq(sCol2.meta.scopeCols[1].scope, 'feature', 'setScopeColScope stores the scope');
+RM.setScopeColScope(sCol2, 'notes', 'both');
+eq(sCol2.meta.scopeCols[1].scope, undefined, 'both clears the scope');
+RM.setScopeColScope(sCol2, 'notes', 'nope');
+eq(sCol2.meta.scopeCols[1].scope, undefined, 'an unknown scope is ignored');
+
+// ------------------------------------------------------------- milestone styles
+section('milestone styles');
+eq(RM.MS_STYLES, ['diamond', 'star', 'circle'], 'three milestone styles');
+var sSty = mkState([
+  { num: 1, feature: 'star', milestone: true, startDay: 0, durDays: 0, msStyle: 'star' },
+  { num: 2, feature: 'odd', milestone: true, startDay: 0, durDays: 0, msStyle: 'hexagon' },
+  { num: 3, feature: 'plain', milestone: true, startDay: 0, durDays: 0 },
+  { num: 4, feature: 'bar', startDay: 0, durDays: 5, msStyle: 'circle' }
+]);
+eq(sSty.items[0].msStyle, 'star', 'star style survives normalize');
+eq(sSty.items[1].msStyle, undefined, 'an unknown style is dropped');
+eq(sSty.items[2].msStyle, undefined, 'no style stays absent');
+eq(sSty.items[3].msStyle, 'circle', 'a bar remembers its style for when it becomes a milestone');
+eq(RM.msStyleOf(sSty.items[0]), 'star', 'msStyleOf reads the style');
+eq(RM.msStyleOf(sSty.items[2]), 'diamond', 'msStyleOf defaults to diamond');
+
 // ------------------------------------------------------------- milestones
 section('milestones');
 var sMs = mkState([

@@ -246,7 +246,7 @@
           // milestone: a diamond in its week, start = end = the fixed date
           var msWk = Math.max(0, Math.min(numWeeks - 1, Math.floor(it.startDay / S5)));
           var msCell = r.getCell(FIRST_SPRINT_COL + msWk);
-          msCell.value = '◆';
+          msCell.value = { diamond: '◆', star: '★', circle: '●' }[RM.msStyleOf(it)];
           msCell.font = { color: { argb: 'FF' + color }, bold: true };
           msCell.alignment = { horizontal: 'center' };
           r.getCell(extraCols.start).value = RM.dayToDate(meta, it.startDay);

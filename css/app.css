@@ -454,6 +454,8 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .r-dot { width: 8px; height: 8px; border-radius: 2.5px; flex: 0 0 8px; margin-right: 7px; }
 /* milestones carry a diamond, not a square */
 .r-dot.msdot { border-radius: 1px; transform: rotate(45deg) scale(.92); }
+.r-dot.msdot.star { border-radius: 0; transform: scale(1.25); clip-path: var(--ms-star); }
+.r-dot.msdot.circle { border-radius: 50%; transform: none; }
 /* insertion marker while dragging a scoping column header */
 .col-drop-indicator {
   position: absolute; top: 0; bottom: 0; width: 2px;
@@ -642,6 +644,15 @@ body.cap-off .hc-lab { display: none !important; }
 /* 85px = grip 18 + chev 20 + num 32 + dot 15 — story titles line up with
    the feature titles above them */
 .st-pad { width: 85px; flex: 0 0 85px; position: relative; }
+/* story rows drag by their grip (reorder, or move to another feature) */
+.st-grip {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab; color: var(--ink-3); font-size: 11px; opacity: 0;
+}
+.st-grip svg { width: 12px; height: 12px; }
+.row.story:hover .st-grip { opacity: .8; }
+.st-grip:hover { color: var(--ink); }
 .st-pad::before {
   content: ''; position: absolute; left: 44px; top: 0; bottom: 0;
   border-left: 1px solid var(--line-2);
@@ -838,7 +849,14 @@ body.cap-off .hc-lab { display: none !important; }
   animation: panelIn .16s ease-out;
 }
 @keyframes panelIn { from { transform: translateX(14px); opacity: 0; } }
-.p-top { display: flex; align-items: flex-start; gap: 8px; }
+.p-top {
+  display: flex; align-items: flex-start; gap: 8px;
+  /* the header row (number, milestone chip, collapse) rides along at the
+     top; the sticky edge is inset by the panel's padding, hence -16px */
+  position: sticky; top: -16px; z-index: 5;
+  background: var(--surface);
+  margin: -16px -18px 0; padding: 12px 18px 4px;
+}
 .p-num { font-family: var(--mono); font-size: 11px; color: var(--ink-3); padding-top: 8px; display: inline-flex; align-items: center; }
 .p-num-edit {
   width: 44px; padding: 2px 3px;
@@ -1546,7 +1564,9 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 /* WYSIWYG editor (rich description / acceptance criteria) */
 .wz { border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface); overflow: hidden; }
 .wz:focus-within { border-color: var(--blue); }
-.wz-bar { display: flex; gap: 2px; padding: 3px 4px; border-bottom: 1px solid var(--line); background: var(--paper-2); }
+.wz-bar { display: none; gap: 2px; padding: 3px 4px; border-bottom: 1px solid var(--line); background: var(--paper-2); }
+/* the B / I / list bar shows only while its editor has focus */
+.wz:focus-within .wz-bar { display: flex; }
 .wz-bar button {
   border: 0; background: transparent; box-shadow: none; padding: 2px 7px;
   font-size: 11.5px; color: var(--ink-2); border-radius: 5px; min-width: 24px;
@@ -1786,6 +1806,21 @@ body.chrome-win #topbar { padding-right: 0; }
    filter rides the frozen left pane instead of scrolling with the lane
    (sticky is a containing block, so the absolute icon/kbd still anchor here) */
 #filterCell { display: flex; align-items: center; }
+/* left-pane fold button: the top-left corner, in and out of the fold */
+#leftCollapse {
+  border: 0; background: transparent; color: var(--ink-3);
+  padding: 4px; margin: 0 4px 0 -8px; flex: 0 0 auto;
+  display: inline-flex; align-items: center;
+}
+#leftCollapse:hover { color: var(--ink); box-shadow: none; }
+#leftCollapse svg.lucide { width: 14px; height: 14px; }
+/* folded: the pane is gone — like the right panel, only #leftPeek remains */
+body.left-collapsed .hdr-left { display: none !important; }
+body.left-collapsed .row-left { display: none !important; }
+body.left-collapsed .rleft { display: none !important; }
+body.left-collapsed #leftRz, body.left-collapsed #leftRzLine { display: none !important; }
+body[data-view="setup"] #leftCollapse, body[data-view="reports"] #leftCollapse, body[data-view="history"] #leftCollapse,
+body[data-view="prio"] #leftCollapse, body[data-view="sprints"] #leftCollapse, body.present #leftCollapse { display: none; }
 /* icon + ⌘F anchor to this wrapper, so the detail button can sit before it */
 .filter-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 #rowFilter, #prFilter, #spFilter {
@@ -1922,6 +1957,7 @@ body.chrome-mac #startBar { padding-left: 96px; }
 #scFmtBar svg.lucide { width: 13px; height: 13px; }
 
 /* ------------------------------------------------------------- milestones */
+:root { --ms-star: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
 /* zero-width anchor at the fixed date; the diamond centers on it */
 .bar.ms {
   width: 0 !important;
@@ -1957,6 +1993,15 @@ body.chrome-mac #startBar { padding-left: 96px; }
 .bar.cmp:hover { box-shadow: none; filter: none; }
 .bar.ms.cmp { top: auto; bottom: 0; height: 12px; opacity: .65; outline: none; background: transparent; }
 .bar.ms.cmp .ms-diamond { border-style: dashed; border-width: 2px; width: 10px; height: 10px; top: 50%; }
+/* star and circle markers: same anchor, different shape */
+.bar.ms.ms-star .ms-diamond {
+  width: 17px; height: 17px; border: 0; border-radius: 0;
+  transform: translate(-50%, -50%);
+  background: var(--bar-c, var(--c-product));
+  clip-path: var(--ms-star);
+}
+.bar.ms.ms-circle .ms-diamond { border-radius: 50%; transform: translate(-50%, -50%); }
+.bar.ms.ms-star.selected .ms-diamond, .bar.ms.ms-star.crit .ms-diamond { outline: none; filter: drop-shadow(0 0 2px var(--ink)); }
 
 .bar.ms.selected { outline: none; }
 .bar.ms.selected .ms-diamond { outline: 2px solid var(--ink); outline-offset: 1.5px; }
@@ -1986,7 +2031,7 @@ body.chrome-mac #startBar { padding-left: 96px; }
 
 /* ------------------------------------------------------- panel header row */
 .p-mschip {
-  font-size: 10.5px; font-weight: 700;
+  font-size: 10.5px; font-weight: 700; cursor: pointer; font-family: inherit; line-height: 1.4;
   color: var(--blue);
   background: var(--blue-soft);
   border: 1px solid var(--blue-line);
@@ -2080,16 +2125,28 @@ body.no-size .sz-lab { visibility: hidden; }
   color: var(--ink-3);
   font-size: 12px; font-weight: 400;
 }
-#panelPeek {
-  position: absolute; right: 0; top: 50%;
-  transform: translateY(-50%);
+/* reopen buttons sit exactly where the collapse buttons were: the corners */
+#leftPeek {
+  position: absolute; left: 12px; top: 12px;
   z-index: 25;
-  border: 1px solid var(--line-2); border-right: 0;
-  border-radius: 8px 0 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
   background: var(--surface);
-  padding: 10px 6px 10px 8px;
+  padding: 4px 6px;
   color: var(--ink-3);
 }
+#leftPeek svg.lucide { width: 14px; height: 14px; display: block; }
+#leftPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
+#panelPeek {
+  position: absolute; right: 12px; top: 12px;
+  z-index: 25;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 4px 6px;
+  color: var(--ink-3);
+}
+#panelPeek svg.lucide { width: 14px; height: 14px; display: block; }
 #panelPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
 body[data-view="budget"] #panelPeek, body[data-view="reports"] #panelPeek,
 body[data-view="prio"] #panelPeek, body[data-view="sprints"] #panelPeek,
@@ -2836,6 +2893,8 @@ body[data-view="history"] #panelPeek { display: none; }
   opacity: .75; pointer-events: none; z-index: 3;
 }
 .place-ghost.ms { width: 14px !important; transform: rotate(45deg); top: 8px; height: 14px; }
+.place-ghost.ms.star { transform: none; clip-path: var(--ms-star); border: 0; background: var(--ink-3); }
+.place-ghost.ms.circle { transform: none; border-radius: 50%; }
 
 /* ------------------------------------------------------ header column tools */
 .hl-cols i[data-plcol], .hl-cols i[data-bucol] { cursor: grab; }

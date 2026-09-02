@@ -118,7 +118,8 @@
             w: Math.max(6, (e - s) * dpx),
             color: '#' + RM.colorForItem(state, it),
             done: !!it.done,
-            ms: !!it.milestone
+            ms: !!it.milestone,
+            msStyle: RM.msStyleOf(it)
           }
         });
         y += ROW_H;
@@ -387,10 +388,19 @@
         // a diamond on the start day, like the live timeline
         var mcx = b.x + 6, mcy = r.y + r.h / 2, mr = 6.5;
         ctx.beginPath();
-        ctx.moveTo(mcx, mcy - mr);
-        ctx.lineTo(mcx + mr, mcy);
-        ctx.lineTo(mcx, mcy + mr);
-        ctx.lineTo(mcx - mr, mcy);
+        if (b.msStyle === 'circle') {
+          ctx.arc(mcx, mcy, mr, 0, Math.PI * 2);
+        } else if (b.msStyle === 'star') {
+          for (var sp = 0; sp < 10; sp++) {
+            var sr = sp % 2 ? mr * 0.45 : mr * 1.15, sa = -Math.PI / 2 + sp * Math.PI / 5;
+            ctx[sp ? 'lineTo' : 'moveTo'](mcx + Math.cos(sa) * sr, mcy + Math.sin(sa) * sr);
+          }
+        } else {
+          ctx.moveTo(mcx, mcy - mr);
+          ctx.lineTo(mcx + mr, mcy);
+          ctx.lineTo(mcx, mcy + mr);
+          ctx.lineTo(mcx - mr, mcy);
+        }
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;

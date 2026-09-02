@@ -67,7 +67,7 @@
     <div id="grid">
       <div id="bgcols"></div>
       <div id="hdr">
-        <div class="hdr-line hdr-phases"><div class="hdr-left" id="filterCell"><button id="detailBtn" title="Detail level — phases, features, or stories"></button><span class="filter-wrap"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i><input id="rowFilter" type="search" placeholder="Filter rows" aria-label="Filter rows"><kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span></div><div class="hdr-lane" id="hdrPhases"></div></div>
+        <div class="hdr-line hdr-phases"><div class="hdr-left" id="filterCell"><button id="leftCollapse" title="Hide left pane  ["><i data-lucide="panel-left-close"></i></button><button id="detailBtn" title="Detail level — phases, features, or stories"></button><span class="filter-wrap"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i><input id="rowFilter" type="search" placeholder="Filter rows" aria-label="Filter rows"><kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span></div><div class="hdr-lane" id="hdrPhases"></div></div>
         <div class="hdr-line hdr-sprints"><div class="hdr-left corner">
           <span class="hl-title pl-title">Feature</span><span class="hl-title bu-only">Person</span><span class="hl-cols" id="hlCols"></span><span id="leftRz"></span>
         </div><div class="hdr-lane" id="hdrSprints"></div></div>
@@ -101,7 +101,8 @@
 </div>
 
   <aside id="panel" hidden></aside>
-  <button id="panelPeek" hidden title="Show panel"><i data-lucide="panel-right-open"></i></button>
+  <button id="leftPeek" hidden title="Show left pane  ["><i data-lucide="panel-left-open"></i></button>
+  <button id="panelPeek" hidden title="Show panel  ]"><i data-lucide="panel-right-open"></i></button>
 </div>
 
 <div id="startPage" hidden>

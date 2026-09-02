@@ -281,6 +281,11 @@
   RM.DEFAULT_SCOPE_COLS = ['description'];
   RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
   // fixed (chip) scoping columns and the canonical full-order template
+  // milestone marker shapes; the first is the default
+  RM.MS_STYLES = ['diamond', 'star', 'circle'];
+  RM.msStyleOf = function (it) {
+    return RM.MS_STYLES.indexOf(it && it.msStyle) > 0 ? it.msStyle : 'diamond';
+  };
   RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
   RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
@@ -864,10 +869,15 @@
       .map(function (c) {
         if (typeof c === 'string') c = { key: c };
         if (!c || typeof c.key !== 'string' || !c.key) return null;
+        var col;
         if (RM.SCOPE_BUILTIN_LABELS[c.key]) {
-          return c.label ? { key: c.key, label: String(c.label) } : { key: c.key };
+          col = c.label ? { key: c.key, label: String(c.label) } : { key: c.key };
+        } else {
+          col = { key: c.key, label: String(c.label || 'Column') };
         }
-        return { key: c.key, label: String(c.label || 'Column') };
+        // which rows show the column: 'feature' / 'story'; absent = both
+        if (c.scope === 'feature' || c.scope === 'story') col.scope = c.scope;
+        return col;
       })
       .filter(function (c) {
         if (!c || seenCol[c.key]) return false;
@@ -1054,6 +1064,9 @@
         teamType: it.teamType != null && it.teamType !== '' ? it.teamType : firstType,
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
+        // milestone marker shape; absent = diamond (kept on bars so a
+        // feature converted back and forth remembers its choice)
+        msStyle: RM.MS_STYLES.indexOf(it.msStyle) > 0 ? it.msStyle : undefined,
         startDay: it.startDay != null && isFinite(it.startDay) ? it.startDay : null,
         durDays: it.durDays != null && isFinite(it.durDays)
           ? Math.max(it.milestone ? 0 : 1, it.durDays) : null,
@@ -1350,6 +1363,18 @@
       if (c.key !== key) return;
       if (label && label !== RM.SCOPE_BUILTIN_LABELS[key]) c.label = label;
       else delete c.label; // empty (or canonical) restores the built-in name
+    });
+  };
+  // does a column show on rows of this kind ('feature' | 'story')?
+  RM.scopeColShows = function (col, kind) {
+    return !col.scope || col.scope === kind;
+  };
+  // 'feature' / 'story' restrict the column; 'both' (or anything else) clears
+  RM.setScopeColScope = function (state, key, scope) {
+    if (scope !== 'feature' && scope !== 'story' && scope !== 'both') return;
+    state.meta.scopeCols.forEach(function (c) {
+      if (c.key !== key) return;
+      if (scope === 'both') delete c.scope; else c.scope = scope;
     });
   };
   RM.scopeValue = function (it, key) {

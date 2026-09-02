@@ -2758,10 +2758,256 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ---------------------------------------------------------------- export smoke
 ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   'save uses the exact project title as the filename (no slug, no date)');
+// ---------------------------------------------------------------- panel field order + Integrations + column scope
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('columns');
+  doc.querySelector('#suColAdd').value = 'Zed';
+  click(doc.querySelector('#suColAddBtn'));
+  const zed = state().meta.scopeCols.find(c => c.label === 'Zed');
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const hdrOrder = () => Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(h => h.dataset.col);
+  const zedHdr = () => doc.querySelector('#hdrSprints .sc-hcell[data-col="' + zed.key + '"]');
+  const colMenu = (re) => {
+    zedHdr().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 40 }));
+    return Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => re.test(b.textContent));
+  };
+  let guard = 0;
+  while (hdrOrder().indexOf(zed.key) > 0 && guard++ < 30) click(colMenu(/Move left/));
+  ok(hdrOrder()[0] === zed.key, 'custom column moved to the first scoping column');
+  const textOrder = () => state().meta.scopeColOrder.filter(k => state().meta.scopeCols.some(c => c.key === k));
+  const feat = doc.querySelector('#rows .row.item');
+  click(feat.querySelector('.r-num'));
+  const panelFields = () => Array.from(doc.querySelectorAll('#panel .p-sec[data-sec="fields"] .wz-ed[data-f^="col:"]')).map(e => e.dataset.f.slice(4));
+  ok(panelFields().join(',') === textOrder().join(','),
+    'panel Fields follow the scoping column order (' + panelFields().join(',') + ')');
+  const secs = Array.from(doc.querySelectorAll('#panel .p-sec')).map(e => e.dataset.sec);
+  ok(secs[secs.length - 1] === 'integrations' || (secs[secs.length - 1] === 'checks' && secs[secs.length - 2] === 'integrations'),
+    'Integrations is the last panel section (' + secs.join(',') + ')');
+  ok(!!doc.querySelector('#panel .p-sec[data-sec="integrations"] input[data-f="jiraKey"]'), 'Jira key lives under Integrations');
+  ok(!doc.querySelector('#panel .p-sec[data-sec="details"] input[data-f="jiraKey"]'), 'Details no longer carries the Jira key');
+
+  // story-only: the feature cell greys out, the panel omits the field
+  click(colMenu(/Stories only/));
+  ok(state().meta.scopeCols.find(c => c.key === zed.key).scope === 'story', 'column menu sets Stories only');
+  ok(doc.querySelector('#rows .row.item .sc-cell.sc-na[data-col="' + zed.key + '"]') !== null, 'story-only column greys out on feature rows');
+  ok(panelFields().indexOf(zed.key) === -1, 'story-only column leaves the feature panel');
+  const withSt = state().items.find(i => i.stories && i.stories.length && !i.milestone);
+  const chev = doc.querySelector('#rows .row.item[data-id="' + withSt.id + '"] .r-chev[data-act="stories"]');
+  if (chev && !doc.querySelector('#rows .row.story[data-id="' + withSt.id + '"]')) click(chev);
+  const stRow2 = doc.querySelector('#rows .row.story[data-id="' + withSt.id + '"]');
+  ok(!!stRow2 && !!stRow2.querySelector('[data-stscope="' + zed.key + '"]'), 'story-only column still edits on story rows');
+  click(doc.querySelector('#rows .row.item[data-id="' + withSt.id + '"] .r-num'));
+  click(doc.querySelector('#panel [data-pst-edit="' + withSt.stories[0].id + '"]'));
+  const stPanelFields = () => Array.from(doc.querySelectorAll('#panel .wz-ed[data-f^="stcol:"]')).map(e => e.dataset.f.slice(6));
+  ok(stPanelFields()[0] === zed.key, 'story panel Fields follow the scoping order too');
+  const stSecs = Array.from(doc.querySelectorAll('#panel .p-sec')).map(e => e.dataset.sec);
+  ok(stSecs[stSecs.length - 1] === 'st-integrations' && !!doc.querySelector('#panel .p-sec[data-sec="st-integrations"] input[data-stf="jiraKey"]'),
+    'story panel ends with Integrations holding the Jira key');
+
+  // feature-only: story rows and the story panel drop it
+  click(colMenu(/Features only/));
+  ok(state().meta.scopeCols.find(c => c.key === zed.key).scope === 'feature', 'column menu sets Features only');
+  const stRow3 = doc.querySelector('#rows .row.story[data-id="' + withSt.id + '"]');
+  ok(!!stRow3 && !!stRow3.querySelector('.sc-cell.sc-na[data-col="' + zed.key + '"]'), 'feature-only column greys out on story rows');
+  ok(stPanelFields().indexOf(zed.key) === -1, 'feature-only column leaves the story panel');
+  click(colMenu(/Features and stories/));
+  ok(state().meta.scopeCols.find(c => c.key === zed.key).scope == null, 'Features and stories clears the scope');
+  // Setup lists the scope too
+  click(doc.querySelector('#btnSetup'));
+  suTab('columns');
+  const scopeSel = doc.querySelector('#setupView [data-sucolscope="' + zed.key + '"]');
+  ok(!!scopeSel, 'Columns tab offers a scope control per text column');
+  scopeSel.value = 'story';
+  scopeSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.scopeCols.find(c => c.key === zed.key).scope === 'story', 'Setup scope control commits');
+  click(doc.querySelector('#setupView [data-sucolrm="' + zed.key + '"]'));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- Enter commits + blurs; format bar hides until focus
+{
+  const enter = (el) => el.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  const row0 = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => r.querySelector('input.r-name'));
+  const it0 = state().items.find(i => i.id === row0.dataset.id);
+  click(row0.querySelector('.r-num'));
+  const pn = doc.querySelector('#panel .p-name');
+  pn.focus();
+  pn.value = 'Enter titled';
+  const ev = enter(pn);
+  ok(ev === false, 'Enter on the panel title is swallowed (no newline)');
+  ok(doc.activeElement !== pn, 'Enter on the panel title leaves the field');
+  ok(state().items.find(i => i.id === it0.id).feature === 'Enter titled', 'Enter on the panel title saves it');
+  const jk2 = doc.querySelector('#panel input[data-f="jiraKey"]');
+  jk2.focus();
+  jk2.value = 'hw-77';
+  enter(jk2);
+  ok(doc.activeElement !== jk2, 'Enter on a panel input leaves the field');
+  ok(state().items.find(i => i.id === it0.id).jiraKey === 'HW-77', 'Enter on a panel input saves it');
+  const rn = doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] input.r-name');
+  rn.focus();
+  rn.value = 'Enter row';
+  enter(rn);
+  ok(doc.activeElement !== rn, 'Enter on a left-pane name input leaves the field');
+  ok(state().items.find(i => i.id === it0.id).feature === 'Enter row', 'Enter on a left-pane name input saves it');
+  const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/\.wz-bar\s*\{[^}]*display:\s*none/.test(css) && /\.wz:focus-within\s*(>\s*)?\.wz-bar\s*\{[^}]*display:\s*flex/.test(css),
+    'panel format bar stays hidden until its editor has focus');
+}
+
+// ---------------------------------------------------------------- stories drag in Planning too
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story detail: every feature open
+  const seedRow = doc.querySelector('#rows .row.story[data-story]');
+  const addInp = doc.querySelector('#rows .row.story-add[data-id="' + seedRow.dataset.id + '"] .st-add-input');
+  addInp.value = 'Second story';
+  addInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  const host = state().items.find(i => i.id === seedRow.dataset.id);
+  ok(host.stories.length >= 2, 'feature now has two stories for the drag');
+  const stRows = doc.querySelectorAll('#rows .row.story[data-story][data-id="' + host.id + '"]');
+  ok(stRows.length === host.stories.length, 'planning lists the feature\'s story rows');
+  ok(!!stRows[0].querySelector('.st-grip'), 'planning story rows carry a drag grip');
+  const firstId = host.stories[0].id, lastId = host.stories[host.stories.length - 1].id;
+  const left = stRows[0].querySelector('.row-left');
+  left.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 10, clientY: 60 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 10, clientY: 60 }));
+  const after = state().items.find(i => i.id === host.id).stories.map(s2 => s2.id);
+  ok(after[0] !== firstId && after.indexOf(firstId) === after.indexOf(lastId) - 1,
+    'dragging a story row in Planning reorders it (before the last story: ' + after.indexOf(firstId) + ')');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === host.id).stories[0].id === firstId, 'undo restores the story order');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the added story
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature detail
+}
+
+// ---------------------------------------------------------------- story assignees in the story panel
+{
+  const hostA = state().items.find(i => !i.milestone && i.stories && i.stories.length &&
+    doc.querySelector('#rows .row.item[data-id="' + i.id + '"] .r-num'));
+  click(doc.querySelector('#rows .row.item[data-id="' + hostA.id + '"] .r-num'));
+  click(doc.querySelector('#panel [data-pst-edit="' + hostA.stories[0].id + '"]'));
+  const stSecsA = Array.from(doc.querySelectorAll('#panel .p-sec')).map(e => e.dataset.sec);
+  ok(stSecsA.indexOf('st-people') !== -1 && stSecsA.indexOf('st-people') < stSecsA.indexOf('st-integrations'),
+    'story panel has a People section (' + stSecsA.join(',') + ')');
+  ok(!doc.querySelector('#panel .p-sec[data-sec="st-people"] [data-dd="teamType"]'), 'story People carries no role picker');
+  const asgBtn = doc.querySelector('#panel [data-dd="stassign"]');
+  ok(!!asgBtn, 'story panel offers Assign…');
+  click(asgBtn);
+  const firstPerson = doc.querySelector('#popover .menu-list button');
+  ok(!!firstPerson, 'assign dropdown lists the roster');
+  click(firstPerson);
+  const stA = () => state().items.find(i => i.id === hostA.id).stories[0];
+  ok((stA().assignees || []).length === 1, 'picking a person assigns them to the story');
+  const rmBtn = doc.querySelector('#panel .p-sec[data-sec="st-people"] [data-stasgrm]');
+  ok(!!rmBtn, 'assigned person shows as a chip with a remove button');
+  click(rmBtn);
+  ok((stA().assignees || []).length === 0, 'the chip\'s x unassigns');
+  click(doc.querySelector('#panel [data-stf="up"]'));
+}
+
+// ---------------------------------------------------------------- pane collapse: sticky header, left toggle, [ ] hotkeys
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const css2 = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/\.p-top\s*\{[^}]*position:\s*sticky/.test(css2), 'panel header row is sticky');
+  ok(!/#panelPeek\s*\{[^}]*top:\s*50%/.test(css2), 'panel peek button no longer floats mid-screen');
+  const key = (k, target) => (target || doc.body).dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+  // right pane: ] toggles, peek button sits where the close button was
+  click(doc.querySelector('#rows .row.item .r-num'));
+  ok(!doc.querySelector('#panel').hidden, 'panel open before the hotkey');
+  key(']');
+  ok(doc.querySelector('#panel').hidden && !doc.querySelector('#panelPeek').hidden, '] collapses the right panel');
+  key(']');
+  ok(!doc.querySelector('#panel').hidden, '] again reopens it');
+  // left pane: a collapse button in the header corner, [ toggles
+  const lc = doc.querySelector('#leftCollapse');
+  ok(!!lc && !!lc.closest('.hdr-left'), 'left pane has a collapse button in its header');
+  ok(doc.querySelector('#leftPeek').hidden, 'left peek button is hidden while the pane is open');
+  click(lc);
+  ok(doc.body.classList.contains('left-collapsed'), 'clicking it collapses the left pane');
+  ok(parseInt(doc.documentElement.style.getPropertyValue('--left-w'), 10) === 0, 'collapsed left pane takes no width');
+  ok(/body\.left-collapsed[^{]*\.hdr-left[^{]*\{[^}]*display:\s*none/.test(css2) && /body\.left-collapsed[^{]*\.row-left[^{]*\{[^}]*display:\s*none/.test(css2),
+    'collapsed left pane hides its header and row cells entirely');
+  ok(!doc.querySelector('#leftPeek').hidden && doc.querySelector('#leftPeek').parentElement === doc.querySelector('#panelPeek').parentElement,
+    'only a floating button remains, anchored like the right peek button');
+  ok(/#leftPeek\s*\{[^}]*left:\s*12px/.test(css2) && /#leftPeek\s*\{[^}]*top:\s*12px/.test(css2), 'left peek sits in the top-left corner');
+  click(doc.querySelector('#leftPeek'));
+  ok(!doc.body.classList.contains('left-collapsed') && parseInt(doc.documentElement.style.getPropertyValue('--left-w'), 10) > 200,
+    'clicking again restores the left pane');
+  key('[');
+  ok(doc.body.classList.contains('left-collapsed'), '[ collapses the left pane');
+  key('[');
+  ok(!doc.body.classList.contains('left-collapsed'), '[ again restores it');
+  // never while typing
+  const rf = doc.querySelector('#rowFilter');
+  rf.focus();
+  key(']', rf);
+  key('[', rf);
+  ok(!doc.querySelector('#panel').hidden && !doc.body.classList.contains('left-collapsed'), 'brackets are ignored inside a text box');
+  rf.blur();
+  const ce = doc.querySelector('#panel .wz-ed');
+  if (ce) { ce.focus(); key(']', ce); ok(!doc.querySelector('#panel').hidden, 'brackets are ignored inside a rich editor'); ce.blur(); }
+}
+
+// ---------------------------------------------------------------- milestone styles (UI)
+{
+  const schedRow = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => {
+    const i = state().items.find(x => x.id === r.dataset.id);
+    return i && i.startDay != null && !i.milestone && !i.locked;
+  });
+  schedRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 240, clientY: 240 }));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Convert to milestone/.test(b.textContent)));
+  const msIt = state().items.find(i => i.id === schedRow.dataset.id);
+  const msRow = doc.querySelector('#rows .row.item[data-id="' + msIt.id + '"]');
+  ok(!!msRow && msIt.milestone && msIt.startDay != null, 'a scheduled milestone row is visible');
+  ok(!!doc.querySelector('#rows .bar.ms.ms-diamond[data-bar="' + msIt.id + '"]'), 'milestones default to the diamond');
+  msRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 240, clientY: 240 }));
+  const starBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Star/.test(b.textContent));
+  ok(!!starBtn, 'milestone context menu offers the Star style');
+  click(starBtn);
+  ok(state().items.find(i => i.id === msIt.id).msStyle === 'star', 'picking Star stores the style');
+  ok(!!doc.querySelector('#rows .bar.ms.ms-star[data-bar="' + msIt.id + '"]'), 'timeline marks the star milestone');
+  ok(!!doc.querySelector('#rows .row.item[data-id="' + msIt.id + '"] .r-dot.msdot.star'), 'row dot takes the star style');
+  click(msRow.querySelector('.r-num'));
+  const chip = doc.querySelector('#panel .p-mschip');
+  ok(!!chip && /Star/.test(chip.textContent), 'panel milestone chip names the style');
+  click(chip);
+  const circBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Circle/.test(b.textContent));
+  ok(!!circBtn, 'chip opens the style picker');
+  click(circBtn);
+  ok(state().items.find(i => i.id === msIt.id).msStyle === 'circle', 'picker sets Circle');
+  ok(!!doc.querySelector('#rows .bar.ms.ms-circle[data-bar="' + msIt.id + '"]'), 'timeline marks the circle milestone');
+  const png = window.RM_EXPORT.layout(state(), {});
+  const lr = png.rows.find(r => r.kind === 'item' && r.id === msIt.id);
+  ok(!!lr && lr.bar.msStyle === 'circle', 'PNG layout carries the milestone style');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === msIt.id).msStyle == null, 'undo restores the diamond');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === msIt.id).milestone === false, 'undo restores the feature');
+}
+
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
 window.RMExcel.exportWorkbook(state()).then((buf) => {
   const bytes = buf.size != null ? buf.size : buf.byteLength;
   ok(buf && bytes > 20000, 'xlsx export produced a workbook (' + bytes + ' bytes)');
+  // opening a file is not an edit: no version-history entry, nothing unsaved
+  const tpl = window.__headway.templateState();
+  const tplHist = (tpl.history || []).length;
+  return window.RMExcel.exportWorkbook(tpl).then((b2) => b2.arrayBuffer ? b2.arrayBuffer() : b2).then((ab) =>
+    window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Template.xlsx', true)
+  ).then(() => {
+    ok(state().meta.title === 'Template', 'the template workbook opened');
+    ok((state().history || []).length === tplHist,
+      'opening a file adds no version-history entry (' + (state().history || []).length + ' vs ' + tplHist + ')');
+    ok(!(state().history || []).some(h => h.label === 'open'), 'no "open" entry in the history');
+    ok(window.HeadwayApp.unsavedNow() === false, 'a freshly opened doc has nothing to save');
+  });
+}).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 }).catch((e) => {

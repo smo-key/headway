@@ -106,7 +106,8 @@
       var b = r.bar;
       if (b.ms) {
         var md = 13 * sy;
-        shapes.push({ type: 'diamond', x: X(b.x), y: Y(r.y + r.h / 2) - md / 2,
+        shapes.push({ type: b.msStyle === 'star' ? 'star' : b.msStyle === 'circle' ? 'circle' : 'diamond',
+          x: X(b.x), y: Y(r.y + r.h / 2) - md / 2,
           w: md, h: md, color: b.color.replace(/^#/, ''), done: !!b.done });
         var mw = PX.labelPlacement(r.feature, 0).wPx * sy;
         var mx = X(b.x) + md + 4 * sy, malign = 'left';
@@ -175,9 +176,11 @@
             x: sh.x, y: sh.y, w: sh.w, h: sh.h, flipV: !!sh.flipV,
             line: { color: sh.color, width: sh.width }
           });
-        } else if (sh.type === 'rect' || sh.type === 'bar' || sh.type === 'diamond') {
+        } else if (sh.type === 'rect' || sh.type === 'bar' || sh.type === 'diamond' || sh.type === 'star' || sh.type === 'circle') {
           sl.addShape(sh.type === 'bar' ? pptx.ShapeType.roundRect :
-            sh.type === 'diamond' ? pptx.ShapeType.diamond : pptx.ShapeType.rect, {
+            sh.type === 'diamond' ? pptx.ShapeType.diamond :
+            sh.type === 'star' ? pptx.ShapeType.star5 :
+            sh.type === 'circle' ? pptx.ShapeType.ellipse : pptx.ShapeType.rect, {
             x: sh.x, y: sh.y, w: Math.max(0.02, sh.w), h: Math.max(0.02, sh.h),
             fill: { color: sh.color, transparency: sh.done ? 55 : 0 },
             rectRadius: sh.type === 'bar' ? 0.03 : 0

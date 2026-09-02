@@ -58,6 +58,7 @@
   var repMode = 'workstream'; // reports grouping: workstream | phase | phase-ws
   var panelW = 372;          // right edit-panel width (resizable)
   var panelOpen = true;      // right panel is persistent on Planning; collapsible
+  var leftCollapsed = false; // frozen left pane folded to a slim strip ([ toggles)
   var leftWPlan = 538;       // frozen left-pane width, planning view
   var leftWScope = 538;      // …and scoping view (independently resizable)
   var groupWs = false;       // sub-group rows by workstream inside each phase
@@ -115,7 +116,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, leftCollapsed: leftCollapsed };
   }
   var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
   var sprLevel = 'feature'; // Sprinting view rows: 'feature' | 'story'
@@ -160,6 +161,7 @@
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
+    leftCollapsed = ui.leftCollapsed === true;
     prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
     sprLevel = ui.sprLevel === 'story' ? 'story' : 'feature';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
@@ -470,6 +472,20 @@
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
+  }
+  // opening a file is not an edit: the document arrives as-is — no version-
+  // history entry, nothing unsaved, and no undo back into the previous
+  // document (that would autosave the old doc over the new file)
+  function adoptState(next) {
+    state = next;
+    multiSel = null;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    docSaved = true;
+    sessionEdited = false;
+    validation = RM.validate(state);
+    saveLocal();
+    render();
   }
   // the first change someone saves (autosave included) must carry an author:
   // ask for their name once, and stamp this session's anonymous entries
@@ -1173,6 +1189,38 @@
     });
   }
   var scopeColW = {}; // field -> px override
+  function scopeColDef(key) {
+    return state.meta.scopeCols.filter(function (c) { return c.key === key; })[0] || null;
+  }
+  // does text column `key` show on rows of this kind ('feature' | 'story')?
+  function colShowsOn(key, kind) {
+    var c = scopeColDef(key);
+    return !c || RM.scopeColShows(c, kind);
+  }
+  // the panel's Fields: text columns in the Scoping tab's order, kept to
+  // the ones that show on this kind of row
+  function panelScopeCols(kind) {
+    return allScopeCols().map(function (c) { return scopeColDef(c[0]); })
+      .filter(function (c) { return c && RM.scopeColShows(c, kind); });
+  }
+  var SCOPE_SCOPE_LABELS = { both: 'Features and stories', feature: 'Features only', story: 'Stories only' };
+  // milestone marker shapes: lucide icon + panel glyph per style
+  var MS_STYLE_ICONS = { diamond: 'gem', star: 'star', circle: 'circle' };
+  var MS_STYLE_GLYPHS = { diamond: '◆', star: '★', circle: '●' };
+  function msStyleLabel(sname) { return sname.charAt(0).toUpperCase() + sname.slice(1); }
+  function setMsStyle(itemId, sname) {
+    commit('milestone style', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (!t) return;
+      if (sname === 'diamond') delete t.msStyle; else t.msStyle = sname;
+    });
+  }
+  function msStyleItems(itemId, it) {
+    return RM.MS_STYLES.map(function (sname) {
+      return { icon: MS_STYLE_ICONS[sname], label: msStyleLabel(sname) + ' marker',
+        checked: RM.msStyleOf(it) === sname, fn: function () { setMsStyle(itemId, sname); } };
+    });
+  }
 
   // panel sections: key -> collapsed override (persisted in UI_KEY);
   // unlisted keys fall back to the defaults below
@@ -1204,8 +1252,15 @@
     document.body.classList.toggle('present', presentMode);
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
+    var boardView = view === 'planning' || view === 'scoping' || view === 'budget';
+    document.body.classList.toggle('left-collapsed', leftCollapsed && boardView && !presentMode);
     document.documentElement.style.setProperty('--left-w',
-      (presentMode && (view === 'planning' || view === 'budget') ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+      (presentMode && (view === 'planning' || view === 'budget') ? 0
+        : leftCollapsed && boardView ? 0
+        : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+    // folded: the pane is gone; only the floating reopen button remains
+    var lp = $('#leftPeek');
+    if (lp) lp.hidden = !(leftCollapsed && boardView && !presentMode);
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     applyBuColWidths();
     renderHlCols();
@@ -1678,7 +1733,7 @@
   }
   function prCardFields() {
     var by = {};
-    scopeCols().forEach(function (c) { by[c[0]] = c; });
+    scopeCols().forEach(function (c) { if (colShowsOn(c[0], 'feature')) by[c[0]] = c; });
     return prioFields.map(function (k) { return by[k]; }).filter(Boolean);
   }
   function prCardHtml(it) {
@@ -1884,7 +1939,7 @@
       return;
     }
     if (e.target.closest('#prFieldsBtn')) {
-      openDropdown(e.target.closest('#prFieldsBtn'), scopeCols().map(function (c) {
+      openDropdown(e.target.closest('#prFieldsBtn'), scopeCols().filter(function (c) { return colShowsOn(c[0], 'feature'); }).map(function (c) {
         return { label: esc(c[1]), checked: prioFields.indexOf(c[0]) !== -1, fn: function () {
           var at = prioFields.indexOf(c[0]);
           if (at === -1) prioFields.push(c[0]); else prioFields.splice(at, 1);
@@ -2080,7 +2135,7 @@
       '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<span class="r-num">#' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
       '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       sprTag(it, num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic — click to change">' +
@@ -2699,7 +2754,7 @@
       var msTip = it.feature + '  ·  ' + RM.fmtShort(RM.dayToDate(meta, it.startDay)) + '  ·  milestone' +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       laneInner =
-        '<div class="bar ms' + (isSel(it.id) && !selStory ? ' selected' : '') +
+        '<div class="bar ms ms-' + RM.msStyleOf(it) + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -2760,7 +2815,7 @@
             : RM.fmtShort(RM.dayToDate(cMeta, cIt.startDay)) + ' → ' +
               RM.fmtShort(RM.spanEndDate(cMeta, cIt.startDay, RM.itemSpan(cIt))));
           laneInner = (cIt.milestone
-            ? '<div class="bar ms cmp" style="left:' + (gs * dayPx()) + 'px;--bar-c:' + gCol +
+            ? '<div class="bar ms cmp ms-' + RM.msStyleOf(cIt) + '" style="left:' + (gs * dayPx()) + 'px;--bar-c:' + gCol +
               '" title="' + esc(gTip) + '"><span class="ms-diamond"></span></div>'
             : '<div class="bar cmp" style="left:' + (gs * dayPx()) + 'px;width:' +
               Math.max(6, (ge - gs + 1) * dayPx()) + 'px;--bar-c:' + gCol +
@@ -2846,6 +2901,11 @@
             fixedContent[c[0]] + '</div>');
           return;
         }
+        if (!colShowsOn(c[0], 'feature')) {
+          cells.push('<div class="sc-cell sc-na" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) +
+            'px" title="Stories only — not set per feature"></div>');
+          return;
+        }
         // every scope column holds rich text — edit it in place as such
         var sv = RM.scopeValue(it, c[0]);
         cells.push('<div class="sc-cell" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
@@ -2870,7 +2930,7 @@
         : '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
           (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>') +
       '<span class="r-num">' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
@@ -2906,7 +2966,7 @@
         html.push(
           '<div class="row story' + (selStory === st.id ? ' selected' : '') +
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
-          '<div class="row-left"><span class="st-pad"></span>' +
+          '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
           (view === 'scoping'
             // scoping: the story title edits in place like the feature titles
@@ -2921,6 +2981,10 @@
                 var key = c[0];
                 var w = scopeColWidth(c);
                 if (!isFixedColKey(key)) {
+                  if (!colShowsOn(key, 'story')) {
+                    return '<div class="sc-cell sc-na" data-col="' + key + '" style="width:' + w +
+                      'px" title="Features only — not set per story"></div>';
+                  }
                   var sval = key === 'description' ? st.description : ((st.custom || {})[key] || '');
                   return '<div class="sc-cell" data-col="' + key + '" style="width:' + w + 'px">' +
                     '<div class="sc-edit sc-rich" contenteditable="true" data-stscope="' + key + '">' + richDisplay(sval) + '</div></div>';
@@ -3266,7 +3330,7 @@
       panel.hidden = false;
       panel.innerHTML =
         '<div id="panelRz"></div>' +
-        '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+        '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
         '<div class="p-empty">No item selected<span>Click a row on the timeline to edit it here.</span></div>';
       if (window.lucide) lucide.createIcons();
       return;
@@ -3409,7 +3473,7 @@
       fields: 'text', details: 'info', schedule: 'calendar-range',
       people: 'users', deps: 'git-merge', stories: 'list-todo',
       timeline: 'chart-gantt', checks: 'shield-check',
-      meta: 'tags', danger: 'trash-2'
+      meta: 'tags', danger: 'trash-2', integrations: 'plug'
     };
     function sec(key, label, summary, body) {
       return '<div class="p-sec c' + (secOpen(key) ? ' open' : '') + '" data-sec="' + key + '">' +
@@ -3422,7 +3486,7 @@
 
     // every scope column (Description included) edits as rich text in one
     // always-available Fields section, in the document's column order
-    var fieldEds = state.meta.scopeCols.map(function (c) {
+    var fieldEds = panelScopeCols('feature').map(function (c) {
       return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
         wysHtml('col:' + c.key, RM.scopeValue(it, c.key), '') + '</div>';
     }).join('') || '<div class="p-none">No columns — add one in the Scoping view.</div>';
@@ -3431,8 +3495,9 @@
       '<div id="panelRz"></div>' +
       '<div class="p-top"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
       '" title="Item # — an invalid or taken number picks the next available one"></span>' +
-      (it.milestone ? '<span class="p-mschip" title="Milestone — fixed date">◆ Milestone</span>' : '') +
-      '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+      (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone — fixed date. Click to pick its marker">' +
+        MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
+      '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
       sec('fields', 'Fields', '', fieldEds) +
@@ -3447,10 +3512,7 @@
               '#' + RM.colorForWs(state, it.workstream), 'Workstream') + '</div>'
           : '<div></div>') +
         '</div>' +
-        '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>' +
-        '<div style="margin-top:8px"><label class="p-lab">Jira key</label>' +
-        '<input data-f="jiraKey" placeholder="e.g. HW-12" value="' + esc(it.jiraKey || '') +
-        '" style="width:100%" title="Jira issue key — parents story rows and marks this row as an update in the Jira CSV export"></div>') +
+        '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>') +
 
       sec('schedule', it.milestone || !RM.sizingEnabled(state) ? 'Schedule' : 'Size &amp; schedule', '',
         (it.milestone || !RM.sizingEnabled(state) ? '' :
@@ -3501,6 +3563,11 @@
           }).join('') + '</div>')
         : '') +
 
+      sec('integrations', 'Integrations', '',
+        '<label class="p-lab">Jira key</label>' +
+        '<input data-f="jiraKey" placeholder="e.g. HW-12" value="' + esc(it.jiraKey || '') +
+        '" style="width:100%" title="Jira issue key — parents story rows and marks this row as an update in the Jira CSV export">') +
+
       '<datalist id="wsList"><option>Product</option><option>Data</option><option>Process</option><option>Product / Process</option><option>All</option></datalist>';
     if (window.lucide) lucide.createIcons();
     var pn = $('.p-name', panel);
@@ -3510,7 +3577,7 @@
   // story detail panel: same scope columns as items; workstream/epic roll up
   function renderStoryPanel(panel, it, st) {
     var epIco = RM.iconForEpic(state, it.epic);
-    var fieldEds = state.meta.scopeCols.map(function (c) {
+    var fieldEds = panelScopeCols('story').map(function (c) {
       var v = c.key === 'description' ? st.description : ((st.custom || {})[c.key] || '');
       return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
         wysHtml('stcol:' + c.key, v, '') + '</div>';
@@ -3535,12 +3602,9 @@
       '<div class="p-top">' +
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
-      '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+      '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
-      '<label class="p-check fixed" style="margin:6px 0 2px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
-      '<div style="margin:6px 0 8px"><label class="p-lab">Jira key</label>' +
-      '<input data-stf="jiraKey" placeholder="e.g. HW-13" value="' + esc(st.jiraKey || '') +
-      '" style="width:100%" title="Jira issue key — marks this story as an update in the Jira CSV export"></div>' +
+      '<label class="p-check fixed" style="margin:6px 0 8px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
 
       '<div class="p-sec c open"><button class="p-sechead" tabindex="-1">' +
       '<i data-lucide="chevron-right"></i><span class="p-seclab">Rolls up to</span></button>' +
@@ -3553,7 +3617,24 @@
 
       sec2('fields', 'Fields', fieldEds) +
       sec2('ac', 'Acceptance criteria', wysHtml('stac', st.ac, 'When is it done?')) +
-      sec2('schedule', 'Timeline', timeline);
+      sec2('people', 'People',
+        '<label class="p-lab">Assignees</label>' +
+        '<div class="chips">' +
+        (st.assignees || []).map(function (aid) {
+          var mm = memberById(aid);
+          if (!mm) return '';
+          return '<span class="dep-chip asg-chip">' + avatarHtml(mm, 'sm') + ' ' + esc(mLabel(mm)) +
+            '<button class="x" data-stasgrm="' + aid + '"><i data-lucide="x"></i></button></span>';
+        }).join('') +
+        '</div>' +
+        (state.team.length
+          ? ddButton('stassign', '+ Assign\u2026', null, 'Assign people from the roster')
+          : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
+      sec2('schedule', 'Timeline', timeline) +
+      sec2('integrations', 'Integrations',
+        '<label class="p-lab">Jira key</label>' +
+        '<input data-stf="jiraKey" placeholder="e.g. HW-13" value="' + esc(st.jiraKey || '') +
+        '" style="width:100%" title="Jira issue key — marks this story as an update in the Jira CSV export">');
     if (window.lucide) lucide.createIcons();
     var pn = $('.p-name', panel);
     if (pn) { pn.style.height = 'auto'; pn.style.height = pn.scrollHeight + 'px'; }
@@ -3876,6 +3957,18 @@
     saveLocal();
     renderPanel();
   });
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    saveLocal();
+    renderPanel();
+  }
+  function toggleLeftPane() {
+    leftCollapsed = !leftCollapsed;
+    saveLocal();
+    render();
+  }
+  $('#leftCollapse').addEventListener('click', toggleLeftPane);
+  $('#leftPeek').addEventListener('click', toggleLeftPane);
 
   $('#panel').addEventListener('click', function (e) {
     // collapse works from every panel state (empty state included)
@@ -3888,6 +3981,8 @@
     }
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    var msChip = e.target.closest('[data-act="msstyle"]');
+    if (msChip) { openDropdown(msChip, msStyleItems(it.id, it)); return; }
     var secBtn = e.target.closest('[data-sectoggle]');
     if (secBtn) {
       var sk = secBtn.dataset.sectoggle;
@@ -3965,6 +4060,22 @@
         openDropdown(dd, wsMenuItems(it.id, function () { return $('#panel [data-dd="ws"] .dd-label'); }));
         return;
       }
+      if (which === 'stassign' && selStory) {
+        var stAsgId = selStory;
+        openDropdown(dd, state.team.map(function (mm) {
+          var onS = ((storyById(it, stAsgId) || {}).assignees || []).indexOf(mm.id) !== -1;
+          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onS, fn: function () {
+            commit('story assignees', function (s) {
+              var st2 = storyById(RM.itemById(s, it.id) || {}, stAsgId);
+              if (!st2) return;
+              st2.assignees = st2.assignees || [];
+              var atS = st2.assignees.indexOf(mm.id);
+              if (atS === -1) st2.assignees.push(mm.id); else st2.assignees.splice(atS, 1);
+            });
+          } };
+        }));
+        return;
+      }
       if (which === 'assign') {
         var aItems = state.team.map(function (mm) {
           var onA = (it.assignees || []).indexOf(mm.id) !== -1;
@@ -3993,6 +4104,15 @@
         openDropdown(dd, tItems);
         return;
       }
+    }
+    var stAsgRm = e.target.closest('[data-stasgrm]');
+    if (stAsgRm && selStory) {
+      var rmSid = selStory, rmPid = stAsgRm.dataset.stasgrm;
+      commit('story assignees', function (s) {
+        var st2 = storyById(RM.itemById(s, it.id) || {}, rmSid);
+        if (st2) st2.assignees = (st2.assignees || []).filter(function (x) { return x !== rmPid; });
+      });
+      return;
     }
     var asgrm = e.target.closest('[data-asgrm]');
     if (asgrm) {
@@ -4284,6 +4404,26 @@
         if (sug) { sug.hidden = true; }
         e.target.value = '';
       }
+    }
+  });
+
+  // Enter on any single-line field in the panel or the left panes (the
+  // panel title included) leaves the field and saves it. Blur commits in
+  // the browser; the change is re-fired only when blur left it uncommitted
+  // (the element is still attached with a dirty value).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    var t = e.target;
+    if (!t || !t.closest || !t.closest('#panel, #rows, #resPanel')) return;
+    var isArea = t.tagName === 'TEXTAREA';
+    if (isArea ? (!t.classList.contains('p-name') || e.shiftKey) : t.tagName !== 'INPUT') return;
+    if (!isArea && ['checkbox', 'radio', 'range', 'file', 'color'].indexOf(t.type) !== -1) return;
+    if (t.dataset.act === 'st-add' || t.dataset.f === 'depsearch') return;
+    e.preventDefault();
+    var wasSel = t.value !== t.defaultValue;
+    t.blur();
+    if (wasSel && t.isConnected && t.value !== t.defaultValue) {
+      t.dispatchEvent(new Event('change', { bubbles: true }));
     }
   });
 
@@ -4882,11 +5022,12 @@
         } },
         { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
           label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
-          fn: function () { toggleMilestone(itemId); } },
+          fn: function () { toggleMilestone(itemId); } }
+      ].concat(it.milestone ? msStyleItems(itemId, it) : []).concat([
         { sep: true },
         { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(itemId); } },
         { icon: 'trash-2', label: 'Delete #' + it.num + '…', fn: function () { deleteItemConfirm(itemId); } }
-      ].filter(Boolean);
+      ]).filter(Boolean);
     } else return;
     openContextMenu(cx, cy, items);
   });
@@ -4938,10 +5079,11 @@
       { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
       { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
         label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
-        fn: function () { toggleMilestone(it.id); } },
+        fn: function () { toggleMilestone(it.id); } }
+    ].concat(it.milestone ? msStyleItems(it.id, it) : []).concat([
       { sep: true },
       { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(it.id); } }
-    ]);
+    ]));
   });
 
   // quick app menu: theme switch lives here
@@ -5254,6 +5396,8 @@
       placeGhost.className = 'place-ghost';
     }
     placeGhost.classList.toggle('ms', ms);
+    RM.MS_STYLES.forEach(function (sn) { placeGhost.classList.remove(sn); });
+    if (ms) placeGhost.classList.add(RM.msStyleOf(itH));
     if (placeGhost.parentNode !== lane) lane.appendChild(placeGhost);
     placeGhost.style.left = (day * dayPx()) + 'px';
     placeGhost.style.width = Math.max(8, dur * dayPx()) + 'px';
@@ -5780,6 +5924,14 @@
     if (idx > 0) items2.push({ icon: 'arrow-left', label: 'Move left', fn: function () { shiftCol(-1); } });
     if (idx < ordKeys.length - 1) items2.push({ icon: 'arrow-right', label: 'Move right', fn: function () { shiftCol(1); } });
     items2.push({ icon: 'pencil', label: 'Rename…', fn: function () { scopeColModal(key); } });
+    items2.push({ sep: true });
+    var curScope = (scopeColDef(key) || {}).scope || 'both';
+    ['both', 'feature', 'story'].forEach(function (sc) {
+      items2.push({ icon: sc === 'both' ? 'layers' : sc === 'feature' ? 'square' : 'list-todo',
+        label: SCOPE_SCOPE_LABELS[sc], checked: curScope === sc, fn: function () {
+          commit('column scope', function (s) { RM.setScopeColScope(s, key, sc); });
+        } });
+    });
     items2.push({ sep: true });
     items2.push({ icon: 'trash-2', label: 'Remove column', fn: function () {
       commit('remove column', function (s) { RM.removeScopeCol(s, key); });
@@ -8092,13 +8244,18 @@
             (fixed
               ? '<span class="su-name">' + esc(c[1]) + '</span><span class="band-bucket-tag">built-in</span>'
               : '<input class="su-name su-name-in" data-sucolname="' + esc(c[0]) + '" value="' + esc(c[1]) + '" title="Rename column">') +
+            (fixed ? '' : '<select data-sucolscope="' + esc(c[0]) + '" title="Which rows show this column">' +
+              ['both', 'feature', 'story'].map(function (sc) {
+                return '<option value="' + sc + '"' + (((scopeColDef(c[0]) || {}).scope || 'both') === sc ? ' selected' : '') + '>' +
+                  SCOPE_SCOPE_LABELS[sc] + '</option>';
+              }).join('') + '</select>') +
             (fixed ? '' : '<button data-sucolrm="' + esc(c[0]) + '" class="danger" title="Remove column"><i data-lucide="x"></i></button>') +
             '</div>';
         }).join('');
         return '<section class="su-card"><h2>Scoping columns</h2>' +
           '<div class="su-rows" data-sulist="scol">' + colRows + '</div>' +
           '<div class="p-row" style="margin-top:8px"><input id="suColAdd" placeholder="New column, e.g. Owner"><button id="suColAddBtn" class="fixed">Add</button></div>' +
-          '<div class="m-hint">Drag to reorder — the Scoping grid and the panel follow this order. Text columns rename and remove here; built-ins carry fixed data.' +
+          '<div class="m-hint">Drag to reorder — the Scoping grid and the panel follow this order. Text columns rename, pick which rows show them (features, stories, or both) and remove here; built-ins carry fixed data.' +
           (offNotes.length ? '<br>Hidden right now: ' + esc(offNotes.join(', ')) + '.' : '') + '</div>' +
           '</section>';
       })(),
@@ -8234,6 +8391,11 @@
       commit('work days', function (s2) {
         RM.changeWorkWeek(s2, { workDays: list });
       });
+      return;
+    }
+    if (t.dataset.sucolscope != null) {
+      var scKey = t.dataset.sucolscope, scVal = t.value;
+      commit('column scope', function (s2) { RM.setScopeColScope(s2, scKey, scVal); });
       return;
     }
     if (t.dataset.sucolname != null) {
@@ -9485,8 +9647,7 @@
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
-      replaceState('open', r.state);
-      docSaved = true; // fresh from disk — matches its file
+      adoptState(r.state); // fresh from disk — matches its file
       updateSaveBtn();
       selectedId = null;
       enterEditor(); // opening a file always lands in the editor
@@ -9555,6 +9716,13 @@
     }
     if (inField) return;
     var mod = e.metaKey || e.ctrlKey;
+    // [ and ] fold the left pane / the right panel (never while typing — above)
+    if (!mod && !e.altKey && e.key === ']' && (view === 'planning' || view === 'scoping')) {
+      e.preventDefault(); togglePanel(); return;
+    }
+    if (!mod && !e.altKey && e.key === '[' && (view === 'planning' || view === 'scoping' || view === 'budget')) {
+      e.preventDefault(); toggleLeftPane(); return;
+    }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) redo(); else undo();
