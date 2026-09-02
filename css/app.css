@@ -1785,13 +1785,13 @@ body.chrome-win #topbar { padding-right: 0; }
 #filterCell { display: flex; align-items: center; }
 /* icon + ⌘F anchor to this wrapper, so the detail button can sit before it */
 .filter-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
-#rowFilter {
+#rowFilter, #prFilter {
   width: 100%; height: 30px;
   border: 1px solid var(--line-2); border-radius: 6px;
   padding: 5px 8px 5px 28px; font: inherit; font-size: 12px;
   background: var(--surface); color: var(--ink);
 }
-#rowFilter:focus { outline: none; border-color: var(--blue); }
+#rowFilter:focus, #prFilter:focus { outline: none; border-color: var(--blue); }
 /* lucide swaps the <i> for an <svg> carrying the same class, so the size
    must sit on .filter-ico itself */
 .filter-ico {
@@ -1803,14 +1803,15 @@ body.chrome-win #topbar { padding-right: 0; }
 .filter-ico svg { width: 13px; height: 13px; }
 /* ⌘F chip on the input's right edge — gone on focus or once text is typed,
    so the native clear button gets the far-right spot to itself */
-#rowFilter:placeholder-shown:not(:focus) { padding-right: 40px; }
+#rowFilter:placeholder-shown:not(:focus), #prFilter:placeholder-shown:not(:focus) { padding-right: 40px; }
 .filter-kbd {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   pointer-events: none;
 }
-#rowFilter:focus ~ .filter-kbd,
-#rowFilter:not(:placeholder-shown) ~ .filter-kbd { display: none; }
-#rowFilter::-webkit-search-cancel-button { margin-left: 4px; }
+#rowFilter:focus ~ .filter-kbd, #prFilter:focus ~ .filter-kbd,
+#rowFilter:not(:placeholder-shown) ~ .filter-kbd,
+#prFilter:not(:placeholder-shown) ~ .filter-kbd { display: none; }
+#rowFilter::-webkit-search-cancel-button, #prFilter::-webkit-search-cancel-button { margin-left: 4px; }
 /* scoping hides the phase lane but keeps the line so the filter stays put;
    the whole header block paints opaque so scrolled rows never show through */
 body[data-view="scoping"] #hdr { background: var(--paper); }
@@ -2252,7 +2253,7 @@ body[data-view="prio"] #prioView { display: block; flex: 1; overflow: auto; back
 body[data-view="prio"] #board,
 body[data-view="prio"] #leftRzLine,
 body[data-view="prio"] #resPanel,
-body[data-view="prio"] .filter-kbd,
+body[data-view="prio"] #filterCell .filter-kbd,
 body[data-view="prio"] #rowFilter { display: none; }
 .sp-page { padding: 18px 22px 40px; max-width: 1500px; margin: 0 auto; }
 .sp-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
@@ -2337,57 +2338,88 @@ body[data-view="prio"] #rowFilter { display: none; }
 .sp-asgbtn svg { width: 14px; height: 14px; color: var(--ink-3); }
 .sp-c-dur { font-family: var(--mono); font-size: 11px; color: var(--ink-2); width: 56px; }
 
-/* ---- prioritizing board: vision line, theme filter, RICE cards */
-.pr-vision {
-  width: 100%; margin-bottom: 12px;
-  font-size: 15px; font-weight: 600; color: var(--ink);
-  background: transparent; border: 1px solid transparent; border-radius: 8px;
-  padding: 8px 10px;
+/* ---- prioritizing board: one continuous table — phase headers across the
+   top, swimlane labels down the left column, columns as full-height bands.
+   One spacing rhythm: 20px page gutter, 14px bar-to-board, 12px gutters,
+   10px inside columns, 12px inside cards. */
+.pr-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.pr-bar .pr-filter { flex: 0 1 240px; }
+.pr-bar .dd-btn { width: auto; flex: none; max-width: 190px; }
+.pr-settings { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.pr-lab { font-size: 11px; font-weight: 700; color: var(--ink-3); margin-left: 6px; }
+.pr-table {
+  display: grid; gap: 12px; align-items: stretch;
+  overflow-x: auto; padding-bottom: 8px;
 }
-.pr-vision:hover { border-color: var(--line-2); background: var(--surface); }
-.pr-vision:focus { border-color: var(--blue); background: var(--surface); }
-.pr-themes { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
-.pr-themes .pr-tag { cursor: pointer; }
-.pr-tag {
-  display: inline-flex; align-items: center; gap: 4px;
-  border: 1px solid var(--line-2); border-radius: 999px;
-  padding: 2px 9px; font-size: 11px; font-weight: 600;
-  background: var(--surface); color: var(--ink-2);
+.pr-phhd, .pr-lanecell {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 700; color: var(--ink);
 }
-.pr-tag.on { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
-.pr-tag .pr-tagx { border: 0; background: transparent; padding: 0 0 0 2px; color: var(--ink-3); cursor: pointer; }
-.pr-tag .pr-tagx:hover { color: var(--err); box-shadow: none; }
-.pr-card { cursor: grab; }
-.pr-card input, .pr-card textarea {
-  width: 100%; border-color: transparent; background: transparent; padding: 3px 5px;
+.pr-phhd { padding: 2px 4px 0; }
+.pr-lanecell { align-items: flex-start; padding: 14px 4px 0 0; }
+.pr-lanecell svg { width: 15px; height: 15px; color: var(--ink-2); flex: none; margin-top: 3px; }
+.pr-lanecell .dd-dot { margin-top: 6px; }
+.pr-lanename { min-width: 0; overflow-wrap: anywhere; }
+.pr-lanect {
+  font-size: 11px; font-weight: 600; color: var(--ink-3);
+  background: var(--paper-2); border: 1px solid var(--line-2);
+  border-radius: 999px; padding: 1px 8px; flex: none;
 }
-.pr-card input:hover, .pr-card textarea:hover { border-color: var(--line-2); background: var(--paper-2); }
-.pr-card input:focus, .pr-card textarea:focus { border-color: var(--blue); background: var(--paper-2); }
+#prioView .sp-col { display: flex; flex-direction: column; padding: 10px; }
+#prioView .sp-colbody { flex: 0 0 auto; } /* Add stays under the cards; the column surface stretches on */
+.pr-card {
+  cursor: grab;
+  border-radius: 10px;
+  padding: 12px;
+  /* each card wears its workstream's color as a quiet surface tint */
+  border-color: color-mix(in srgb, var(--line-2) 72%, var(--ws-c, var(--line-2)));
+  background: color-mix(in srgb, var(--surface) 94%, var(--ws-c, var(--surface)));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .07), 0 3px 10px rgba(0, 0, 0, .05);
+}
+.pr-card:hover {
+  border-color: color-mix(in srgb, var(--line-3) 60%, var(--ws-c, var(--line-3)));
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .08), 0 6px 18px rgba(0, 0, 0, .07);
+}
+.pr-card input, .pr-card [contenteditable] {
+  border-color: transparent; background: transparent;
+  padding: 3px 5px; margin: 0 -5px; width: calc(100% + 10px);
+}
+.pr-card input:hover, .pr-card [contenteditable]:hover { border-color: var(--line-2); background: var(--paper-2); }
+.pr-card input:focus, .pr-card [contenteditable]:focus { border-color: var(--blue); background: var(--paper-2); }
 .pr-title { font-size: 12.5px; font-weight: 600; color: var(--ink); }
-.pr-prob, .pr-meas { font-size: 11.5px; color: var(--ink-2); resize: none; line-height: 1.4; }
-.pr-score {
-  margin-left: auto; font-family: var(--mono); font-size: 11px; font-weight: 700;
-  color: var(--blue); background: var(--blue-soft); border-radius: 5px; padding: 1px 7px;
+.pr-rich {
+  font-size: 11.5px; color: var(--ink-2); line-height: 1.45;
+  border: 1px solid transparent; border-radius: 6px; min-height: 22px;
+  margin-top: 4px;
 }
-.pr-score.none { color: var(--ink-3); background: var(--paper-2); }
-.pr-rice { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
-.pr-rice label {
-  display: flex; align-items: center; gap: 2px; flex: 1;
-  font-size: 10px; font-weight: 700; color: var(--ink-3);
+.pr-rich:empty::before { content: attr(data-ph); color: var(--ink-3); opacity: .65; font-style: italic; pointer-events: none; }
+.pr-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
+.pr-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 2px 9px; font-size: 10.5px; font-weight: 600;
+  background: var(--paper-2); color: var(--ink-2); cursor: pointer;
+  max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-.pr-rice input { width: 100%; font-size: 11px; font-family: var(--mono); padding: 2px 4px; }
-.pr-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 7px; }
-.pr-tagadd {
-  border: 1px dashed var(--line-2); border-radius: 999px; background: transparent;
-  font-size: 10.5px; padding: 2px 8px; width: 76px; color: var(--ink-2);
-}
-.pr-tagadd:focus { border-color: var(--blue); border-style: solid; }
+.pr-chip:hover { border-color: var(--line-3); background: var(--surface); }
+.pr-chip svg { width: 11px; height: 11px; flex: none; }
 .pr-add {
-  width: 100%; margin-top: 8px; padding: 5px;
+  width: 100%; margin-top: 10px; margin-bottom: auto; padding: 5px;
   border: 1px dashed var(--line-2); border-radius: 8px; background: transparent;
   font-size: 11.5px; color: var(--ink-3);
 }
 .pr-add:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); box-shadow: none; }
+/* RICE dropdown editor — popover from any priority chip, inline in the panel */
+.rice-pop {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px;
+  padding: 12px; min-width: 250px;
+}
+.rice-pop.rice-panel { padding: 4px 0 0; min-width: 0; }
+.rice-lab {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 10px; font-weight: 700; color: var(--ink-3);
+}
+.rice-lab select { width: 100%; font-size: 11.5px; }
 
 body[data-view="reports"] #reportsView { display: block; flex: 1; overflow: auto; }
 body[data-view="reports"] #board,

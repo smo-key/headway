@@ -1,6 +1,6 @@
 [package]
 name = "headway"
-version = "1.0.6"
+version = "1.0.8"
 description = "Standalone roadmap planning tool"
 edition = "2021"
 

@@ -398,6 +398,19 @@
       m.fn();
     }
 
+    // NativeIcon names that AppKit exposes as *Template images (see muda's
+    // macOS NativeIcon → NSImageName table); everything else is a coloured
+    // pictogram (Folder, Info, MultipleDocuments, User, Trash…).
+    var TEMPLATE_ICONS = {};
+    ['Add', 'Remove', 'Share', 'Refresh', 'RefreshFreestanding', 'StopProgress',
+      'StopProgressFreestanding', 'FollowLinkFreestanding', 'RevealFreestanding',
+      'InvalidDataFreestanding', 'GoLeft', 'GoRight', 'LeftFacingTriangle',
+      'RightFacingTriangle', 'Home', 'Bookmarks', 'Bluetooth', 'ColumnView',
+      'FlowView', 'IconView', 'ListView', 'EnterFullScreen', 'ExitFullScreen',
+      'IChatTheater', 'LockLocked', 'LockUnlocked', 'MenuMixedState',
+      'MenuOnState', 'Path', 'QuickLook', 'Slideshow', 'SmartBadge'
+    ].forEach(function (n) { TEMPLATE_ICONS[n] = true; });
+
     function toNative(items) {
       return Promise.all(items.map(function (m) {
         if (m.sep) return menu.PredefinedMenuItem.new({ item: 'Separator' });
@@ -410,8 +423,10 @@
         if ('checked' in m) {
           return menu.CheckMenuItem.new(Object.assign({ checked: !!m.checked }, opts));
         }
-        // macOS template icons where the app names one; plain item otherwise
-        if (m.nativeIcon && menu.IconMenuItem && menu.NativeIcon && menu.NativeIcon[m.nativeIcon]) {
+        // macOS template icons where the app names one; plain item otherwise.
+        // Only template images (monochrome, tinted by the menu) are allowed —
+        // the other NativeIcon names are full-colour pictograms that clash.
+        if (m.nativeIcon && TEMPLATE_ICONS[m.nativeIcon] && menu.IconMenuItem && menu.NativeIcon && menu.NativeIcon[m.nativeIcon]) {
           return menu.IconMenuItem.new(Object.assign({ icon: menu.NativeIcon[m.nativeIcon] }, opts))
             .catch(function () { return menu.MenuItem.new(opts); });
         }

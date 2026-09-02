@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -162,6 +162,8 @@ click(doc.querySelector('[data-menu="file"]'));
 ok(!doc.querySelector('#popover').hidden && doc.querySelectorAll('#popover .menu-list button').length >= 5, 'File menu opens with items');
 ok(Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Download template/.test(b.textContent)),
   'File menu offers Download template');
+ok(!Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Jira/.test(b.textContent)),
+  'File menu has no separate Jira item — it lives in the Export dialog');
 {
   const tpl = window.__headway.templateState();
   ok(tpl.items.length === 1 && /Example/.test(tpl.items[0].feature) &&
@@ -187,6 +189,14 @@ ok(doc.querySelector('#panel .p-name').value.length > 0, 'panel shows the featur
   ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'row title rename commits');
 }
 ok(doc.querySelector('#panel .wz-ed[data-f="col:description"]') !== null, 'panel has a description field');
+{
+  const jk = doc.querySelector('#panel input[data-f="jiraKey"]');
+  ok(!!jk, 'panel has a Jira key input');
+  jk.value = ' hw-7 ';
+  jk.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().items.find(i => i.id === itId).jiraKey === 'HW-7', 'Jira key commits normalized');
+  ok(doc.querySelector('#panel input[data-f="jiraKey"]').value === 'HW-7', 'panel re-renders the normalized key');
+}
 ok(doc.querySelector('#panel .p-sec[data-sec="fields"]').classList.contains('open'), 'Fields section is open by default');
 ok(doc.querySelector('#panel .p-actions') === null, 'footer Duplicate/Delete buttons are gone');
 ok(doc.querySelector('#panel .p-more') === null, 'the … actions button is gone from the panel');
@@ -765,6 +775,13 @@ ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands render
   const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent);
   ok(labels.some(l => /Edit epic/.test(l)) && labels.some(l => /Delete epic/.test(l)),
     'right-clicking an epic band offers edit/delete');
+  const epName = eb.dataset.epic;
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Edit epic/.test(b.textContent)));
+  const epJira = doc.querySelector('#modalHost #epJira');
+  ok(!!epJira, 'Edit epic dialog has a Jira key field');
+  epJira.value = 'hw-1';
+  click(doc.querySelector('#modalHost #epSave'));
+  ok(state().epicJira[epName] === 'HW-1', 'epic Jira key saves to state.epicJira');
   doc.querySelector('#popover').hidden = true;
 }
 window.eval("document.querySelector('[data-menu=\"view\"]').click()");
@@ -1277,6 +1294,13 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(stBtn);
   ok(!!doc.querySelector('#panel .p-crumb'), 'story panel opens with a parent breadcrumb');
   ok(!!doc.querySelector('#panel .p-rollup'), 'story panel shows rolled-up workstream/epic');
+  {
+    const sjk = doc.querySelector('#panel input[data-stf="jiraKey"]');
+    ok(!!sjk, 'story panel has a Jira key input');
+    sjk.value = 'hw-8';
+    sjk.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().items.find(i => i.id === withStories.id).stories[0].jiraKey === 'HW-8', 'story Jira key commits');
+  }
   const sd = doc.querySelector('#panel .wz-ed[data-f="stcol:description"]');
   const sa = doc.querySelector('#panel .wz-ed[data-f="stac"]');
   ok(!!sd && !!sa && sd.getAttribute('contenteditable') === 'true' && sa.getAttribute('contenteditable') === 'true',
@@ -1637,55 +1661,122 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(doc.body.dataset.view === 'prio', 'view switches to Prioritizing');
   ok(doc.querySelectorAll('#prioView .sp-col').length === state().phases.length,
     'kanban columns are the phases');
-  const vis = doc.querySelector('#prVision');
-  ok(!!vis && /Vision/.test(vis.placeholder), 'editable vision line sits on top');
-  vis.value = 'Own the roadmap conversation';
-  vis.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.vision === 'Own the roadmap conversation', 'vision edit commits to the doc');
+  ok(!doc.querySelector('#prVision'), 'the vision line is gone');
+  ok(doc.querySelectorAll('#prioView .pr-phhd').length === state().phases.length,
+    'the header row names every phase');
+  // cards are compact by default: title + chips, no # label, no extra fields
   const card = doc.querySelector('#prioView .pr-card');
   ok(!!card, 'cards render on the board');
-  ok(/what change are we trying to create/.test(card.querySelector('[data-prf="problem"]').placeholder),
-    'problem field prompts for the change, not the feature');
-  ok(/the metric that proves it worked/.test(card.querySelector('[data-prf="measure"]').placeholder),
-    'measure field prompts for the proving metric');
-  // RICE: filling all four inputs scores the card and floats it up its column
-  const cid = card.dataset.prcard;
-  const setR = (k, v) => {
-    const inp = doc.querySelector('#prioView [data-prcard="' + cid + '"] [data-prr="' + k + '"]');
-    inp.value = v;
-    inp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(!card.querySelector('.pr-rich') && !card.querySelector('.r-num'),
+    'cards are compact by default — no fields, no # label');
+  ok(!!card.querySelector('[data-pract="size"]') && !!card.querySelector('[data-pract="epic"]') &&
+    !!card.querySelector('[data-pract="ws"]'),
+    'cards carry size, epic and workstream chips');
+  ok((card.getAttribute('style') || '').indexOf('--ws-c') !== -1, 'cards are tinted by workstream');
+  // filter input matches the header filter: search icon + ⌘F chip
+  const pf = doc.querySelector('#prFilter');
+  ok(!!pf && !!pf.closest('.filter-wrap') &&
+    !!pf.closest('.filter-wrap').querySelector('.filter-kbd'),
+    'the card filter carries the search icon and ⌘F chip');
+  // right-clicking a card offers move / epic / workstream / delete
+  card.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
+  const ctxLabels = [...doc.querySelectorAll('#popover .menu-list button')].map(b => b.textContent);
+  ok(ctxLabels.some(l => /Move to phase/.test(l)) && ctxLabels.some(l => /Set workstream/.test(l)) &&
+    ctxLabels.some(l => /Set epic/.test(l)) && ctxLabels.some(l => /Delete/.test(l)),
+    'right-clicking a card offers move, epic, workstream and delete');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  // the Fields menu opts cards into scope columns; Description gets the editor
+  click(doc.querySelector('#prFieldsBtn'));
+  const descOpt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent));
+  ok(!!descOpt && !descOpt.classList.contains('on'), 'Fields menu lists Description, off by default');
+  click(descOpt);
+  const richEd = doc.querySelector('#prioView .pr-rich[data-prsc="description"]');
+  ok(!!richEd && richEd.dataset.ph === 'No description',
+    'checking Description adds a label-free field with a quiet "No description" hint');
+  richEd.focus();
+  ok(!doc.querySelector('#scFmtBar').hidden, 'focusing the field raises the B/I/list toolbar');
+  richEd.blur();
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent)));
+  ok(!doc.querySelector('#prioView .pr-rich'), 'unchecking returns cards to compact');
+  // sort control: Title ordering applies inside a column
+  click(doc.querySelector('#prioView [data-prdd="sort"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Title/.test(b.textContent)));
+  const colTitles = [...doc.querySelector('#prioView .sp-col').querySelectorAll('.pr-title')].map(i => i.value);
+  ok(colTitles.length < 2 || colTitles.every((t, i) => i === 0 || colTitles[i - 1].localeCompare(t) <= 0),
+    'Sort → Title orders a column alphabetically');
+  click(doc.querySelector('#prioView [data-prdd="sort"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Priority/.test(b.textContent)));
+  // epic filter narrows the board
+  click(doc.querySelector('#prioView [data-prdd="fepic"]'));
+  const epPick = [...doc.querySelectorAll('#popover .menu-list button')].filter(b => !/All epics|no epic/.test(b.textContent))[0];
+  const epName = epPick.textContent.trim();
+  click(epPick);
+  const visibleCards = [...doc.querySelectorAll('#prioView .pr-card')];
+  ok(visibleCards.length > 0 && visibleCards.every(c =>
+    state().items.find(i => i.id === c.dataset.prcard).epic === epName),
+    'the epic filter narrows the board to that epic');
+  click(doc.querySelector('#prioView [data-prdd="fepic"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /All epics/.test(b.textContent)));
+  // swimlanes: Group dropdown, labels in the leftmost column of one table
+  click(doc.querySelector('#prioView [data-prdd="group"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Epics/.test(b.textContent)));
+  const laneCount = doc.querySelectorAll('#prioView .pr-lanecell').length;
+  ok(laneCount > 1, 'grouping by epic renders swimlane label cells (' + laneCount + ')');
+  ok(doc.querySelectorAll('#prioView .sp-col').length === laneCount * state().phases.length,
+    'every swimlane row spans all phase columns');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioGroup === 'epic',
+    'the grouping choice persists with the view prefs');
+  // grouped by epic, cards drop the redundant epic chip
+  ok(!doc.querySelector('#prioView .pr-card [data-pract="epic"]'),
+    'epic swimlanes hide the duplicate epic chip on cards');
+  click(doc.querySelector('#prioView [data-prdd="group"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /None/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ------------------------------------------------------- RICE priority scheme
+{
+  suTab('sizing');
+  const priCards = doc.querySelectorAll('#setupView [data-supri]');
+  ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
+  click(Array.from(priCards).find(b => b.dataset.supri === 'rice'));
+  ok(state().meta.priorityScheme === 'rice', 'RICE scheme commits');
+  // prio cards now carry the priority chip; clicking it opens RICE dropdowns
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  // pick a card whose phase is expanded so its scoping row exists later
+  const openPhases = state().phases.filter(ph => !ph.collapsed).map(ph => ph.id);
+  const chip = [...doc.querySelectorAll('#prioView .pr-card [data-pract="priority"]')].find(c => {
+    const iid = c.closest('[data-prcard]').dataset.prcard;
+    const item = state().items.find(i => i.id === iid);
+    return item && openPhases.indexOf(item.phaseId) !== -1;
+  });
+  ok(!!chip, 'cards carry the priority chip under RICE');
+  const cid = chip.closest('[data-prcard]').dataset.prcard;
+  click(chip);
+  const sels = doc.querySelectorAll('#popover .rice-pop select[data-rk]');
+  ok(sels.length === 4, 'the priority chip opens four RICE dropdowns');
+  const pick = (k, v) => {
+    const sel = doc.querySelector('#popover select[data-rk="' + k + '"]');
+    sel.value = String(v);
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
   };
-  setR('reach', 100); setR('impact', 2); setR('confidence', 80); setR('effort', 4);
+  pick('reach', 100); pick('impact', 2); pick('confidence', 80); pick('effort', 4);
   const scored = state().items.find(i => i.id === cid);
-  ok(scored.rice.reach === 100 && scored.rice.effort === 4, 'RICE inputs commit');
-  ok(window.RM.riceScore(scored) === 40, 'score = R × I × C% ÷ E');
-  const colOf = doc.querySelector('#prioView [data-prcard="' + cid + '"]').closest('[data-prcol]');
-  ok(colOf.querySelector('.pr-card').dataset.prcard === cid,
+  ok(window.RM.riceScore(scored) === 40, 'dropdown picks score R × I × C% ÷ E');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const chip2 = doc.querySelector('#prioView [data-prcard="' + cid + '"] [data-pract="priority"]');
+  ok(/40/.test(chip2.textContent), 'the chip shows the computed score');
+  ok(doc.querySelector('#prioView [data-prcol="' + scored.phaseId + '"] .pr-card').dataset.prcard === cid,
     'the scored card auto-sorts to the top of its column');
-  ok(/40/.test(doc.querySelector('#prioView [data-prcard="' + cid + '"] .pr-score').textContent),
-    'the score badge shows the computed RICE');
-  // themes: tag a card, then filter the board by that theme
-  const tagIn = doc.querySelector('#prioView [data-prcard="' + cid + '"] .pr-tagadd');
-  tagIn.value = 'Retention';
-  tagIn.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-  ok(state().items.find(i => i.id === cid).themes.indexOf('Retention') !== -1, 'theme tag commits');
-  const filterChip = [...doc.querySelectorAll('#prioView .pr-themes [data-prtheme]')]
-    .find(c => c.dataset.prtheme === 'Retention');
-  ok(!!filterChip, 'the new theme appears in the filter row');
-  click(filterChip);
-  ok(doc.querySelectorAll('#prioView .pr-card').length === 1, 'theme filter narrows the board');
-  click(doc.querySelector('#prioView [data-prtheme=""]'));
-  ok(doc.querySelectorAll('#prioView .pr-card').length > 1, 'All themes restores the board');
-  // add-card lands in the column's phase
-  const lastPhase = state().phases[state().phases.length - 1];
-  const nBefore = state().items.length;
-  click(doc.querySelector('#prioView [data-pradd="' + lastPhase.id + '"]'));
-  ok(state().items.length === nBefore + 1 &&
-    state().items.find(i => i.id === window.__headway.getState().items.filter(x => x.phaseId === lastPhase.id).pop().id).phaseId === lastPhase.id,
-    'Add creates a card in that phase');
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  // the scoping Priority column shows the identical chip
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const scChip = doc.querySelector('#rows .row.item[data-id="' + cid + '"] [data-act="priority"]');
+  ok(!!scChip && /40/.test(scChip.textContent), 'the scoping Priority column shows the same score');
+  ok(!doc.querySelector('#rows .row.story [data-act="st-pri"]'),
+    'story priority chips hide under RICE (stories carry no RICE)');
+  // undo the scheme switch + four RICE picks so later suites see the default state
+  for (let u = 0; u < 5; u++) window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -1716,7 +1807,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // priority column: enable MoSCoW in Setup, chip appears in Scoping
   suTab('sizing');
   const priCards = doc.querySelectorAll('#setupView [data-supri]');
-  ok(priCards.length === 3, 'three priority schemes (none, MoSCoW, levels)');
+  ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
   click(Array.from(priCards).find(b => b.dataset.supri === 'moscow'));
   ok(state().meta.priorityScheme === 'moscow', 'MoSCoW priority commits');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
@@ -2353,7 +2444,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   w2.ExcelJS = ExcelJS;
   w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
   w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/app.js']) {
     w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   const d2 = w2.document;
@@ -2362,7 +2453,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const onTab = d2.querySelector('#viewTabs button.on');
   ok(onTab && onTab.dataset.view === 'prio',
     'reload restores the Prioritizing tab (got ' + (onTab ? onTab.dataset.view : 'none') + ')');
-  ok(!!d2.querySelector('#prioView .sp-board'), 'the prioritizing board renders after the reload');
+  ok(!!d2.querySelector('#prioView .pr-table'), 'the prioritizing board renders after the reload');
   ok(/Story/.test(d2.querySelector('#detailBtn').textContent),
     'reload restores the chosen detail level (Story)');
   dom2.window.close();
@@ -2370,7 +2461,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   dom3.window.ExcelJS = ExcelJS;
   dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/app.js']) {
     dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   dom3.window.document.querySelector('#startBody [data-sp-continue]')
@@ -2511,6 +2602,44 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const bu = new window.Event('beforeunload', { cancelable: true });
   window.dispatchEvent(bu);
   ok(bu.defaultPrevented, 'beforeunload is blocked while work is unsaved');
+}
+
+// ---------------------------------------------------------------- jira csv in the export dialog
+{
+  window.eval("document.querySelector('#btnExport').click()");
+  const fmts = Array.from(doc.querySelectorAll('#modalHost input[name="exFmt"]')).map(r => r.id);
+  ok(fmts.join(',') === 'exFmtPng,exFmtPptx,exFmtJira', 'Jira CSV is the third format, right of PowerPoint');
+  ok(/Jira CSV/.test(doc.querySelector('#modalHost label[for="exFmtJira"], #modalHost #exFmtJira').closest('label').textContent),
+    'the third format is labeled Jira CSV');
+  ok(doc.querySelector('#modalHost #exJira').hidden && !doc.querySelector('#modalHost #exTimeline').hidden,
+    'Jira options stay hidden while a timeline format is chosen');
+  doc.querySelector('#modalHost #exFmtJira').checked = true;
+  doc.querySelector('#modalHost #exFmtJira').dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(!doc.querySelector('#modalHost #exJira').hidden && doc.querySelector('#modalHost #exTimeline').hidden,
+    'choosing Jira CSV swaps the timeline options for the Jira options');
+  ok(!!doc.querySelector('#modalHost #jxFeatures') && !!doc.querySelector('#modalHost #jxStories'),
+    'dialog offers feature and story rows');
+  ok(!!doc.querySelector('#modalHost #jxFeatureType') && !!doc.querySelector('#modalHost #jxStoryType'),
+    'dialog offers issue type names');
+  ok(/yyyy-MM-dd/.test(doc.querySelector('#modalHost #exJira').textContent), 'dialog names the wizard date format');
+  ok(typeof window.RM_JIRA === 'object' && typeof window.RM_JIRA.csv === 'function', 'Jira export module is loaded');
+  doc.querySelector('#modalHost #jxStories').checked = true;
+  doc.querySelector('#modalHost #jxFeatureType').value = 'Task';
+  let exported = null;
+  window.__headway.setExportSink((r) => { exported = r; });
+  click(doc.querySelector('#modalHost #exGo'));
+  ok(doc.querySelector('#modalHost').hidden, 'Export closes the dialog');
+  ok(exported && /-jira\.csv$/.test(exported.name) && exported.blob && exported.blob.size > 100,
+    'Export hands a CSV blob to the save path');
+  const ui = JSON.parse(window.localStorage.getItem('headway-ui-v1'));
+  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true && ui.jiraPrefs.featureType === 'Task',
+    'jira export settings persist in the ui snapshot');
+  window.eval("document.querySelector('#btnExport').click()");
+  ok(doc.querySelector('#modalHost #exFmtJira').checked && !doc.querySelector('#modalHost #exJira').hidden &&
+    doc.querySelector('#modalHost #jxStories').checked && doc.querySelector('#modalHost #jxFeatureType').value === 'Task',
+    'reopening restores the Jira format and its settings');
+  window.eval("document.querySelector('#modalHost [data-m=x]').click()");
+  window.__headway.setExportSink(null);
 }
 
 // ---------------------------------------------------------------- export smoke

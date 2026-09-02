@@ -1324,3 +1324,71 @@ var sSf2 = mkState([{ num: 1, feature: 'a', assignees: ['tm1'], stories: [{ titl
   team: [{ id: 'tm1', name: 'Ada', type: 'Development' }]
 });
 eq(sSf2.items[0].stories[0].assignees, ['tm1'], 'story assignees dedupe and keep real people');
+
+// ------------------------------------------------------------- jira keys
+section('jira keys');
+var sJk = mkState([{ num: 1, feature: 'a', epic: 'Login', jiraKey: ' hw-12 ',
+  stories: [{ title: 's', jiraKey: 'HW-13' }, { title: 't', jiraKey: 42 }] }],
+  { epicJira: { Login: 'HW-1', Stale: '', Junk: 7 } });
+eq(sJk.items[0].jiraKey, 'HW-12', 'item jira key trimmed and uppercased');
+eq(sJk.items[0].stories[0].jiraKey, 'HW-13', 'story jira key kept');
+eq(sJk.items[0].stories[1].jiraKey, null, 'non-string story jira key dropped');
+eq(sJk.epicJira, { Login: 'HW-1' }, 'epicJira keeps only non-empty string keys');
+var sJk2 = mkState([{ num: 1, feature: 'a' }]);
+eq(sJk2.items[0].jiraKey, null, 'item jira key defaults to null');
+eq(sJk2.epicJira, {}, 'epicJira defaults to an empty map');
+
+// ------------------------------------------------------------- jira csv export
+section('jira csv export');
+var RMJira = require('../js/export-jira.js');
+var sJc = mkState([
+  { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',
+    startDay: 0, durDays: 5, deadline: '2026-09-04', jiraKey: 'HW-12',
+    description: '<p>Hi <b>there</b></p>', enables: 'Checkout', notes: '',
+    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13' }] },
+  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2' },
+  { num: 3, feature: 'Orphan', deps: [2] }
+], { epicJira: { Login: 'HW-1' } });
+eq(RMJira.fileName(sJc), 'T-jira.csv', 'jira csv filename');
+var jr = RMJira.rows(sJc, { features: true, stories: false });
+eq(jr.length, 3, 'features only: one row per feature');
+var r1 = jr[0];
+eq(r1['Summary'], 'Login page', 'summary is the feature name');
+eq(r1['Issue Type'], 'Story', 'feature issue type defaults to Story');
+eq(r1['Parent'], 'HW-1', 'parent is the epic jira key');
+eq(r1['Labels'], 'ws-product phase-alpha size-m', 'labels are slugged workstream, phase and size');
+eq(r1['Due Date'], '2026-09-04', 'due date is the deadline');
+eq(r1['Start Date'], '2026-07-27', 'start date from the schedule');
+eq(r1['End Date'], '2026-07-31', 'inclusive end date from the schedule');
+eq(r1['Jira Key'], 'HW-12', 'jira key column carries the existing key');
+ok(r1['Description'].indexOf('Hi there') === 0, 'description leads with the plain-text description');
+ok(r1['Description'].indexOf('[x] s1') !== -1 && r1['Description'].indexOf('[ ] s2') !== -1,
+  'stories render as a checklist when not exported as rows');
+ok(r1['Description'].indexOf('Enables:\nCheckout') !== -1, 'non-empty scope fields become sections');
+ok(r1['Description'].indexOf('Notes') === -1, 'empty scope fields are skipped');
+var r2 = jr[1];
+eq(r2['Parent'], '', 'no epic key: parent blank');
+eq(r2['Labels'], 'phase-next', 'no workstream or size: only the phase label');
+eq(r2['Blocked By'], 'HW-12', 'dependencies with keys list the key');
+eq(r2['Start Date'], '', 'unscheduled: blank dates');
+eq(jr[2]['Blocked By'], '', 'dependencies without keys are left out');
+
+var jrs = RMJira.rows(sJc, { features: true, stories: true, featureType: 'Task', storyType: 'Sub-task' });
+eq(jrs.length, 5, 'features and stories: a row per story too');
+eq(jrs[0]['Issue Type'], 'Task', 'custom feature issue type');
+ok(jrs[0]['Description'].indexOf('[x]') === -1, 'checklist omitted when stories are rows');
+eq(jrs[1]['Summary'], 's1', 'story row summary');
+eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type');
+eq(jrs[1]['Parent'], 'HW-12', 'story parents to the feature key');
+eq(jrs[1]['Labels'], 'feature-login-page ws-product phase-alpha', 'story labels name the feature');
+eq(jrs[2]['Jira Key'], 'HW-13', 'story jira key');
+var jro = RMJira.rows(sJc, { features: false, stories: true });
+eq(jro.length, 2, 'stories only');
+
+var csv = RMJira.csv(sJc, { features: true, stories: false });
+ok(csv.charCodeAt(0) === 0xFEFF, 'csv starts with a UTF-8 BOM');
+var lines = csv.slice(1).split('\r\n');
+eq(lines[0], 'Summary,Issue Type,Description,Parent,Labels,Priority,Due Date,Start Date,End Date,Blocked By,Jira Key', 'header row');
+ok(lines.some(function (l) { return l.indexOf('"Search, ""fast"""') === 0; }), 'commas and quotes are escaped');
+ok(/"Hi there\n/.test(csv), 'newlines stay inside a quoted cell');
+eq(RMJira.csv(mkState([]), { features: true }).slice(1).split('\r\n').length, 2, 'empty doc: header plus trailing newline');

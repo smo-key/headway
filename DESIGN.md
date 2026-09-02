@@ -25,7 +25,8 @@ state = {
               startDay, durDays,      // working-day index / span; null = unscheduled
               riskDays,               // always 0 — risk no longer pads the schedule
               locked, done,
-              stories: [ { id, title, done, startDay, durDays } ] } ] // story timeline optional (both null = none)
+              jiraKey,                // "HW-12" typed in after a Jira CSV import; null = none
+              stories: [ { id, title, done, startDay, durDays, jiraKey } ] } ] // story timeline optional (both null = none)
   team:   [ { id, name, type, workstream?, capacity,             // "roles"; capacity = heads at 40 h (0.5 = half)
               rate, cost,                                        // hourly bill rate / hourly cost (budgeting; 0 = unset)
               weekHours: { isoMonday: hours } } ]                // default 40 h/week; 0 = off
@@ -33,6 +34,7 @@ state = {
   wsColors:  { workstream: paletteKey | 6-hex }                  // COLOR follows the workstream (OS = blue;
                                                                   //  well-known ones get seeded defaults)
   epicIcons: { epicName: lucideIconName }                        // epics carry an ICON, shown on rows
+  epicJira:  { epicName: jiraKey }                               // the Jira epic features parent to on export
   epicColors: { … }                                              // legacy, no longer drives display
 }
 ```
@@ -219,6 +221,20 @@ alert hover; the panel keeps only the actionable controls (start date, weeks, si
   sprint columns) and does NOT redefine the sprint length (`weeksPerSprint` stays the app
   default). Bars come from solid fills; the pale run at either bar edge (detected by
   lightness) becomes the trailing risk buffer.
+
+## Jira CSV export (`js/export-jira.js`)
+
+Targets Jira Cloud's **user-level** importer (work navigator → ⋯ → Import issues from CSV),
+which needs only the Create work items + Make bulk changes permissions — not the admin-only
+External System Import. That importer has no Issue Id / Parent Id columns, so one file cannot
+create a parent and its children together: `Parent` and `Blocked By` carry the Jira keys typed
+into Headway (`item.jiraKey`, `story.jiraKey`, `state.epicJira[epic]`) and stay blank until
+then. Columns: Summary, Issue Type, Description (plain text: description, a story checklist
+when stories aren't rows, then Enables / Out of scope / External dependencies / Notes),
+Parent, Labels (`ws-…`, `phase-…`, `size-…`; story rows add `feature-…`), Priority, Due Date
+(deadline), Start/End Date (ISO, from the schedule), Blocked By, Jira Key (lets the wizard map
+the row as an update). It is the third format in the Export dialog (right of PowerPoint); choosing it swaps the timeline options for feature and/or story rows and the issue type names
+(defaults Story / Sub-task); its settings persist in the UI snapshot (`jiraPrefs`).
 
 ## Files
 

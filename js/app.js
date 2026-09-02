@@ -63,6 +63,7 @@
   var groupWs = false;       // sub-group rows by workstream inside each phase
   var groupEpic = false;     // …and/or by epic (nested under workstream)
   var exportPrefs = null;    // last-used Export dialog settings (fmt, split, …)
+  var jiraPrefs = null;      // last-used Export Jira CSV dialog settings
   var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
   var detailMode = 'feature'; // Scoping/Planning row detail: phase | feature | story
   var buColW = {};           // budgeting column width overrides (key -> px)
@@ -114,9 +115,13 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs };
   }
-  var prioTheme = null;     // Prioritizing view: active theme filter (null = all)
+  var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
+  var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
+  var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
+  var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
+  var prioFWs = null;       // Prioritizing workstream filter: null = all, '' = default, else the stream
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
   function applyUi(ui) {
@@ -133,6 +138,7 @@
     groupWs = ui.groupWs != null ? !!ui.groupWs : ui.groupBy === 'ws';
     groupEpic = ui.groupEpic != null ? !!ui.groupEpic : (ui.groupBy === 'epic' || !!ui.groupByEpic);
     exportPrefs = ui.exportPrefs && typeof ui.exportPrefs === 'object' ? ui.exportPrefs : null;
+    jiraPrefs = ui.jiraPrefs && typeof ui.jiraPrefs === 'object' ? ui.jiraPrefs : null;
     resCollapsed = !!ui.resCollapsed;
     snapDays = [1, 5, 10].indexOf(ui.snapDays) !== -1 ? ui.snapDays : 5;
     scopeColW = ui.scopeColW && typeof ui.scopeColW === 'object' ? ui.scopeColW : {};
@@ -153,6 +159,9 @@
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
+    prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
+    if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
+    prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -1206,7 +1215,7 @@
     document.body.dataset.view = view;
     // a view switch or re-render can replace the rich cell the floating
     // B/I toolbar is anchored to — never leave the bar orphaned on screen
-    if (scFmtTarget && (view !== 'scoping' || !scFmtTarget.isConnected)) hideScFmtBar();
+    if (scFmtTarget && ((view !== 'scoping' && view !== 'prio') || !scFmtTarget.isConnected)) hideScFmtBar();
 
     renderTopbar();
     syncZoomCtl();
@@ -1551,150 +1560,401 @@
   }
 
   // ---------------------------------------------------------- prioritizing view
-  // Kanban of the phases (the horizons). Cards force outcome framing — the
-  // problem being attacked and the measure that proves it worked — carry RICE
-  // inputs that auto-score and auto-sort each column, and wear theme tags for
-  // strategic grouping. The vision line on top is the destination everything
-  // below ladders up to.
-  function prThemes() {
-    var seen = {}, out = [];
-    state.items.forEach(function (it) {
-      (it.themes || []).forEach(function (t) { if (!seen[t]) { seen[t] = true; out.push(t); } });
-    });
-    return out.sort();
-  }
-  function prScoreHtml(it) {
+  // Kanban of the phases (the horizons). Cards carry the same size, priority,
+  // epic and workstream chips as everywhere else, plus whichever scope
+  // columns the Fields menu selects (Description by default). Columns
+  // auto-sort by the active priority framework — the RICE scheme scores
+  // Reach × Impact × Confidence ÷ Effort from dropdowns — and the Group
+  // control lays the board out in workstream or epic swimlanes.
+  var RICE_OPTIONS = {
+    reach: { label: 'Reach / quarter', opts: [[1, '1'], [10, '10'], [100, '100'], [1000, '1,000'], [10000, '10,000']] },
+    impact: { label: 'Impact', opts: [[0.25, '0.25 · Minimal'], [0.5, '0.5 · Low'], [1, '1 · Medium'], [2, '2 · High'], [3, '3 · Massive']] },
+    confidence: { label: 'Confidence', opts: [[50, '50% · Low'], [80, '80% · Medium'], [100, '100% · High']] },
+    effort: { label: 'Effort', opts: [[0.5, '½ week'], [1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [8, '8 weeks'], [12, '12 weeks']] }
+  };
+  function riceScoreLabel(it) {
     var sc = RM.riceScore(it);
-    return '<span class="pr-score' + (sc == null ? ' none' : '') +
-      '" title="RICE — reach × impact × confidence ÷ effort">' +
-      (sc == null ? '·' : (Math.round(sc * 10) / 10)) + '</span>';
+    return sc == null ? '' : String(Math.round(sc * 10) / 10);
+  }
+  function riceSelectsHtml(it) {
+    return Object.keys(RICE_OPTIONS).map(function (k) {
+      var def = RICE_OPTIONS[k];
+      var cur = (it.rice || {})[k];
+      return '<label class="rice-lab">' + esc(def.label) +
+        '<select data-rk="' + k + '"><option value="">—</option>' +
+        def.opts.map(function (o) {
+          return '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+        }).join('') + '</select></label>';
+    }).join('');
+  }
+  // the RICE editor every priority chip opens while the RICE scheme is active
+  function riceMenu(anchor, itemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return;
+    var r = anchor.getBoundingClientRect();
+    openPopover(r.left, r.bottom + 4, '<div class="rice-pop">' + riceSelectsHtml(it) + '</div>', function (host) {
+      host.addEventListener('change', function (ev) {
+        var k = ev.target.dataset.rk;
+        if (!k) return;
+        var v = ev.target.value === '' ? null : parseFloat(ev.target.value);
+        commit('rice', function (s) {
+          var x = RM.itemById(s, itemId);
+          if (x) x.rice[k] = v;
+        });
+      });
+    });
+  }
+  // ONE priority chip everywhere: the picked value for MoSCoW / levels, the
+  // computed score under RICE
+  function priChipContent(it) {
+    if (RM.prioritySchemeOf(state) === 'rice') return esc(riceScoreLabel(it) || '·');
+    if (!it.priority) return '';
+    return RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(it.priority) : esc(it.priority);
+  }
+  function priChipTitle(it) {
+    if (RM.prioritySchemeOf(state) === 'rice') return 'RICE score — click to edit';
+    return 'Priority — click to change' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '');
+  }
+  function priChipHasValue(it) {
+    return !!(RM.prioritySchemeOf(state) === 'rice' ? riceScoreLabel(it) : it.priority);
+  }
+  function openPriorityEditor(anchor, itemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return;
+    if (RM.prioritySchemeOf(state) === 'rice') { riceMenu(anchor, itemId); return; }
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !it.priority, fn: function () {
+      commit('priority', function (s) { RM.itemById(s, itemId).priority = null; });
+    } }].concat(RM.priorityOrderOf(state).map(function (pv) {
+      return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
+        label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
+        checked: it.priority === pv, fn: function () {
+        commit('priority', function (s) { RM.itemById(s, itemId).priority = pv; });
+      } };
+    })));
+  }
+  // sort under the active framework: RICE score descending, else the
+  // scheme's ladder; unset last, ties keep document order
+  function prioRank(it) {
+    if (RM.prioritySchemeOf(state) === 'rice') {
+      var sc = RM.riceScore(it);
+      return sc == null ? Infinity : -sc;
+    }
+    var order = RM.priorityOrderOf(state);
+    var i = it.priority ? order.indexOf(it.priority) : -1;
+    return i === -1 ? Infinity : i;
+  }
+  function prSortItems(list) {
+    var rank;
+    if (prioSort === 'title') {
+      rank = null; // compare directly
+    } else if (prioSort === 'size') {
+      var so = RM.sizeOrderOf(state);
+      rank = function (it) { var i2 = it.size ? so.indexOf(it.size) : -1; return i2 === -1 ? Infinity : -i2; }; // big first, unset last
+    } else if (prioSort === 'priority' && RM.priorityEnabled(state)) {
+      rank = prioRank;
+    } else {
+      return list.slice(); // document order
+    }
+    return list.map(function (it, i) { return { it: it, i: i }; })
+      .sort(function (a, b) {
+        if (!rank) return (a.it.feature || '').localeCompare(b.it.feature || '') || (a.i - b.i);
+        return (rank(a.it) - rank(b.it)) || (a.i - b.i);
+      })
+      .map(function (x) { return x.it; });
+  }
+  // board-level match: the text filter plus the epic / workstream dropdowns
+  function prMatches(it) {
+    if (!matchesFilter(it)) return false;
+    if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
+    if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
+    return true;
+  }
+  function prCardFields() {
+    var by = {};
+    scopeCols().forEach(function (c) { by[c[0]] = c; });
+    return prioFields.map(function (k) { return by[k]; }).filter(Boolean);
   }
   function prCardHtml(it) {
-    var r = it.rice || {};
-    function rv(v) { return v == null ? '' : v; }
-    return '<div class="sp-card pr-card" data-prcard="' + it.id + '">' +
-      '<div class="sp-card-top"><span class="r-num">#' + it.num + '</span>' + prScoreHtml(it) + '</div>' +
+    var fields = prCardFields().map(function (c) {
+      // no label — a quiet "No description"-style hint fills the empty field
+      return '<div class="pr-rich" contenteditable="true" data-prsc="' + c[0] + '" data-ph="No ' + esc(c[1].toLowerCase()) + '">' +
+        richDisplay(RM.scopeValue(it, c[0])) + '</div>';
+    }).join('');
+    var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
+    return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
       '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
-      '<textarea class="pr-prob" data-prf="problem" rows="2" placeholder="Problem — what change are we trying to create?">' + esc(it.problem || '') + '</textarea>' +
-      '<textarea class="pr-meas" data-prf="measure" rows="2" placeholder="Measure — the metric that proves it worked">' + esc(it.measure || '') + '</textarea>' +
-      '<div class="pr-rice">' +
-      '<label title="Reach — people or events per quarter">R<input type="number" min="0" data-prr="reach" value="' + rv(r.reach) + '"></label>' +
-      '<label title="Impact — 0.25 minimal · 0.5 low · 1 medium · 2 high · 3 massive">I<input type="number" min="0" step="0.25" data-prr="impact" value="' + rv(r.impact) + '"></label>' +
-      '<label title="Confidence — percent">C%<input type="number" min="0" max="100" step="5" data-prr="confidence" value="' + rv(r.confidence) + '"></label>' +
-      '<label title="Effort — person-weeks">E<input type="number" min="0" step="0.5" data-prr="effort" value="' + rv(r.effort) + '"></label>' +
-      '</div>' +
-      '<div class="pr-tags">' +
-      (it.themes || []).map(function (t) {
-        return '<span class="pr-tag">' + esc(t) +
-          '<button class="pr-tagx" data-prtagx="' + esc(t) + '" title="Remove theme">×</button></span>';
-      }).join('') +
-      '<input class="pr-tagadd" data-prtagadd placeholder="+ theme">' +
+      fields +
+      '<div class="pr-chips">' +
+      (RM.sizingEnabled(state)
+        ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size — click to change">' +
+          (it.size ? esc(it.size) : '·') + '</span>' : '') +
+      (RM.priorityEnabled(state)
+        ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
+          '" tabindex="0" role="button" data-pract="priority" title="' + esc(priChipTitle(it)) + '">' +
+          (priChipContent(it) || '·') + '</span>' : '') +
+      (prioGroup === 'epic' ? '' : // the swimlane already names the epic
+        '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic — click to change">' +
+        '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>') +
+      (state.meta.workstreamsEnabled && prioGroup !== 'ws' 
+        ? '<span class="pr-chip" tabindex="0" role="button" data-pract="ws" title="Workstream — click to change">' +
+          '<span class="dd-dot" style="background:#' + wsColor + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>' : '') +
       '</div></div>';
   }
+  function prColHtml(p, items, laneAttr) {
+    var mine = prSortItems(items.filter(function (it) { return it.phaseId === p.id && prMatches(it); }));
+    return '<div class="sp-col" data-prcol="' + p.id + '"' + (laneAttr || '') + '>' +
+      '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
+      '<button class="pr-add" data-pradd="' + p.id + '"' + (laneAttr || '') + '><i data-lucide="plus"></i> Add</button>' +
+      '</div>';
+  }
+  function prLaneKey(it) { return prioGroup === 'ws' ? (it.workstream || '') : (it.epic || ''); }
+  var PR_GROUPS = { none: ['square-kanban', 'None'], ws: ['layers', 'Workstreams'], epic: ['tag', 'Epics'] };
+  var PR_SORTS = { priority: ['arrow-down-wide-narrow', 'Priority'], doc: ['list', 'Document order'],
+    title: ['arrow-down-a-z', 'Title'], size: ['ruler', 'Size'] };
+  function prDdLabel(pair) { return '<i data-lucide="' + pair[0] + '"></i>' + esc(pair[1]); }
   function renderPrioPage() {
     var host = $('#prioView');
     if (!host) return;
-    var themes = prThemes();
-    if (prioTheme && themes.indexOf(prioTheme) === -1) prioTheme = null;
-    var themeRow = '<div class="pr-themes">' +
-      '<span class="pr-tag' + (!prioTheme ? ' on' : '') + '" data-prtheme="">All themes</span>' +
-      themes.map(function (t) {
-        return '<span class="pr-tag' + (prioTheme === t ? ' on' : '') + '" data-prtheme="' + esc(t) + '">' + esc(t) + '</span>';
-      }).join('') + '</div>';
-    var cols = state.phases.map(function (p) {
-      var mine = state.items.filter(function (it) {
-        return it.phaseId === p.id && (!prioTheme || (it.themes || []).indexOf(prioTheme) !== -1);
-      });
-      // evidence first: RICE score descending; unscored keep document order below
-      mine = mine.map(function (it, i) { return { it: it, i: i, sc: RM.riceScore(it) }; })
-        .sort(function (a, b) {
-          if (a.sc == null && b.sc == null) return a.i - b.i;
-          if (a.sc == null) return 1;
-          if (b.sc == null) return -1;
-          return (b.sc - a.sc) || (a.i - b.i);
-        }).map(function (x) { return x.it; });
-      return '<div class="sp-col" data-prcol="' + p.id + '">' +
-        '<div class="sp-colhd">' + esc(p.name) + '<span style="margin-left:auto">' + mine.length + '</span></div>' +
-        '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
-        '<button class="pr-add" data-pradd="' + p.id + '"><i data-lucide="plus"></i> Add</button>' +
-        '</div>';
+    if (prioGroup === 'ws' && !state.meta.workstreamsEnabled) prioGroup = 'none';
+    var phases = state.phases;
+    var grouped = prioGroup !== 'none';
+    var head = (grouped ? '<div class="pr-corner"></div>' : '') + phases.map(function (p) {
+      var n = state.items.filter(function (it) { return it.phaseId === p.id && prMatches(it); }).length;
+      return '<div class="pr-phhd">' + esc(p.name) + '<span class="pr-lanect">' + n + '</span></div>';
     }).join('');
-    host.innerHTML =
-      '<div class="sp-page">' +
-      '<input id="prVision" class="pr-vision" placeholder="Vision — where is this product going? Everything below should ladder up to it." value="' + esc(state.meta.vision || '') + '">' +
-      themeRow +
-      '<div class="sp-board">' + cols + '</div></div>';
+    var rows;
+    if (!grouped) {
+      rows = phases.map(function (p) { return prColHtml(p, state.items); }).join('');
+    } else {
+      var lanes = prioGroup === 'ws'
+        ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
+            .concat(allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; }))
+        : [{ key: '', name: 'No epic' }]
+            .concat(allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; }));
+      lanes = lanes.filter(function (ln) {
+        return state.items.some(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
+      });
+      rows = lanes.map(function (ln) {
+        var laneItems = state.items.filter(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
+        var laneAttr = ' data-prlane="' + esc(ln.key) + '"';
+        return '<div class="pr-lanecell">' +
+          (ln.dot ? '<span class="dd-dot" style="background:#' + ln.dot + '"></span>' : '') +
+          (ln.icon ? '<i data-lucide="' + ln.icon + '"></i>' : '') +
+          '<span class="pr-lanename">' + esc(ln.name) + '</span>' +
+          '<span class="pr-lanect">' + laneItems.length + '</span></div>' +
+          phases.map(function (p) { return prColHtml(p, laneItems, laneAttr); }).join('');
+      }).join('') || '<div class="p-none" style="grid-column:1/-1;padding:30px">Nothing matches.</div>';
+    }
+    var epicFilterDd = allEpics().length
+      ? '<button class="dd-btn" data-prdd="fepic" title="Filter by epic">' +
+        '<span class="dd-label">' + (prioFEpic == null ? '<i data-lucide="tag"></i>All epics'
+          : '<i data-lucide="tag"></i>' + esc(prioFEpic || 'No epic')) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var wsFilterDd = state.meta.workstreamsEnabled
+      ? '<button class="dd-btn" data-prdd="fws" title="Filter by workstream">' +
+        '<span class="dd-label">' + (prioFWs == null ? '<i data-lucide="layers"></i>All workstreams'
+          : esc(prioFWs || RM.defaultWsName(state))) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    host.innerHTML = '<div class="sp-page">' +
+      '<div class="pr-bar">' +
+      '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
+      '<input id="prFilter" type="search" placeholder="Filter cards" aria-label="Filter cards" value="' + esc(filterText) + '">' +
+      '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
+      epicFilterDd + wsFilterDd +
+      '<div class="pr-settings">' +
+      '<span class="pr-lab">Group</span>' +
+      '<button class="dd-btn" data-prdd="group" title="Swimlanes — group the board">' +
+      '<span class="dd-label">' + prDdLabel(PR_GROUPS[prioGroup]) + '</span><i data-lucide="chevron-down"></i></button>' +
+      '<span class="pr-lab">Sort</span>' +
+      '<button class="dd-btn" data-prdd="sort" title="Order cards inside each column">' +
+      '<span class="dd-label">' + prDdLabel(PR_SORTS[prioSort]) + '</span><i data-lucide="chevron-down"></i></button>' +
+      '<button id="prFieldsBtn" title="Choose which fields cards show"><i data-lucide="list-checks"></i>Fields</button>' +
+      '</div></div>' +
+      '<div class="pr-table" style="grid-template-columns:' + (grouped ? '170px ' : '') +
+      'repeat(' + phases.length + ', minmax(230px, 1fr))">' + head + rows + '</div></div>';
     if (window.lucide) lucide.createIcons();
   }
 
+  var prFilterTimer = null;
+  $('#prioView').addEventListener('input', function (e) {
+    if (e.target.id !== 'prFilter') return;
+    var v = e.target.value;
+    clearTimeout(prFilterTimer);
+    prFilterTimer = setTimeout(function () {
+      filterText = v.trim();
+      render();
+      var nf = $('#prFilter'); // the render rebuilt the input — hand focus back
+      if (nf) {
+        nf.focus();
+        nf.setSelectionRange(nf.value.length, nf.value.length);
+      }
+    }, 120);
+  });
   $('#prioView').addEventListener('change', function (e) {
     var t = e.target;
-    if (t.id === 'prVision') {
-      var v = t.value.trim();
-      if (v !== (state.meta.vision || '')) commit('vision', function (s) { s.meta.vision = v; });
-      return;
+    if (t.dataset.prf === 'feature') {
+      var card = t.closest('[data-prcard]');
+      if (!card) return;
+      var id = card.dataset.prcard, val = t.value;
+      commit('rename', function (s) {
+        var x = RM.itemById(s, id);
+        if (x) x.feature = val;
+      });
     }
-    var card = t.closest('[data-prcard]');
+  });
+  // card scope fields are the same rich editors as the scoping grid: the
+  // floating B/I/list toolbar rides along while one has focus
+  $('#prioView').addEventListener('focusin', function (e) {
+    if (!e.target.classList || !e.target.classList.contains('pr-rich')) return;
+    ensureScFmtBar().hidden = false;
+    scFmtTarget = e.target;
+    placeScFmtBar();
+  });
+  // card scope fields commit on blur, exactly like the scoping grid's cells
+  $('#prioView').addEventListener('focusout', function (e) {
+    if (e.target.classList && e.target.classList.contains('pr-rich') && scFmtBar) hideScFmtBar();
+    var ed = e.target.classList && e.target.classList.contains('pr-rich') ? e.target : null;
+    if (!ed || !ed.dataset.prsc) return;
+    var card = ed.closest('[data-prcard]');
     if (!card) return;
     var id = card.dataset.prcard;
-    if (t.dataset.prf) {
-      var f = t.dataset.prf, val = t.value;
-      commit(f === 'feature' ? 'rename' : f, function (s) {
-        var x = RM.itemById(s, id);
-        if (x) x[f] = val;
-      });
-      return;
-    }
-    if (t.dataset.prr) {
-      var k = t.dataset.prr;
-      var n = t.value === '' ? null : parseFloat(t.value);
-      if (n != null && (!isFinite(n) || n < 0)) n = null;
-      commit('rice', function (s) {
-        var x = RM.itemById(s, id);
-        if (x) x.rice[k] = n;
-      });
-    }
+    var it = RM.itemById(state, id);
+    if (!it) return;
+    var key = ed.dataset.prsc;
+    var v = sanitizeHtml(ed.innerHTML);
+    if (v === RM.scopeValue(it, key) || v === richDisplay(RM.scopeValue(it, key))) return;
+    commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, id), key, v); });
   });
   $('#prioView').addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter') return;
     var t = e.target;
-    if (t.dataset && t.dataset.prtagadd != null) {
-      var v = t.value.trim();
-      var card = t.closest('[data-prcard]');
-      if (!v || !card) return;
-      var id2 = card.dataset.prcard;
-      commit('theme', function (s) {
-        var x = RM.itemById(s, id2);
-        if (x && x.themes.indexOf(v) === -1) x.themes.push(v);
-      });
-    } else if (t.id === 'prVision' || (t.dataset && t.dataset.prf === 'feature')) {
-      t.blur(); // the change event commits
-    }
-  });
-  $('#prioView').addEventListener('click', function (e) {
-    var tagx = e.target.closest('[data-prtagx]');
-    if (tagx) {
-      var cardX = tagx.closest('[data-prcard]');
-      var tv = tagx.dataset.prtagx, cid = cardX.dataset.prcard;
-      commit('theme', function (s) {
-        var x = RM.itemById(s, cid);
-        if (x) x.themes = x.themes.filter(function (t2) { return t2 !== tv; });
-      });
+    if (t.id === 'prFilter' && e.key === 'Escape') {
+      e.stopPropagation();
+      t.value = '';
+      filterText = '';
+      render();
       return;
     }
-    var th = e.target.closest('[data-prtheme]');
-    if (th) { prioTheme = th.dataset.prtheme || null; render(); return; }
-    var add = e.target.closest('[data-pradd]');
-    if (add) addFeature(add.dataset.pradd);
+    if (e.key === 'Enter' && t.dataset && t.dataset.prf === 'feature') t.blur();
   });
-  // cards drag between horizons (the phase columns)
+  $('#prioView').addEventListener('click', function (e) {
+    var dd = e.target.closest('[data-prdd]');
+    if (dd) {
+      var kind = dd.dataset.prdd;
+      if (kind === 'group') {
+        openDropdown(dd, Object.keys(PR_GROUPS).map(function (k) {
+          if (k === 'ws' && !state.meta.workstreamsEnabled) return null;
+          return { icon: PR_GROUPS[k][0], label: esc(PR_GROUPS[k][1]), checked: prioGroup === k, fn: function () {
+            prioGroup = k; saveLocal(); render();
+          } };
+        }).filter(Boolean));
+      } else if (kind === 'sort') {
+        openDropdown(dd, Object.keys(PR_SORTS).map(function (k) {
+          return { icon: PR_SORTS[k][0], label: esc(PR_SORTS[k][1]), checked: prioSort === k, fn: function () {
+            prioSort = k; saveLocal(); render();
+          } };
+        }));
+      } else if (kind === 'fepic') {
+        openDropdown(dd, [{ label: '<i>All epics</i>', checked: prioFEpic == null, fn: function () { prioFEpic = null; render(); } },
+          { label: '<i>— no epic —</i>', checked: prioFEpic === '', fn: function () { prioFEpic = ''; render(); } }]
+          .concat(allEpics().map(function (ep) {
+            return { icon: RM.iconForEpic(state, ep) || 'tag', label: esc(ep), checked: prioFEpic === ep, fn: function () {
+              prioFEpic = ep; render();
+            } };
+          })));
+      } else if (kind === 'fws') {
+        openDropdown(dd, [{ label: '<i>All workstreams</i>', checked: prioFWs == null, fn: function () { prioFWs = null; render(); } },
+          { label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>', dot: '#' + RM.defaultWsColor(state),
+            checked: prioFWs === '', fn: function () { prioFWs = ''; render(); } }]
+          .concat(allWorkstreams().map(function (w) {
+            return { label: esc(w), dot: '#' + RM.colorForWs(state, w), checked: prioFWs === w, fn: function () {
+              prioFWs = w; render();
+            } };
+          })));
+      }
+      return;
+    }
+    if (e.target.closest('#prFieldsBtn')) {
+      openDropdown(e.target.closest('#prFieldsBtn'), scopeCols().map(function (c) {
+        return { label: esc(c[1]), checked: prioFields.indexOf(c[0]) !== -1, fn: function () {
+          var at = prioFields.indexOf(c[0]);
+          if (at === -1) prioFields.push(c[0]); else prioFields.splice(at, 1);
+          saveLocal();
+          render();
+        } };
+      }));
+      return;
+    }
+    var chip = e.target.closest('[data-pract]');
+    if (chip) {
+      var cardC = chip.closest('[data-prcard]');
+      if (!cardC) return;
+      var cid = cardC.dataset.prcard;
+      var itC = RM.itemById(state, cid);
+      if (!itC) return;
+      var act = chip.dataset.pract;
+      if (act === 'size') {
+        openDropdown(chip, [{ label: '<i>no size</i>', checked: !itC.size, fn: function () {
+          setItemSize(cid, null);
+        } }].concat(RM.sizeOrderOf(state).map(function (sz) {
+          return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itC.size === sz, fn: function () {
+            setItemSize(cid, sz);
+          } };
+        })));
+      } else if (act === 'priority') openPriorityEditor(chip, cid);
+      else if (act === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      else if (act === 'ws') {
+        openDropdown(chip, wsMenuItems(cid, function () {
+          return $('#prioView [data-prcard="' + cid + '"] [data-pract="ws"]');
+        }));
+      }
+      return;
+    }
+    var add = e.target.closest('[data-pradd]');
+    if (add) {
+      var lane = add.getAttribute('data-prlane');
+      var group = prioGroup;
+      addFeature(add.dataset.pradd);
+      // in a swimlane the new card belongs to the lane it was added in
+      if (lane && selectedId) {
+        var nid = selectedId;
+        commit(group === 'ws' ? 'workstream' : 'epic', function (s) {
+          var x = RM.itemById(s, nid);
+          if (x) { if (group === 'ws') x.workstream = lane; else x.epic = lane; }
+        });
+      }
+    }
+  });
+  $('#prioView').addEventListener('contextmenu', function (e) {
+    var card = e.target.closest('[data-prcard]');
+    if (!card || e.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+    e.preventDefault();
+    e.stopPropagation(); // the app-chrome theme menu must not replace this
+    var cid = card.dataset.prcard;
+    var itX = RM.itemById(state, cid);
+    if (!itX) return;
+    var cx = e.clientX, cy = e.clientY;
+    openContextMenu(cx, cy, [
+      { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
+      { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
+      state.meta.workstreamsEnabled
+        ? { icon: 'layers', label: 'Set workstream…', fn: function () {
+            openContextMenu(cx, cy, wsMenuItems(cid, function () {
+              return $('#prioView [data-prcard="' + cid + '"] [data-pract="ws"]');
+            }));
+          } }
+        : null,
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(cid); } }
+    ].filter(Boolean));
+  });
+  // cards drag between horizons (phase columns) — and across swimlanes
   $('#prioView').addEventListener('pointerdown', function (e) {
     if (e.button !== 0 || drag) return;
-    if (e.target.closest('input,textarea,button')) return;
+    if (e.target.closest('input,textarea,button,select,[contenteditable="true"],[data-pract]')) return;
     var card = e.target.closest('[data-prcard]');
     if (!card) return;
     drag = { kind: 'prcard', id: card.dataset.prcard, el: card,
-      x0: e.clientX, y0: e.clientY, moved: false, ghost: null, col: null };
+      x0: e.clientX, y0: e.clientY, moved: false, ghost: null, colEl: null };
     e.preventDefault();
   });
   function prCardDragMove(e) {
@@ -1709,21 +1969,26 @@
     drag.ghost.style.left = (e.clientX + 10) + 'px';
     drag.ghost.style.top = (e.clientY + 8) + 'px';
     var under = document.elementFromPoint(e.clientX, e.clientY);
-    var col = under && under.closest ? under.closest('[data-prcol]') : null;
-    drag.col = col ? col.dataset.prcol : null;
-    $$('#prioView .sp-col').forEach(function (c) { c.classList.toggle('drop', c.dataset.prcol === drag.col); });
+    drag.colEl = under && under.closest ? under.closest('[data-prcol]') : null;
+    $$('#prioView .sp-col').forEach(function (c) { c.classList.toggle('drop', c === drag.colEl); });
   }
   function prCardDragEnd(d) {
     if (d.ghost) d.ghost.remove();
     d.el.classList.remove('sp-dragging');
     $$('#prioView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
     var t = RM.itemById(state, d.id);
-    if (!d.col || !t || t.phaseId === d.col) { render(); return; }
-    var toId = d.col;
-    commit('move phase', function (s) {
+    var toId = d.colEl && d.colEl.dataset.prcol;
+    var lane = d.colEl ? d.colEl.getAttribute('data-prlane') : null; // null = no swimlanes
+    var group = prioGroup;
+    if (!toId || !t || (t.phaseId === toId && (lane == null || prLaneKey(t) === lane))) { render(); return; }
+    commit('move card', function (s) {
       var x = RM.itemById(s, d.id);
       s.items = s.items.filter(function (y) { return y.id !== d.id; });
       x.phaseId = toId;
+      if (lane != null) {
+        if (group === 'ws') x.workstream = lane;
+        else x.epic = lane;
+      }
       var lastIdx = -1;
       s.items.forEach(function (y, i2) { if (y.phaseId === toId) lastIdx = i2; });
       s.items.splice(lastIdx + 1, 0, x);
@@ -2207,10 +2472,9 @@
             esc('Hard deadline — click to edit' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
             (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
         })(),
-        priority: '<span class="r-risk pri' + (it.priority ? ' has-risk' : '') +
+        priority: '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
           '" tabindex="0" role="button" data-act="priority" title="' +
-          esc('Priority — click to change' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '')) + '">' +
-          (it.priority ? (RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(it.priority) : esc(it.priority)) : '') + '</span>',
+          esc(priChipTitle(it)) + '">' + priChipContent(it) + '</span>',
         assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
           (avatarStack(it.assignees) || '<i class="dws">+</i>') + '</span>'
       };
@@ -2310,7 +2574,9 @@
                   return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
                     (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
                 }
-                if (key === 'priority' && RM.priorityEnabled(state)) {
+                // stories carry no RICE inputs — under that scheme the story
+                // priority chip has nothing to show or edit
+                if (key === 'priority' && RM.priorityEnabled(state) && RM.prioritySchemeOf(state) !== 'rice') {
                   return stFix('<span class="r-risk pri' + (st.priority ? ' has-risk' : '') +
                     '" tabindex="0" role="button" data-act="st-pri" title="' +
                     esc('Story priority — click to change' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority) : '')) + '">' +
@@ -2655,7 +2921,12 @@
           ' title="' + esc(riskValueLabel(s)) + '">' + levelGlyph(s) + '</button>';
       })).join('');
     var priInfo = '';
-    if (RM.priorityEnabled(state)) {
+    if (RM.prioritySchemeOf(state) === 'rice') {
+      // the RICE scheme edits through dropdowns; the score is the priority
+      priInfo = '<label class="p-lab" style="margin-top:10px">RICE score' +
+        (riceScoreLabel(it) ? ' · ' + riceScoreLabel(it) : '') + '</label>' +
+        '<div class="rice-pop rice-panel">' + riceSelectsHtml(it) + '</div>';
+    } else if (RM.priorityEnabled(state)) {
       var priLevels = RM.prioritySchemeOf(state) === 'levels';
       priInfo = '<label class="p-lab" style="margin-top:10px">Priority</label>' +
         '<div class="seg">' +
@@ -2796,7 +3067,10 @@
               '#' + RM.colorForWs(state, it.workstream), 'Workstream') + '</div>'
           : '<div></div>') +
         '</div>' +
-        '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>') +
+        '<div style="margin-top:8px"><label class="p-lab">Epic</label>' + epicDd + '</div>' +
+        '<div style="margin-top:8px"><label class="p-lab">Jira key</label>' +
+        '<input data-f="jiraKey" placeholder="e.g. HW-12" value="' + esc(it.jiraKey || '') +
+        '" style="width:100%" title="Jira issue key — parents story rows and marks this row as an update in the Jira CSV export"></div>') +
 
       sec('schedule', it.milestone || !RM.sizingEnabled(state) ? 'Schedule' : 'Size &amp; schedule', '',
         (it.milestone || !RM.sizingEnabled(state) ? '' :
@@ -2884,6 +3158,9 @@
       '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
       '<label class="p-check fixed" style="margin:6px 0 2px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
+      '<div style="margin:6px 0 8px"><label class="p-lab">Jira key</label>' +
+      '<input data-stf="jiraKey" placeholder="e.g. HW-13" value="' + esc(st.jiraKey || '') +
+      '" style="width:100%" title="Jira issue key — marks this story as an update in the Jira CSV export"></div>' +
 
       '<div class="p-sec c open"><button class="p-sechead" tabindex="-1">' +
       '<i data-lucide="chevron-right"></i><span class="p-seclab">Rolls up to</span></button>' +
@@ -3028,6 +3305,8 @@
       '<div class="m-sec"><label>Label</label><input id="epName" style="width:100%" value="' + esc(epicName) + '">' +
       '<div class="m-hint">Renames the epic on all ' + count + ' item(s) that carry it.</div></div>' +
       '<div class="m-sec"><label>Icon</label><div class="iswatches">' + icons + '</div></div>' +
+      '<div class="m-sec"><label>Jira key</label><input id="epJira" style="width:100%" placeholder="e.g. HW-1" value="' + esc(state.epicJira[epicName] || '') + '">' +
+      '<div class="m-hint">The Jira epic these features parent to in the Jira CSV export.</div></div>' +
       '</div>' +
       '<div class="m-foot"><button data-m="x2">Cancel</button><button id="epSave" class="primary">Save</button></div></div>',
       function (host) {
@@ -3042,15 +3321,19 @@
         });
         $('#epSave', host).onclick = function () {
           var newName = $('#epName', host).value.trim();
+          var jira = RM.jiraKeyOf($('#epJira', host).value);
           closeModal();
           commit('edit epic', function (s) {
             var name2 = newName || epicName;
             if (name2 !== epicName) {
               s.items.forEach(function (x) { if (x.epic === epicName) x.epic = name2; });
               if (s.epicIcons[epicName] != null) { s.epicIcons[name2] = s.epicIcons[epicName]; delete s.epicIcons[epicName]; }
+              delete s.epicJira[epicName];
             }
             if (picked) s.epicIcons[name2] = picked;
             else delete s.epicIcons[name2];
+            if (jira) s.epicJira[name2] = jira;
+            else delete s.epicJira[name2];
           });
         };
       });
@@ -3486,6 +3769,15 @@
   $('#panel').addEventListener('change', function (e) {
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    if (e.target.dataset.rk) { // panel RICE dropdowns (rice priority scheme)
+      var rk = e.target.dataset.rk;
+      var rv = e.target.value === '' ? null : parseFloat(e.target.value);
+      commit('rice', function (s) {
+        var x = RM.itemById(s, it.id);
+        if (x) x.rice[rk] = rv;
+      });
+      return;
+    }
     var stf = e.target.dataset.stf;
     if (stf && selStory) {
       var stId = selStory;
@@ -3513,6 +3805,7 @@
         if (!st2) return;
         if (stf === 'title') st2.title = String(sval);
         else if (stf === 'done') st2.done = !!sval;
+        else if (stf === 'jiraKey') st2.jiraKey = RM.jiraKeyOf(String(sval));
       });
       return;
     }
@@ -3538,6 +3831,7 @@
       commit(f, function (s) { RM.itemById(s, it.id)[f] = val; });
       return;
     }
+    if (f === 'jiraKey') { commit('jira key', function (s) { RM.itemById(s, it.id).jiraKey = RM.jiraKeyOf(val); }); return; }
     if (f === 'num') {
       var newNum;
       commit('renumber', function (s) { newNum = RM.renumberItem(s, it.id, val); });
@@ -3902,15 +4196,7 @@
           return;
         }
         case 'priority': {
-          openDropdown(act, [{ label: '<i>None</i>', checked: !it.priority, fn: function () {
-            commit('priority', function (s) { RM.itemById(s, itemId).priority = null; });
-          } }].concat(RM.priorityOrderOf(state).map(function (pv) {
-            return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
-              label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
-              checked: it.priority === pv, fn: function () {
-              commit('priority', function (s) { RM.itemById(s, itemId).priority = pv; });
-            } };
-          })));
+          openPriorityEditor(act, itemId);
           return;
         }
         case 'asg': {
@@ -6013,11 +6299,14 @@
     }
     if (name === 'macApp') {
       // macOS: file actions live in the app-name menu (desktop.js appends the
-      // standard Hide/Quit block after these)
+      // standard Hide/Quit block after these). nativeIcon must name a macOS
+      // *template* image (monochrome, tints with the menu); Folder / Info /
+      // MultipleDocuments etc. are full-colour pictograms and look out of
+      // place next to the template ones, so those items carry no icon.
       return [
         { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProjectModal },
-        { icon: 'folder-open', nativeIcon: 'Folder', label: 'Open project', fn: openProject },
-        { icon: 'file-spreadsheet', nativeIcon: 'MultipleDocuments', label: 'Download template', fn: downloadTemplate },
+        { icon: 'folder-open', label: 'Open project', fn: openProject },
+        { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
         { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
@@ -6025,7 +6314,7 @@
         { sep: true },
         { icon: 'share', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         { sep: true },
-        { icon: 'circle-help', nativeIcon: 'Info', label: 'Help', fn: helpModal }
+        { icon: 'circle-help', label: 'Help', fn: helpModal }
       ];
     }
     if (name === 'file') {
@@ -8859,10 +9148,10 @@
     // on the start page only Escape (above, for its modals) applies
     if (document.body.classList.contains('start')) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' &&
-        (view === 'planning' || view === 'scoping')) {
+        (view === 'planning' || view === 'scoping' || view === 'prio')) {
       e.preventDefault();
-      var ff = $('#rowFilter');
-      ff.focus(); ff.select();
+      var ff = view === 'prio' ? $('#prFilter') : $('#rowFilter');
+      if (ff) { ff.focus(); ff.select(); }
       return;
     }
     if (inField) return;
@@ -9005,9 +9294,11 @@
       '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body">' +
       '<div class="m-sec"><label>Format</label><div class="p-row">' +
-      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx') + '> PNG image</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx' && pref.fmt !== 'jira') + '> PNG image</label>' +
       '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPptx"' + ck(pref.fmt === 'pptx') + '> PowerPoint (editable)</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtJira"' + ck(pref.fmt === 'jira') + '> Jira CSV</label>' +
       '</div></div>' +
+      '<div id="exTimeline"' + (pref.fmt === 'jira' ? ' hidden' : '') + '>' +
       '<div class="m-sec"><label>Date range</label><div class="p-grid2">' +
       '<div><label class="p-lab">From</label><select id="exFrom" style="width:100%">' + sprOpts(sprints[0].num) + '</select></div>' +
       '<div><label class="p-lab">To</label><select id="exTo" style="width:100%">' + sprOpts(sprints[sprints.length - 1].num) + '</select></div>' +
@@ -9036,6 +9327,8 @@
       '<label class="p-check"><input type="checkbox" id="exArrows"' + ck(pref.arrows) + '> Dependency arrows</label>' +
       '</div><div class="m-hint">The exported dates are bounded by the range AND the filtered bars — empty weeks at either end are trimmed.</div></div>' +
       '</div>' +
+      '<div id="exJira"' + (pref.fmt === 'jira' ? '' : ' hidden') + '>' + jiraOptionsHtml() + '</div>' +
+      '</div>' +
       '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
       '<button id="exGo" class="primary"><i data-lucide="image"></i>Export</button></div></div>',
       function (host) {
@@ -9047,16 +9340,31 @@
         if (splitWsChk && groupWsChk) splitWsChk.addEventListener('change', function () {
           groupWsChk.disabled = splitWsChk.checked;
         });
-        // pixel scale only means something for the PNG raster
-        ['exFmtPng', 'exFmtPptx'].forEach(function (id) {
-          $('#' + id, host).addEventListener('change', function () {
-            $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
-          });
+        // pixel scale only means something for the PNG raster; the Jira CSV
+        // has its own options and none of the timeline ones
+        function syncFmt() {
+          var jira = $('#exFmtJira', host).checked;
+          $('#exTimeline', host).hidden = jira;
+          $('#exJira', host).hidden = !jira;
+          $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
+        }
+        ['exFmtPng', 'exFmtPptx', 'exFmtJira'].forEach(function (id) {
+          $('#' + id, host).addEventListener('change', syncFmt);
         });
         // restored settings get the same dependent-control states
         if (groupWsChk && splitWsChk) groupWsChk.disabled = splitWsChk.checked;
-        $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
+        syncFmt();
         $('#exGo', host).onclick = function () {
+          if ($('#exFmtJira', host).checked) {
+            var jo = jiraOptionsOf(host);
+            if (!jo) return;
+            jiraPrefs = jo;
+            exportPrefs = Object.assign({}, exportPrefs || {}, { fmt: 'jira' });
+            saveLocal();
+            closeModal();
+            exportJiraTo(jo);
+            return;
+          }
           var exOpts = {
             fromSprint: parseInt($('#exFrom', host).value, 10),
             toSprint: parseInt($('#exTo', host).value, 10),
@@ -9086,11 +9394,50 @@
   }
   $('#btnExport').addEventListener('click', exportModal);
 
+  // Jira CSV: a file for Jira Cloud's user-level importer (work navigator →
+  // Import issues from CSV). Rows parent to the Jira keys typed into
+  // Headway; see export-jira.js. Lives in the Export dialog as a format.
+  function jiraOptionsHtml() {
+    var pref = jiraPrefs || {};
+    var d = RM_JIRA.DEFAULTS;
+    function ck(on) { return on ? ' checked' : ''; }
+    return '<div class="m-sec"><label>Rows</label><div class="p-row">' +
+      '<label class="p-check"><input type="checkbox" id="jxFeatures"' + ck(pref.features != null ? pref.features : d.features) + '> Features</label>' +
+      '<label class="p-check"><input type="checkbox" id="jxStories"' + ck(pref.stories != null ? pref.stories : d.stories) + '> Stories</label>' +
+      '</div><div class="m-hint">Without story rows, a feature’s stories become a checklist in its description.</div></div>' +
+      '<div class="m-sec"><label>Issue types</label><div class="p-grid2">' +
+      '<div><label class="p-lab">Features</label><input id="jxFeatureType" style="width:100%" value="' + esc(pref.featureType || d.featureType) + '"></div>' +
+      '<div><label class="p-lab">Stories</label><input id="jxStoryType" style="width:100%" value="' + esc(pref.storyType || d.storyType) + '"></div>' +
+      '</div><div class="m-hint">Sub-task rows need a parent: give each feature its Jira key first, or use a normal type.</div></div>' +
+      '<div class="m-sec"><label>In Jira</label><div class="m-hint">' +
+      'Work navigator → ⋯ → Import issues from CSV (needs the Create work items and Make bulk changes permissions). ' +
+      'Choose the date format <b>yyyy-MM-dd</b>. Parent and Blocked By carry the Jira keys entered in Headway; ' +
+      'rows with a Jira Key column value can be mapped as updates.</div></div>';
+  }
+  // reads the Jira options out of the dialog; false when nothing is selected
+  function jiraOptionsOf(host) {
+    var opts = {
+      features: $('#jxFeatures', host).checked,
+      stories: $('#jxStories', host).checked,
+      featureType: $('#jxFeatureType', host).value.trim(),
+      storyType: $('#jxStoryType', host).value.trim()
+    };
+    if (!opts.features && !opts.stories) { toast('Pick features, stories or both'); return false; }
+    return opts;
+  }
+  function exportJiraTo(opts) {
+    var csv = RM_JIRA.csv(state, opts);
+    saveExport({ blob: new Blob([csv], { type: 'text/csv' }), name: safeName(RM_JIRA.fileName(state)) }, CSV_KIND);
+  }
+  var CSV_KIND = { desc: 'CSV file', mime: 'text/csv', ext: 'csv' };
+  var exportSink = null; // tests intercept exports here instead of the save path
+
   // Where an exported file lands: desktop asks for a destination via the
   // native save dialog and OPENS the file afterwards; browsers with a
   // save-file picker let the user choose the folder; anything else falls
   // back to a download. `kind` = { desc, mime, ext }.
   function saveExport(r, kind) {
+    if (exportSink) return Promise.resolve(exportSink(r, kind));
     if (window.HeadwayDesktop && window.HeadwayDesktop.saveFileAndOpen) {
       return window.HeadwayDesktop.saveFileAndOpen(r.blob, r.name, kind.desc, kind.ext).then(function (p) {
         if (p) toast('Exported ' + p.replace(/^.*[\\/]/, ''));
@@ -9197,6 +9544,7 @@
     getState: function () { return RM.clone(state); },
     saveFileName: saveFileName,
     getValidation: function () { return validation; },
-    templateState: templateState
+    templateState: templateState,
+    setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; }
   };
 })();

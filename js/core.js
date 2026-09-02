@@ -117,9 +117,12 @@
     moscow: { name: 'MoSCoW', label: 'Priority', order: ['M', 'S', 'C', 'W'],
       desc: 'Must / Should / Could / Won’t — classic scope-negotiation priority.' },
     levels: { name: 'Critical / High / Medium / Low', label: 'Priority', order: ['C', 'H', 'M', 'L'],
-      desc: 'A severity ladder — Critical, High, Medium, Low.' }
+      desc: 'A severity ladder — Critical, High, Medium, Low.' },
+    // computed from the item's four RICE inputs; there is no picked value
+    rice: { name: 'RICE score', label: 'RICE', computed: true,
+      desc: 'Reach × Impact × Confidence ÷ Effort — evidence-based scoring.' }
   };
-  RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels'];
+  RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels', 'rice'];
   RM.prioritySchemeOf = function (state) {
     var s = state && state.meta && state.meta.priorityScheme;
     return RM.PRIORITY_SCHEMES[s] ? s : 'none';
@@ -738,6 +741,14 @@
   };
 
   // plain-text projection of stored rich text (tooltips, Excel cells, search)
+  // Jira issue key ("HW-12") typed in by hand after a CSV import so later
+  // exports can parent rows and update existing issues; null when unset.
+  RM.jiraKeyOf = function (v) {
+    if (typeof v !== 'string') return null;
+    var k = v.trim().toUpperCase();
+    return k ? k : null;
+  };
+
   RM.htmlToText = function (html) {
     if (!html) return '';
     var t = String(html)
@@ -1059,18 +1070,15 @@
           }
           return out;
         })(),
-        // Prioritizing view: outcome framing (the problem being attacked and
-        // the metric that proves it worked), strategy themes, RICE inputs
-        problem: typeof it.problem === 'string' ? it.problem : '',
-        measure: typeof it.measure === 'string' ? it.measure : '',
-        themes: Array.isArray(it.themes)
-          ? it.themes.map(String).filter(function (t) { return t.trim(); }) : [],
+        // RICE inputs (reach / impact / confidence % / effort) — feed the
+        // computed score when the RICE priority scheme is active
         rice: (function () {
           var r = it.rice || {};
           function num(v) { return v != null && isFinite(v) && +v >= 0 ? +v : null; }
           return { reach: num(r.reach), impact: num(r.impact), confidence: num(r.confidence), effort: num(r.effort) };
         })(),
         colorOverride: it.colorOverride || null,
+        jiraKey: RM.jiraKeyOf(it.jiraKey),
         // team-member ids working on this feature (validated against the
         // roster once the team is normalized below)
         assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
@@ -1083,6 +1091,7 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays > 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            jiraKey: RM.jiraKeyOf(s.jiraKey),
             status: s.status && m.statuses.story.indexOf(s.status) !== -1 ? s.status : null,
             size: s.size || null,
             priority: s.priority && prioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
@@ -1134,6 +1143,15 @@
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
     state.wsColors = state.wsColors && typeof state.wsColors === 'object' ? state.wsColors : {};
     state.epicIcons = state.epicIcons && typeof state.epicIcons === 'object' ? state.epicIcons : {};
+    // epic name -> Jira epic key (epics are strings on items, like epicIcons)
+    var epicJira = {};
+    if (state.epicJira && typeof state.epicJira === 'object') {
+      Object.keys(state.epicJira).forEach(function (ep) {
+        var k = RM.jiraKeyOf(state.epicJira[ep]);
+        if (k) epicJira[ep] = k;
+      });
+    }
+    state.epicJira = epicJira;
     // seed default colors/icons for well-known workstreams and epics
     state.items.forEach(function (it) {
       var w = it.workstream;

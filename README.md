@@ -89,6 +89,7 @@ rows have right-click context menus; dropdowns share one list UI.
 | Auto mode | Edit → Auto-schedule: dependency order, earliest start with free capacity, bars stretch across holiday weeks, risk buffers appended, locked items stay put; per-item "Snap earliest" in the panel |
 | Validation | Preflight chip + report: cycles, unknown/self deps, starts inside a dependency's risk buffer, missing size, headcount vs roster, weekly over-capacity |
 | Excel | **Save .xlsx** writes a styled workbook in the source template's layout at WEEK granularity (one column per week, sprint numbers merged above; solid work + pale risk cells, Next/Future markers) + Stories + Team (incl. off weeks) + a hidden `_RoadmapTool` sheet with lossless state. **Open** loads tool files losslessly and parses template-shaped workbooks — weekly or legacy sprint columns, inferred from the header dates; the pale run at either end of a bar is read as the risk area |
+| Jira | **Export → Jira CSV** writes a file for Jira Cloud's user-level CSV importer (work navigator → ⋯ → Import issues from CSV; needs only Create work items + Make bulk changes). Rows are features and/or stories with the issue type names you choose; Parent and Blocked By carry the Jira keys typed into Headway (panel "Jira key" on features and stories, Edit epic… for epics), so the first import creates issues, you paste the keys back, and later exports parent stories and re-map as updates. Dates are ISO — pick `yyyy-MM-dd` in the wizard |
 | Safety | Undo/redo (⌘Z / ⇧⌘Z), localStorage autosave (full state + UI prefs; a blocked/full storage now shows "local save unavailable" instead of failing silently), seed restore (File menu). Saved .xlsx files carry the UI prefs too — opening one on another machine restores the exact browser state |
 
 ## Files
@@ -97,6 +98,7 @@ rows have right-click context menus; dropdowns share one list UI.
 - `js/core.js` — pure logic (calendar, deps, capacity, scheduler, risk, critical path); node-testable
 - `js/excel.js` — ExcelJS import/export
 - `js/app.js` — UI
+- `js/export-jira.js` — Jira CSV export (user-level importer shape)
 - `js/desktop.js` — Tauri desktop bridge (native dialogs, disk save/load, file watching); no-op in a browser
 - `tests/seed.fixture.js` — sample document used by the test suites only
 - `js/vendor/exceljs.min.js`, `js/vendor/lucide.min.js` — vendored libraries
