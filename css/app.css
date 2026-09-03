@@ -711,6 +711,16 @@ body.cap-off .hc-lab { display: none !important; }
 .bar:hover { box-shadow: 0 2px 7px rgba(24, 36, 48, .3); filter: saturate(1.06); }
 .bar.dragging { opacity: .88; box-shadow: var(--shadow-2); z-index: 8; cursor: grabbing; }
 .bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; }
+/* a selected story wears the outline itself; its feature only keeps the row mark */
+.st-bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; z-index: 3; }
+/* unscheduled story: its name sits where the feature starts — no box */
+.st-ghost {
+  position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
+  padding-left: 5px; font-size: 11px; color: var(--ink-2); opacity: .45;
+  white-space: nowrap; pointer-events: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis;
+}
+/* column placeholder when a scale is off for this row's kind */
+.r-blank { pointer-events: none; }
 .bar .b-label {
   position: relative;
   font-size: 10.5px; font-weight: 700;
@@ -1695,7 +1705,7 @@ body.present #repPanel { display: none !important; }
 /* blank click-to-add rows (phases + resources) */
 .row.addrow { height: 26px; cursor: pointer; }
 .row.addrow .row-left { border-bottom: 1px dashed var(--line); background: var(--surface); }
-.row.addrow .row-lane { border-bottom: 1px dashed var(--line); }
+.row.addrow .row-lane { border-bottom: 1px dashed var(--line); cursor: default; }
 .addrow-lab {
   display: flex; align-items: center; gap: 5px;
   padding-left: 30px;
@@ -2191,6 +2201,10 @@ body[data-view="setup"] #panelPeek, body.present #panelPeek { display: none; }
 .su-scheme-main b { font-size: 13px; font-weight: 650; }
 .su-scheme-main span { font-size: 11.5px; color: var(--ink-3); }
 .hol-table input { width: 100%; min-height: 28px; }
+/* holiday rows edit in place: the two calendar inputs sit side by side */
+.hol-table .hol-range { display: inline-flex; align-items: center; gap: 6px; }
+.hol-table .hol-range input.cal-in { width: 108px; font-family: var(--mono); font-size: 11.5px; }
+.hol-table .hol-arrow { color: var(--ink-3); }
 
 /* ------------------------------------------------- batch-3 components */
 /* themed scrollbars (dark mode gets dark tracks) */
@@ -2346,8 +2360,6 @@ body[data-view="sprints"] #rowFilter { display: none; }
 .spv-main { flex: 1; min-width: 0; overflow: auto; padding: 0 22px 60px; }
 /* the toolbar rides the top of the scroll area; section headers tuck under it */
 .spv-main .pr-bar { position: sticky; top: 0; z-index: 3; background: var(--paper); padding: 18px 0 6px; margin: 0 0 8px; }
-.spv-seg { margin-left: auto; }
-.spv-seg button { padding: 5px 11px; }
 .spv-sec { margin-bottom: 26px; border-radius: 10px; }
 .spv-sec.drop .spv-rows { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 8px; }
 .spv-sechd {
@@ -2396,6 +2408,8 @@ body[data-view="sprints"] #rowFilter { display: none; }
 .spv-chip:hover { border-color: var(--line-3); background: var(--surface); }
 .spv-chip svg { width: 11px; height: 11px; flex: none; }
 .spv-dates { flex: none; width: 120px; font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); text-align: right; }
+/* estimate chips (size · priority · risk · weeks) on Sprinting rows */
+.spv-est { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .spv-phase { flex: none; width: 120px; font-size: 10.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .spv-feat {
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 28px;
@@ -2759,16 +2773,31 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 /* ------------------------------------------------------------ detail level */
 /* view-detail selector in the header's top line, left of "Filter rows" —
    same height/shape as the filter input and the topbar buttons */
-#detailBtn {
+/* .dm-btn is the same control on the Prioritizing and Sprinting toolbars —
+   one look, always the leftmost thing in the bar */
+#detailBtn, .dm-btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 30px; flex: 0 0 auto;
   border: 1px solid var(--line-2); border-radius: 7px; background: var(--surface);
   color: var(--ink); padding: 0 10px; margin-right: 8px; cursor: pointer;
   font-size: 12px; font-weight: 600;
 }
-#detailBtn:hover { box-shadow: var(--shadow-1); border-color: var(--line-3); }
-#detailBtn svg { width: 13px; height: 13px; color: var(--ink-2); }
-#detailBtn .dm-caret { width: 11px; height: 11px; opacity: .6; margin-left: -2px; }
+#detailBtn:hover, .dm-btn:hover { box-shadow: var(--shadow-1); border-color: var(--line-3); }
+#detailBtn svg, .dm-btn svg { width: 13px; height: 13px; color: var(--ink-2); }
+#detailBtn .dm-caret, .dm-btn .dm-caret { width: 11px; height: 11px; opacity: .6; margin-left: -2px; }
+.pr-bar .dm-btn { margin-right: 0; }
+/* Story level on the Prioritizing board: stories listed inside their card */
+.pr-stories { display: flex; flex-direction: column; gap: 2px; margin-top: 7px; }
+.pr-story { display: flex; align-items: center; gap: 5px; }
+.pr-story .pr-st-ico { width: 11px; height: 11px; color: var(--ink-3); flex: none; margin-left: 2px; }
+.pr-story .pr-st-title { flex: 1; min-width: 0; font-size: 11.5px; padding: 2px 4px; }
+.pr-story .r-risk, .pr-story .r-size, .pr-story .r-wk { flex: none; }
+.pr-st-add {
+  align-self: flex-start; border: 0; background: transparent; box-shadow: none;
+  color: var(--ink-3); font-size: 11px; padding: 2px 4px; margin-top: 1px;
+}
+.pr-st-add:hover { color: var(--blue); background: transparent; box-shadow: none; }
+.pr-st-add svg.lucide { width: 11px; height: 11px; }
 body[data-view="budget"] #detailBtn, body[data-view="setup"] #detailBtn { display: none; }
 #rowFilter { border-radius: 7px; }
 

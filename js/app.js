@@ -65,7 +65,9 @@
   var groupEpic = false;     // …and/or by epic (nested under workstream)
   var exportPrefs = null;    // last-used Export dialog settings (fmt, split, …)
   var jiraPrefs = null;      // last-used Export Jira CSV dialog settings
-  var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
+  var SNAP_MODES = ['day', 'week', 'sprint'];
+  var snapFeat = 'week';     // feature drag/place snap: 'day' | 'week' | 'sprint'
+  var snapStory = 'sprint';  // …and the story snap, chosen separately
   var detailMode = 'feature'; // Scoping/Planning row detail: phase | feature | story
   var buColW = {};           // budgeting column width overrides (key -> px)
   var buColOrder = null;     // budgeting column order (array of keys; null = default)
@@ -116,10 +118,11 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, leftCollapsed: leftCollapsed };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, leftCollapsed: leftCollapsed };
   }
   var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
   var sprLevel = 'feature'; // Sprinting view rows: 'feature' | 'story'
+  var prioLevel = 'feature'; // Prioritizing cards: 'feature' | 'story' (stories listed inside each card)
   var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
   var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
   var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
@@ -142,7 +145,10 @@
     exportPrefs = ui.exportPrefs && typeof ui.exportPrefs === 'object' ? ui.exportPrefs : null;
     jiraPrefs = ui.jiraPrefs && typeof ui.jiraPrefs === 'object' ? ui.jiraPrefs : null;
     resCollapsed = !!ui.resCollapsed;
-    snapDays = [1, 5, 10].indexOf(ui.snapDays) !== -1 ? ui.snapDays : 5;
+    // pre-1.1 snapshots stored one numeric snap (1 / 5 / 10 days) for everything
+    var legacySnap = ui.snapDays === 1 ? 'day' : ui.snapDays === 10 ? 'sprint' : null;
+    snapFeat = SNAP_MODES.indexOf(ui.snapFeat) !== -1 ? ui.snapFeat : (legacySnap || 'week');
+    snapStory = SNAP_MODES.indexOf(ui.snapStory) !== -1 ? ui.snapStory : 'sprint';
     scopeColW = ui.scopeColW && typeof ui.scopeColW === 'object' ? ui.scopeColW : {};
     autoOrder = ui.autoOrder !== false; // default true
     showCrit = ui.showCrit !== false;   // default true
@@ -164,6 +170,7 @@
     leftCollapsed = ui.leftCollapsed === true;
     prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
     sprLevel = ui.sprLevel === 'story' ? 'story' : 'feature';
+    prioLevel = ui.prioLevel === 'story' ? 'story' : 'feature';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
     prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
@@ -293,7 +300,6 @@
       push('timeline', lbl + ' — Milestone', p.milestone ? 'yes' : 'no', it.milestone ? 'yes' : 'no');
       push('timeline', lbl + ' — Locked', p.locked ? 'yes' : 'no', it.locked ? 'yes' : 'no');
       push('status', lbl + ' — Done', p.done ? 'done' : 'not done', it.done ? 'done' : 'not done');
-      push('status', lbl + ' — Status', p.status, it.status);
       push('status', lbl + ' — Assignees', names(a, p.assignees), names(b, it.assignees));
       var sa = byId(p.stories), sb = byId(it.stories);
       (it.stories || []).forEach(function (st) {
@@ -307,7 +313,6 @@
         push('timeline', sl + ' — Duration', dWeeks(sp.durDays), dWeeks(st.durDays));
         push('timeline', sl + ' — Deadline', sp.deadline, st.deadline);
         push('status', sl + ' — Done', sp.done ? 'done' : 'not done', st.done ? 'done' : 'not done');
-        push('status', sl + ' — Status', sp.status, st.status);
         push('status', sl + ' — Assignees', names(a, sp.assignees), names(b, st.assignees));
       });
       (p.stories || []).forEach(function (st) {
@@ -391,7 +396,7 @@
     function optNames(s) { return ((s && s.options) || []).map(function (o) { return o.name; }).join(', '); }
     push('setup', 'Other options', optNames(a), optNames(b));
     // rateCard sits inside meta too — drop the raw duplicate from the generic pass
-    ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard' && op[1] !== 'Setup — statuses'; });
+    ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard'; });
     return { ops: ops, tl: tl };
   }
   // merge coalesced ops: same field keeps its FIRST old and LAST new value
@@ -419,9 +424,11 @@
     });
     return out.filter(function (t) { return !(t.s0 === t.s1 && t.d0 === t.d1); });
   }
+  var aiActor = false; // true while the AI assistant applies an edit (history attribution)
   function recordHistory(label, prevJson) {
     if (!label) return;
     var u = userName();
+    if (aiActor) u = (u || 'Unknown user') + ' · AI';
     var h = state.history = Array.isArray(state.history) ? state.history : [];
     var ops = [], tl = [];
     if (prevJson) {
@@ -900,19 +907,38 @@
     saveLocal();
     render();
   }
+  // Feature / Story rows only — the Prioritizing board and Sprinting page
+  // have no phase-only reading
+  var LEVEL_MODES = DM_MODES.slice(1);
+  // ONE level dropdown for every view: same markup (icon · label · caret),
+  // same title, same place — the far left of the view's toolbar
+  function levelBtnInner(modes, current) {
+    var m = modes.filter(function (x) { return x[0] === current; })[0] || modes[0];
+    return '<i data-lucide="' + m[2] + '"></i><span>' + esc(m[1]) + '</span><i data-lucide="chevron-down" class="dm-caret"></i>';
+  }
+  function levelBtnTitle(modes, current) {
+    var m = modes.filter(function (x) { return x[0] === current; })[0] || modes[0];
+    return 'Detail level: ' + m[1] + ' — click to change';
+  }
+  function levelBtnHtml(attr, modes, current) {
+    return '<button class="dm-btn" ' + attr + ' title="' + esc(levelBtnTitle(modes, current)) + '">' +
+      levelBtnInner(modes, current) + '</button>';
+  }
+  function openLevelMenu(anchor, modes, current, pick) {
+    openDropdown(anchor, modes.map(function (m) {
+      return { icon: m[2], label: esc(m[1]) + ' <small>' + esc(m[3]) + '</small>',
+        checked: current === m[0], fn: function () { pick(m[0]); } };
+    }));
+  }
   function syncDetailBtn() {
     var b = $('#detailBtn');
     if (!b) return;
-    var m = DM_MODES.filter(function (x) { return x[0] === detailMode; })[0] || DM_MODES[1];
-    b.innerHTML = '<i data-lucide="' + m[2] + '"></i><span>' + esc(m[1]) + '</span><i data-lucide="chevron-down" class="dm-caret"></i>';
-    b.title = 'Detail level: ' + m[1] + ' — click to change';
+    b.innerHTML = levelBtnInner(DM_MODES, detailMode);
+    b.title = levelBtnTitle(DM_MODES, detailMode);
     if (window.lucide) lucide.createIcons();
   }
   $('#detailBtn').addEventListener('click', function () {
-    openDropdown($('#detailBtn'), DM_MODES.map(function (m) {
-      return { icon: m[2], label: esc(m[1]) + ' <small>' + esc(m[3]) + '</small>',
-        checked: detailMode === m[0], fn: function () { setDetailMode(m[0]); } };
-    }));
+    openLevelMenu($('#detailBtn'), DM_MODES, detailMode, setDetailMode);
   });
 
   // ------------------------------------------------------------ options
@@ -1139,8 +1165,8 @@
     moscow: { M: 'Must', S: 'Should', C: 'Could', W: 'Won’t' },
     levels: { C: 'Critical', H: 'High', M: 'Medium', L: 'Low' }
   };
-  function priorityValueLabel(v) {
-    var mp = PRIORITY_VALUE_LABELS[RM.prioritySchemeOf(state)] || {};
+  function priorityValueLabel(v, kind) {
+    var mp = PRIORITY_VALUE_LABELS[RM.prioritySchemeOf(state, kind)] || {};
     return mp[v] || v || '';
   }
 
@@ -1584,43 +1610,6 @@
     });
     return out;
   }
-  // pick a color for one status (Setup → Statuses): preset swatches or a
-  // custom color; "automatic" clears back to position-based defaults
-  var STATUS_SWATCHES = ['6E7883', '0057B8', '08875B', 'A66A00', 'B3362B', 'A14FBF', '0E7C86', 'C25E0E'];
-  function statusColorMenu(btn, kind, stName) {
-    var r = btn.getBoundingClientRect();
-    var cur = (state.meta.statusColors || {})[stName] || null;
-    var html = '<div class="swatches" style="padding:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:240px">' +
-      '<button class="swatch' + (!cur ? ' on' : '') + '" data-stpick="" title="Automatic (by position)" style="background:linear-gradient(135deg,#6E7883 45%,#08875B 55%)"></button>' +
-      STATUS_SWATCHES.map(function (hx) {
-        return '<button class="swatch' + (cur === hx ? ' on' : '') + '" data-stpick="' + hx + '" style="background:#' + hx + '"></button>';
-      }).join('') +
-      '<input type="color" data-stpickc value="#' + (cur || '0057B8') + '" title="Custom color">' +
-      '</div>';
-    openPopover(r.left, r.bottom + 4, html, function (host) {
-      host.addEventListener('click', function (ev) {
-        var b = ev.target.closest('[data-stpick]');
-        if (!b) return;
-        var hex = b.dataset.stpick;
-        closePopover();
-        commit('status color', function (s) {
-          s.meta.statusColors = s.meta.statusColors || {};
-          if (hex) s.meta.statusColors[stName] = hex;
-          else delete s.meta.statusColors[stName];
-        });
-      });
-      var ci = host.querySelector('[data-stpickc]');
-      if (ci) ci.addEventListener('change', function () {
-        var hex = ci.value.replace('#', '').toUpperCase();
-        closePopover();
-        commit('status color', function (s) {
-          s.meta.statusColors = s.meta.statusColors || {};
-          s.meta.statusColors[stName] = hex;
-        });
-      });
-    });
-  }
-
   // ---------------------------------------------------------- prioritizing view
   // Kanban of the phases (the horizons). Cards carry the same size, priority,
   // epic and workstream chips as everywhere else, plus whichever scope
@@ -1694,6 +1683,195 @@
       } };
     })));
   }
+  // a story's priority picker — shared by the panel and the Prioritizing board
+  function storyPriorityMenu(anchor, itemId, stId) {
+    var stPri = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).priority;
+    function setPri(pv) {
+      commit('story priority', function (s) {
+        var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+        if (st2) st2.priority = pv;
+      });
+    }
+    var stLevels = RM.prioritySchemeOf(state, 'story') === 'levels';
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !stPri, fn: function () { setPri(null); } }]
+      .concat(RM.priorityOrderOf(state, 'story').map(function (pv) {
+        return { icon: stLevels ? LEVEL_GLYPHS[pv] : undefined,
+          label: (stLevels ? '' : pv + ' · ') + esc(priorityValueLabel(pv, 'story')),
+          checked: stPri === pv, fn: function () { setPri(pv); } };
+      })));
+  }
+  // ---- story estimate fields: setters, pickers and ONE chip set shared by
+  // Planning, Scoping, Sprinting and Prioritizing (size · priority · risk ·
+  // duration, each only when its scheme is on)
+  function withStory(label, itemId, stId, fn) {
+    commit(label, function (s) {
+      var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+      if (st2) fn(st2, s);
+    });
+  }
+  function setStorySize(itemId, stId, sz) {
+    withStory('story size', itemId, stId, function (st2, s) {
+      st2.size = sz;
+      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, RM.sizeDays(s, sz, 'story'));
+    });
+  }
+  function setStoryRisk(itemId, stId, rv) {
+    withStory('story risk', itemId, stId, function (st2) { st2.risk = rv; });
+  }
+  // days = null clears the duration (and takes the story off the timeline)
+  function setStoryDur(itemId, stId, days) {
+    withStory('story duration', itemId, stId, function (st2, s) {
+      if (days == null) { st2.durDays = null; st2.startDay = null; }
+      else st2.durDays = st2.startDay != null ? RM.stretchSpan(s.meta, st2.startDay, days) : days;
+    });
+  }
+  function storySizeMenu(anchor, itemId, stId) {
+    var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).size;
+    openDropdown(anchor, [{ label: '<i>no size</i>', checked: !cur, fn: function () { setStorySize(itemId, stId, null); } }]
+      .concat(RM.sizeOrderOf(state, 'story').map(function (sz) {
+        return { label: esc(sz) + ' <small>' + sizeHuman(sz, 'story') + '</small>', checked: cur === sz,
+          fn: function () { setStorySize(itemId, stId, sz); } };
+      })));
+  }
+  function storyRiskMenu(anchor, itemId, stId) {
+    if (RM.riskSchemeOf(state) === 'auto') return; // computed for features only
+    var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).risk;
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !cur, fn: function () { setStoryRisk(itemId, stId, null); } }]
+      .concat(RM.riskOrderOf(state).map(function (rv) {
+        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv)), checked: cur === rv,
+          fn: function () { setStoryRisk(itemId, stId, rv); } };
+      })));
+  }
+  // inline weeks editor for a duration chip: empty clears, a number sets
+  // working days; the caller commits through onSave(days | null)
+  function inlineWeeksEditor(chip, curDays, onSave) {
+    if (chip.querySelector('input')) return;
+    var inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0.2'; inp.step = '0.2';
+    inp.value = curDays != null ? Math.round(curDays / SPW() * 100) / 100 : '';
+    inp.className = 'hc-edit'; inp.style.width = '30px';
+    chip.textContent = '';
+    chip.appendChild(inp);
+    inp.focus(); inp.select();
+    var done = false;
+    var fin = function (saveIt) {
+      if (done) return; done = true;
+      if (!saveIt) { render(); return; }
+      var v = String(inp.value).trim();
+      onSave(v === '' ? null : Math.max(1, Math.round(Math.max(0.2, parseFloat(v) || 1) * SPW())));
+    };
+    inp.addEventListener('blur', function () { fin(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') fin(true);
+      if (ev.key === 'Escape') fin(false);
+    });
+  }
+  // a story's duration readout: its own span, else its size estimate
+  function storyWeeks(st) {
+    var days = st.startDay != null && st.durDays != null ? RM.workInSpan(state.meta, st.startDay, st.durDays)
+      : st.durDays != null ? st.durDays : RM.sizeDays(state, st.size, 'story');
+    return days ? fmtDays(days) : '';
+  }
+  // story chip HTML; attr names the click hook ('data-act' on rows,
+  // 'data-spact' on Sprinting, 'data-prstact' on Prioritizing cards). Values
+  // are st-size / st-pri / st-risk / st-wk everywhere.
+  function storyChipHtml(key, st, attr, blank) {
+    blank = blank == null ? '·' : blank;
+    if (key === 'size') {
+      if (!RM.sizingEnabled(state, 'story')) return '';
+      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="st-size" title="Story size — click to change">' +
+        (st.size ? esc(st.size) : blank) + '</span>';
+    }
+    if (key === 'pri') {
+      if (!RM.priorityEnabled(state, 'story')) return '';
+      return '<span class="r-risk pri' + (st.priority ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-pri" title="' +
+        esc('Story priority — click to change' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
+        (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
+    }
+    if (key === 'risk') {
+      if (!RM.riskEnabled(state)) return '';
+      if (RM.riskSchemeOf(state) === 'auto') return '<span class="r-risk rk-none" title="Dependency risk is computed per feature"></span>';
+      return '<span class="r-risk rk-none' + (st.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-risk" title="' +
+        esc(RM.riskColLabel(state) + ' — click to change' + (st.risk ? '\nNow: ' + riskValueLabel(st.risk) : '')) + '">' +
+        (st.risk ? levelGlyph(st.risk) : blank) + '</span>';
+    }
+    if (key === 'dur') {
+      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="st-wk" title="Story duration — click to edit; empty clears it">' +
+        (storyWeeks(st) || blank) + '</span>';
+    }
+    return '';
+  }
+  // routes a story chip click; returns true when it handled one
+  function storyChipAction(act, anchor, itemId, stId) {
+    if (act === 'st-size') storySizeMenu(anchor, itemId, stId);
+    else if (act === 'st-pri') storyPriorityMenu(anchor, itemId, stId);
+    else if (act === 'st-risk') storyRiskMenu(anchor, itemId, stId);
+    else if (act === 'st-wk') {
+      var stW = storyById(RM.itemById(state, itemId) || {}, stId);
+      inlineWeeksEditor(anchor, stW ? stW.durDays : null, function (days) { setStoryDur(itemId, stId, days); });
+    } else return false;
+    return true;
+  }
+  // feature twins for the boards that lack the row chips (Sprinting, Prioritizing)
+  function itemRiskMenu(anchor, itemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it || RM.riskSchemeOf(state) === 'auto') return; // computed, not set
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !it.risk, fn: function () { setItemRisk(itemId, null); } }]
+      .concat(RM.riskOrderOf(state).map(function (rv) {
+        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv)), checked: it.risk === rv,
+          fn: function () { setItemRisk(itemId, rv); } };
+      })));
+  }
+  function setItemDur(itemId, days) {
+    commit('duration', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (!t || t.milestone) return;
+      if (days == null) { t.startDay = null; t.durDays = null; }
+      else t.durDays = t.startDay != null ? RM.stretchSpan(s.meta, t.startDay, days) : days;
+    });
+  }
+  function itemChipHtml(key, it, attr) {
+    if (it.milestone) return '';
+    if (key === 'size') {
+      if (!RM.sizingEnabled(state)) return '';
+      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>';
+    }
+    if (key === 'pri') {
+      if (!RM.priorityEnabled(state)) return '';
+      return '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="priority" title="' +
+        esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>';
+    }
+    if (key === 'risk') {
+      if (!RM.riskEnabled(state)) return '';
+      if (RM.riskSchemeOf(state) === 'auto') {
+        var rkA = RM.depRisk(state, it);
+        return '<span class="r-risk rk-' + rkA.level + '" title="' + esc(rkA.level === 'none' ? 'No dependency risk detected' : 'Dependency risk ' + rkA.level) + '">' +
+          (rkA.level === 'none' ? '·' : levelGlyph(rkA.level.charAt(0).toUpperCase())) + '</span>';
+      }
+      return '<span class="r-risk rk-none' + (it.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="risk" title="' +
+        esc(RM.riskColLabel(state) + ' — click to change' + (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '')) + '">' +
+        (it.risk ? levelGlyph(it.risk) : '·') + '</span>';
+    }
+    if (key === 'dur') {
+      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="dur" title="Duration — click to edit; empty takes it off the timeline">' + totalWeeks(it) + '</span>';
+    }
+    return '';
+  }
+  function itemChipAction(act, anchor, itemId) {
+    var itA = RM.itemById(state, itemId);
+    if (!itA) return false;
+    if (act === 'size') {
+      openDropdown(anchor, [{ label: '<i>no size</i>', checked: !itA.size, fn: function () { setItemSize(itemId, null); } }]
+        .concat(RM.sizeOrderOf(state).map(function (sz) {
+          return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itA.size === sz, fn: function () { setItemSize(itemId, sz); } };
+        })));
+    } else if (act === 'priority') openPriorityEditor(anchor, itemId);
+    else if (act === 'risk') itemRiskMenu(anchor, itemId);
+    else if (act === 'dur') inlineWeeksEditor(anchor, itA.durDays, function (days) { setItemDur(itemId, days); });
+    else return false;
+    return true;
+  }
   // sort under the active framework: RICE score descending, else the
   // scheme's ladder; unset last, ties keep document order
   function prioRank(it) {
@@ -1743,9 +1921,21 @@
         richDisplay(RM.scopeValue(it, c[0])) + '</div>';
     }).join('');
     var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
+    // Story level: the card lists its stories — title inline-editable, own
+    // priority chip — under the feature's own fields
+    var stories = prioLevel === 'story' && !it.milestone
+      ? '<div class="pr-stories">' + (it.stories || []).map(function (st) {
+          return '<div class="pr-story" data-prst="' + st.id + '">' +
+            '<i data-lucide="corner-down-right" class="pr-st-ico"></i>' +
+            '<input class="pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title) + '">' +
+            ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
+            '</div>';
+        }).join('') +
+        '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>Add story</button></div>'
+      : '';
     return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
       '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
-      fields +
+      fields + stories +
       '<div class="pr-chips">' +
       (RM.sizingEnabled(state)
         ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size — click to change">' +
@@ -1754,6 +1944,7 @@
         ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
           '" tabindex="0" role="button" data-pract="priority" title="' + esc(priChipTitle(it)) + '">' +
           (priChipContent(it) || '·') + '</span>' : '') +
+      itemChipHtml('risk', it, 'data-pract') + itemChipHtml('dur', it, 'data-pract') +
       (prioGroup === 'epic' ? '' : // the swimlane already names the epic
         '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic — click to change">' +
         '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>') +
@@ -1822,6 +2013,7 @@
         '<i data-lucide="chevron-down"></i></button>' : '';
     host.innerHTML = '<div class="sp-page">' +
       '<div class="pr-bar">' +
+      levelBtnHtml('data-prdd="level"', LEVEL_MODES, prioLevel) +
       '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
       '<input id="prFilter" type="search" placeholder="Filter cards" aria-label="Filter cards" value="' + esc(filterText) + '">' +
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
@@ -1865,6 +2057,16 @@
         var x = RM.itemById(s, id);
         if (x) x.feature = val;
       });
+      return;
+    }
+    if (t.dataset.prstf === 'title') {
+      var stRow = t.closest('[data-prst]'), stCard = t.closest('[data-prcard]');
+      if (!stRow || !stCard) return;
+      var stId0 = stRow.dataset.prst, cardId0 = stCard.dataset.prcard, tv = t.value;
+      commit('rename story', function (s) {
+        var st2 = storyById(RM.itemById(s, cardId0) || {}, stId0);
+        if (st2) st2.title = tv;
+      });
     }
   });
   // card scope fields are the same rich editors as the scoping grid: the
@@ -1899,13 +2101,17 @@
       render();
       return;
     }
-    if (e.key === 'Enter' && t.dataset && t.dataset.prf === 'feature') t.blur();
+    if (e.key === 'Enter' && t.dataset && (t.dataset.prf === 'feature' || t.dataset.prstf === 'title')) t.blur();
   });
   $('#prioView').addEventListener('click', function (e) {
     var dd = e.target.closest('[data-prdd]');
     if (dd) {
       var kind = dd.dataset.prdd;
-      if (kind === 'group') {
+      if (kind === 'level') {
+        openLevelMenu(dd, LEVEL_MODES, prioLevel, function (mode) {
+          if (prioLevel !== mode) { prioLevel = mode; saveLocal(); render(); }
+        });
+      } else if (kind === 'group') {
         openDropdown(dd, Object.keys(PR_GROUPS).map(function (k) {
           if (k === 'ws' && !state.meta.workstreamsEnabled) return null;
           return { icon: PR_GROUPS[k][0], label: esc(PR_GROUPS[k][1]), checked: prioGroup === k, fn: function () {
@@ -1949,6 +2155,26 @@
       }));
       return;
     }
+    // story rows (Story level): priority chip, add-story button
+    var stChipP = e.target.closest('[data-prstact]');
+    if (stChipP) {
+      var stRowP = stChipP.closest('[data-prst]'), stCardP = stChipP.closest('[data-prcard]');
+      if (stRowP && stCardP) storyChipAction(stChipP.dataset.prstact, stChipP, stCardP.dataset.prcard, stRowP.dataset.prst);
+      return;
+    }
+    var stAdd = e.target.closest('[data-prstadd]');
+    if (stAdd) {
+      var stCardA = stAdd.closest('[data-prcard]');
+      if (!stCardA) return;
+      var addId = stCardA.dataset.prcard, newSt = RM.uid('s');
+      commit('add story', function (s) {
+        var x = RM.itemById(s, addId);
+        if (x) x.stories.push({ id: newSt, title: '', done: false });
+      });
+      var ni = $('#prioView [data-prst="' + newSt + '"] input');
+      if (ni) ni.focus();
+      return;
+    }
     var chip = e.target.closest('[data-pract]');
     if (chip) {
       var cardC = chip.closest('[data-prcard]');
@@ -1966,6 +2192,7 @@
           } };
         })));
       } else if (act === 'priority') openPriorityEditor(chip, cid);
+      else if (act === 'risk' || act === 'dur') itemChipAction(act, chip, cid);
       else if (act === 'epic') openDropdown(chip, setEpicMenu(cid, true));
       else if (act === 'ws') {
         openDropdown(chip, wsMenuItems(cid, function () {
@@ -2140,8 +2367,7 @@
       sprTag(it, num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic — click to change">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
-      (RM.sizingEnabled(state) && !it.milestone
-        ? '<span class="r-size" tabindex="0" role="button" data-spact="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>' : '') +
+      '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return itemChipHtml(k, it, 'data-spact'); }).join('') + '</span>' +
       '<span class="spv-dates">' + esc(sprDates(it)) + '</span>' +
       '<span class="spv-phase" title="Phase">' + esc(sprPhaseName(it)) + '</span>' +
       '</div>';
@@ -2153,6 +2379,7 @@
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
       (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own — follows the feature">with feature</span>')) +
+      '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
       '<span class="spv-dates">' + esc(own ? sprDates(st) : '') + '</span>' +
       '</div>';
   }
@@ -2194,13 +2421,11 @@
     host.innerHTML = '<div class="spv">' +
       '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
       '<div class="spv-main" id="spvMain"><div class="pr-bar">' +
+      levelBtnHtml('data-spdd="level"', LEVEL_MODES, sprLevel) +
       '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
       '<input id="spFilter" type="search" placeholder="Filter rows" aria-label="Filter rows" value="' + esc(filterText) + '">' +
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
-      '<div class="seg spv-seg">' +
-      '<button data-splevel="feature"' + (sprLevel === 'feature' ? ' class="on"' : '') + ' title="One row per feature"><i data-lucide="rows-3"></i>Features</button>' +
-      '<button data-splevel="story"' + (sprLevel === 'story' ? ' class="on"' : '') + ' title="One row per story, grouped by feature"><i data-lucide="list-tree"></i>Stories</button>' +
-      '</div></div>' +
+      '</div>' +
       secs.map(sprSectionHtml).join('') + '</div></div>';
     if (window.lucide) lucide.createIcons();
     var main = $('#spvMain');
@@ -2286,9 +2511,11 @@
       }
       return;
     }
-    var lv = e.target.closest('[data-splevel]');
+    var lv = e.target.closest('[data-spdd="level"]');
     if (lv) {
-      if (sprLevel !== lv.dataset.splevel) { sprLevel = lv.dataset.splevel; saveLocal(); render(); }
+      openLevelMenu(lv, LEVEL_MODES, sprLevel, function (mode) {
+        if (sprLevel !== mode) { sprLevel = mode; saveLocal(); render(); }
+      });
       return;
     }
     var add = e.target.closest('[data-spadd]');
@@ -2299,12 +2526,9 @@
       var cid = row.dataset.spid;
       var itC = RM.itemById(state, cid);
       if (!itC) return;
-      if (chip.dataset.spact === 'size') {
-        openDropdown(chip, [{ label: '<i>no size</i>', checked: !itC.size, fn: function () { setItemSize(cid, null); } }]
-          .concat(RM.sizeOrderOf(state).map(function (sz) {
-            return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itC.size === sz, fn: function () { setItemSize(cid, sz); } };
-          })));
-      } else if (chip.dataset.spact === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      if (row.dataset.spst) storyChipAction(chip.dataset.spact, chip, cid, row.dataset.spst);
+      else if (chip.dataset.spact === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      else itemChipAction(chip.dataset.spact, chip, cid);
       return;
     }
     if (row && !e.target.closest('input,button')) {
@@ -2576,7 +2800,7 @@
 
   function phSpanDragMove(e, dx) {
     var dd = daysFromDx(dx);
-    var sn = e.altKey ? function (d) { return d; } : snapTo;
+    var sn = e.altKey ? function (d) { return d; } : function (d) { return snapTo(d, 'feature'); };
     var lo = drag.lo0, hi = drag.hi0;
     if (drag.mode === 'move') {
       lo = Math.max(0, sn(drag.lo0 + dd));
@@ -2742,6 +2966,23 @@
     var vlist = validation.byItem[it.id] || [];
     var sizeCls = !it.size ? (isScheduled(it) ? ' missing' : '') : (sizeMatches(it) ? '' : ' custom');
     var rk = RM.depRisk(state, it, cyclic);
+    // the feature's risk chip — same markup in the Scoping grid and the
+    // Planning row: computed under the auto scheme, picked otherwise
+    function riskChipHtml() {
+      var sch = RM.riskSchemeOf(state);
+      if (sch === 'auto') {
+        var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
+          : 'Dependency risk ' + rk.level + ':\n\u00B7 ' + rk.reasons.join('\n\u00B7 ');
+        return '<span class="r-risk rk-' + rk.level + '" tabindex="0" title="' + esc(autoTitle) + '">' +
+          (rk.level === 'none' ? '' : levelGlyph(rk.level.charAt(0).toUpperCase())) + '</span>';
+      }
+      var hintLevel = sch === 'risk' ? rk.level : 'none'; // graph hint only for risk
+      var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) + ' \u2014 click to change' +
+        (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '');
+      return '<span class="r-risk rk-' + hintLevel + (it.risk ? ' has-risk' : '') +
+        '" tabindex="0" role="button" data-act="risk" title="' + esc(chipTitle) + '">' +
+        (it.risk ? levelGlyph(it.risk) : (hintLevel === 'none' ? '' : levelGlyph(hintLevel.charAt(0).toUpperCase()))) + '</span>';
+    }
     var riskTitle = 'Risk — click to change' +
       (rk.level !== 'none' ? '\nDependency risk ' + rk.level + ':\n· ' + rk.reasons.join('\n· ') : '');
     var laneInner = '';
@@ -2782,7 +3023,7 @@
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
       laneInner =
-        '<div class="bar' + (isSel(it.id) ? ' selected' : '') +
+        '<div class="bar' + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -2853,22 +3094,7 @@
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
         size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
-        risk: (function () {
-          var sch = RM.riskSchemeOf(state);
-          if (sch === 'auto') {
-            // computed straight from the dependency graph — read-only
-            var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
-              : 'Dependency risk ' + rk.level + ':\n\u00B7 ' + rk.reasons.join('\n\u00B7 ');
-            return '<span class="r-risk rk-' + rk.level + '" tabindex="0" title="' + esc(autoTitle) + '">' +
-              (rk.level === 'none' ? '' : levelGlyph(rk.level.charAt(0).toUpperCase())) + '</span>';
-          }
-          var hintLevel = sch === 'risk' ? rk.level : 'none'; // graph hint only for risk
-          var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) + ' \u2014 click to change' +
-            (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '');
-          return '<span class="r-risk rk-' + hintLevel + (it.risk ? ' has-risk' : '') +
-            '" tabindex="0" role="button" data-act="risk" title="' + esc(chipTitle) + '">' +
-            (it.risk ? levelGlyph(it.risk) : (hintLevel === 'none' ? '' : levelGlyph(hintLevel.charAt(0).toUpperCase()))) + '</span>';
-        })(),
+        risk: riskChipHtml(),
         duration: it.milestone
           ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — 0 duration. Enter a duration to turn it back into a feature">0w</span>'
           : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' +
@@ -2946,7 +3172,13 @@
       (view === 'scoping' ? '' : (function () {
         // the planning chips follow the user's column order/visibility
         var chips = {
-          size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>',
+          size: RM.sizingEnabled(state)
+            ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
+            : '<span class="r-size r-blank"></span>',
+          pri: RM.priorityEnabled(state)
+            ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
+            : '<span class="r-risk r-blank"></span>',
+          risk: riskChipHtml(),
           dur: it.milestone
             ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
             : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>',
@@ -2972,6 +3204,14 @@
             // scoping: the story title edits in place like the feature titles
             ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
             : '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>') +
+          (view === 'scoping' ? '' : plColsVisible().map(function (k) {
+            if (k === 'asg') {
+              return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
+                (avatarStack(st.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
+            }
+            // keep the column aligned even when the story scale is off
+            return storyChipHtml(k, st, 'data-act') || '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : 'r-risk') + ' r-blank"></span>';
+          }).join('')) +
           '</div>' +
           (view === 'scoping'
             // scoping: stories share the grid — text columns, Size, Assignees,
@@ -2992,26 +3232,15 @@
                 function stFix(inner) {
                   return '<div class="sc-cell sc-fix" data-col="' + key + '" style="width:' + w + 'px">' + inner + '</div>';
                 }
-                if (key === 'size' && RM.sizingEnabled(state)) {
-                  return stFix('<span class="r-size" tabindex="0" role="button" data-act="st-size" title="Story size — click to change">' +
-                    (st.size ? esc(st.size) : '') + '</span>');
-                }
+                if (key === 'size' && RM.sizingEnabled(state, 'story')) return stFix(storyChipHtml('size', st, 'data-act', ''));
+                if (key === 'risk' && RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') return stFix(storyChipHtml('risk', st, 'data-act', ''));
                 if (key === 'assignees') {
                   return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
                     (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
                 }
-                // stories carry no RICE inputs — under that scheme the story
-                // priority chip has nothing to show or edit
-                if (key === 'priority' && RM.priorityEnabled(state) && RM.prioritySchemeOf(state) !== 'rice') {
-                  return stFix('<span class="r-risk pri' + (st.priority ? ' has-risk' : '') +
-                    '" tabindex="0" role="button" data-act="st-pri" title="' +
-                    esc('Story priority — click to change' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority) : '')) + '">' +
-                    (st.priority ? (RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : '') + '</span>');
-                }
-                if (key === 'duration') {
-                  return stFix('<span class="r-wk editable" tabindex="0" role="button" data-act="st-wk" title="Story duration — click to edit; empty clears it">' +
-                    (st.durDays != null ? totalWeeks(st) : '') + '</span>');
-                }
+                // stories rank on their own priority scheme (never RICE)
+                if (key === 'priority' && RM.priorityEnabled(state, 'story')) return stFix(storyChipHtml('pri', st, 'data-act', ''));
+                if (key === 'duration') return stFix(storyChipHtml('dur', st, 'data-act', ''));
                 if (key === 'start') {
                   return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start — click to edit; empty takes it off the timeline">' +
                     (st.startDay != null ? esc(RM.fmtShort(RM.dayToDate(state.meta, st.startDay))) : '') + '</span>');
@@ -3026,7 +3255,6 @@
                 // rolled up from the feature — shown dimmed and italic
                 var roll = key === 'workstream' ? esc(it.workstream || RM.defaultWsName(state))
                   : key === 'epic' ? esc(it.epic || '')
-                  : key === 'risk' ? (it.risk ? levelGlyph(it.risk) : '')
                   : '';
                 return '<div class="sc-cell sc-fix sc-na" data-col="' + key + '" style="width:' + w +
                   'px" title="Rolls up from the feature — not set per story">' +
@@ -3038,12 +3266,16 @@
                     var stW = Math.max(6, st.durDays * dayPx());
                     // quiet label: inside when it fits, else right of the bar
                     var stLabW = st.title.length * 5.5 + 12;
-                    return '<div class="st-bar" data-stbar="' + st.id + '" data-id="' + it.id + '" style="left:' + (st.startDay * dayPx()) +
+                    return '<div class="st-bar' + (selStory === st.id ? ' selected' : '') + '" data-stbar="' + st.id + '" data-id="' + it.id + '" style="left:' + (st.startDay * dayPx()) +
                       'px;width:' + stW + 'px;--bar-c:' + color + '">' +
                       '<span class="stb-label' + (stLabW <= stW ? '' : ' out') + '">' + esc(st.title) + '</span>' +
                       '<span class="bh l" data-act="sh-l"></span><span class="bh r" data-act="sh-r"></span></div>';
                   })()
-                : '') +
+                // no timeline of its own: the title sits, faint and boxless,
+                // where the feature starts — it rides along with the feature
+                : (isScheduled(it)
+                    ? '<span class="st-ghost" style="left:' + (it.startDay * dayPx()) + 'px">' + esc(st.title) + '</span>'
+                    : '')) +
               '</div></div>'));
       });
       html.push(
@@ -3135,8 +3367,8 @@
         return '<div class="row addrow' + (sub ? ' sub' : '') + '" data-kind="addrow" data-phase="' + ph.id + '"' +
           (group && group.epic != null ? ' data-epic="' + esc(group.epic) + '"' : '') +
           (group && group.workstream != null ? ' data-ws="' + esc(group.workstream) + '"' : '') +
-          ' title="Add a feature to ' + esc(where) + '">' +
-          '<div class="row-left"><span class="addrow-lab"><i data-lucide="plus"></i> Add feature</span></div>' +
+          '>' +
+          '<div class="row-left" title="Add a feature to ' + esc(where) + '"><span class="addrow-lab"><i data-lucide="plus"></i> Add feature</span></div>' +
           '<div class="row-lane"></div></div>';
       }
       var wsKey = null;
@@ -3163,8 +3395,10 @@
         items.forEach(function (it) { itemRowsHtml(html, it, cyclic); });
       }
 
-      // blank click-to-add row at the bottom of every phase
-      html.push(addRowHtml(p, null, false));
+      // click-to-add row at the bottom of the phase — only when the phase
+      // isn't already split into groups that carry their own add rows
+      var grouped = (groupWs && state.meta.workstreamsEnabled) || groupEpic;
+      if (!grouped || !items.length) html.push(addRowHtml(p, null, false));
     });
 
     rowsEl.innerHTML = html.join('');
@@ -3184,8 +3418,8 @@
     return fmtDays(days);
   }
 
-  function sizeHuman(size) {
-    var d = RM.sizeDays(state, size);
+  function sizeHuman(size, kind) {
+    var d = RM.sizeDays(state, size, kind);
     if (d == null) return '';
     if (d < 5) return d + 'd';
     return (Math.round(d / SPW() * 100) / 100) + 'w';
@@ -3596,6 +3830,33 @@
     } else {
       timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
     }
+    // estimate: the story's own size / priority / risk scales (Setup → Sizing)
+    var stSizeBtns = RM.sizingEnabled(state, 'story')
+      ? '<label class="p-lab">Size</label><div class="seg">' +
+        ['<button data-stf="size" data-v=""' + (!st.size ? ' class="on"' : '') + ' title="Not set">—</button>']
+          .concat(RM.sizeOrderOf(state, 'story').map(function (sz) {
+            return '<button data-stf="size" data-v="' + esc(sz) + '"' + (st.size === sz ? ' class="on"' : '') +
+              ' title="' + fmtDays(RM.sizeDays(state, sz, 'story')) + '">' + esc(sz) + '</button>';
+          })).join('') + '</div>'
+      : '';
+    var stPriLevels = RM.prioritySchemeOf(state, 'story') === 'levels';
+    var stPriBtns = RM.priorityEnabled(state, 'story')
+      ? '<label class="p-lab" style="margin-top:10px">Priority</label><div class="seg">' +
+        ['<button data-stf="priority" data-v=""' + (!st.priority ? ' class="on"' : '') + ' title="Not set">None</button>']
+          .concat(RM.priorityOrderOf(state, 'story').map(function (pv) {
+            return '<button data-stf="priority" data-v="' + pv + '"' + (st.priority === pv ? ' class="on"' : '') +
+              ' title="' + esc(priorityValueLabel(pv, 'story')) + '">' + (stPriLevels ? levelGlyph(pv) : pv) + '</button>';
+          })).join('') + '</div>'
+      : '';
+    var stRiskBtns = RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto'
+      ? '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state)) + '</label><div class="seg">' +
+        ['<button data-stf="risk" data-v=""' + (!st.risk ? ' class="on"' : '') + ' title="Not set">None</button>']
+          .concat(RM.riskOrderOf(state).map(function (rv) {
+            return '<button data-stf="risk" data-v="' + rv + '"' + (st.risk === rv ? ' class="on"' : '') +
+              ' title="' + esc(riskValueLabel(rv)) + '">' + levelGlyph(rv) + '</button>';
+          })).join('') + '</div>'
+      : '';
+    var estimate = stSizeBtns + stPriBtns + stRiskBtns;
 
     panel.innerHTML =
       '<div id="panelRz"></div>' +
@@ -3630,6 +3891,7 @@
         (state.team.length
           ? ddButton('stassign', '+ Assign\u2026', null, 'Assign people from the roster')
           : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
+      (estimate ? sec2('estimate', 'Estimate', estimate) : '') +
       sec2('schedule', 'Timeline', timeline) +
       sec2('integrations', 'Integrations',
         '<label class="p-lab">Jira key</label>' +
@@ -4006,6 +4268,15 @@
       return; // title/done/dates commit on change
     }
 
+    // story estimate buttons (size / priority / risk segs in the story panel)
+    var stBtn = e.target.closest('button[data-stf][data-v]');
+    if (stBtn && selStory) {
+      var stv = stBtn.dataset.v || null, stk = stBtn.dataset.stf;
+      if (stk === 'size') setStorySize(it.id, selStory, stv);
+      else if (stk === 'priority') withStory('story priority', it.id, selStory, function (st2) { st2.priority = stv; });
+      else if (stk === 'risk') setStoryRisk(it.id, selStory, stv);
+      return;
+    }
     var btn = e.target.closest('[data-f]');
     var dep = e.target.closest('[data-deprm]');
     var depTxt = e.target.closest('[data-deptxtrm]');
@@ -4486,6 +4757,7 @@
     if (!rowEl) return;
 
     if (rowEl.dataset.kind === 'addrow') {
+      if (!e.target.closest('.row-left')) return; // the lane is empty space, not a button
       var grp = null;
       if (rowEl.dataset.epic != null || rowEl.dataset.ws != null) {
         grp = {};
@@ -4521,20 +4793,8 @@
       var stId = storyEl.dataset.story;
       if (act.dataset.act === 'st-open') {
         selectStory(itemId, stId);
-      } else if (act.dataset.act === 'st-size') {
-        openDropdown(act, [{ label: '<i>no size</i>', checked: !(storyById(it, stId) || {}).size, fn: function () {
-          commit('story size', function (s) {
-            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-            if (st2) st2.size = null;
-          });
-        } }].concat(RM.sizeOrderOf(state).map(function (sz) {
-          return { label: esc(sz), checked: (storyById(it, stId) || {}).size === sz, fn: function () {
-            commit('story size', function (s) {
-              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-              if (st2) st2.size = sz;
-            });
-          } };
-        })));
+      } else if (storyChipAction(act.dataset.act, act, itemId, stId)) {
+        return;
       } else if (act.dataset.act === 'st-asg') {
         if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
         openDropdown(act, state.team.map(function (mm) {
@@ -4550,55 +4810,6 @@
             });
           } };
         }));
-      } else if (act.dataset.act === 'st-pri') {
-        var stPri = (storyById(it, stId) || {}).priority;
-        openDropdown(act, [{ label: '<i>None</i>', checked: !stPri, fn: function () {
-          commit('story priority', function (s) {
-            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-            if (st2) st2.priority = null;
-          });
-        } }].concat(RM.priorityOrderOf(state).map(function (pv) {
-          return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
-            label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
-            checked: stPri === pv, fn: function () {
-            commit('story priority', function (s) {
-              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-              if (st2) st2.priority = pv;
-            });
-          } };
-        })));
-      } else if (act.dataset.act === 'st-wk') {
-        if (act.querySelector('input')) return;
-        var stObjW = storyById(it, stId);
-        var stwInp = document.createElement('input');
-        stwInp.type = 'number';
-        stwInp.min = '0.2';
-        stwInp.step = '0.2';
-        stwInp.value = stObjW && stObjW.durDays != null ? Math.round(stObjW.durDays / SPW() * 100) / 100 : '';
-        stwInp.className = 'hc-edit';
-        stwInp.style.width = '30px';
-        act.textContent = '';
-        act.appendChild(stwInp);
-        stwInp.focus();
-        stwInp.select();
-        var stwDone = false;
-        var stwFin = function (saveIt) {
-          if (stwDone) return; stwDone = true;
-          var v = stwInp.value;
-          if (!saveIt) { render(); return; }
-          commit('story duration', function (s) {
-            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-            if (!st2) return;
-            if (String(v).trim() === '') { st2.durDays = null; st2.startDay = null; }
-            else st2.durDays = Math.max(1, Math.round(Math.max(0.2, parseFloat(v) || 1) * SPW()));
-          });
-        };
-        stwInp.addEventListener('blur', function () { stwFin(true); });
-        stwInp.addEventListener('keydown', function (ev) {
-          ev.stopPropagation();
-          if (ev.key === 'Enter') stwFin(true);
-          if (ev.key === 'Escape') stwFin(false);
-        });
       } else if (act.dataset.act === 'st-startd') {
         var stObjD = storyById(it, stId);
         openCalendar(act, stObjD && stObjD.startDay != null ? RM.fmtISO(RM.dayToDate(state.meta, stObjD.startDay)) : '',
@@ -4610,7 +4821,7 @@
               var sd2 = RM.dateToDay(s.meta, RM.parseISO(iso));
               if (sd2 == null) return;
               st2.startDay = Math.max(0, sd2);
-              if (st2.durDays == null) st2.durDays = SPW();
+              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, RM.storyEffortDays(s, st2));
             });
           }, { allowClear: true, clearLabel: 'Unschedule' });
       } else if (act.dataset.act === 'st-dl') {
@@ -5324,12 +5535,12 @@
   // the pointer marks the MIDDLE of the landing slot — the placed bar
   // centers on the cursor, then snaps
   function placeDurFor(it) {
-    if (!it) return 5;
+    if (!it) return RM.sprintDays(state.meta);
     if (it.milestone) return 1;
-    return it.durDays != null ? it.durDays : (RM.effortDays(state, it) || 5);
+    return it.durDays != null ? it.durDays : (RM.effortDays(state, it) || RM.sprintDays(state.meta));
   }
-  function centeredDayAt(clientX, dur) {
-    return Math.max(0, snapTo(Math.round(laneDayAt(clientX) - dur / 2)));
+  function centeredDayAt(clientX, dur, kind) {
+    return Math.max(0, snapTo(Math.round(laneDayAt(clientX) - dur / 2), kind));
   }
 
   // give a story its own little timeline where the pointer sits on its lane
@@ -5337,12 +5548,13 @@
     var cur = storyById(RM.itemById(state, itemId) || {}, stId);
     if (!cur || cur.startDay != null) return;
     placedAt = Date.now(); placedKey = 'st:' + stId;
-    var day = centeredDayAt(clientX, 5);
+    // a story defaults to one sprint
+    var day = centeredDayAt(clientX, RM.sprintDays(state.meta), 'story');
     commit('place story', function (s) {
       var st = storyById(RM.itemById(s, itemId), stId);
       if (!st) return;
       st.startDay = day;
-      st.durDays = RM.stretchSpan(s.meta, day, 5);
+      st.durDays = RM.stretchSpan(s.meta, day, RM.sprintDays(s.meta));
     });
   }
 
@@ -5351,14 +5563,14 @@
   function placeItemAt(itemId, clientX) {
     placedAt = Date.now(); placedKey = itemId;
     var it0 = RM.itemById(state, itemId);
-    var pDay = centeredDayAt(clientX, placeDurFor(it0));
+    var pDay = centeredDayAt(clientX, placeDurFor(it0), 'feature');
     commit('place item', function (s2) {
       var t2 = RM.itemById(s2, itemId);
       t2.startDay = pDay;
-      // a preset duration wins; else the size estimate; else one week
+      // a preset duration wins; else the size estimate; else one sprint
       t2.durDays = t2.milestone ? 0
         : (t2.durDays != null ? t2.durDays
-          : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5));
+          : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || RM.sprintDays(s2.meta)));
       if (autoOrder) RM.sortItemsByStart(s2);
     });
     select(itemId);
@@ -5383,13 +5595,13 @@
     var target = null, dur = 5, ms = false;
     if (stRow) {
       var stH = storyById(RM.itemById(state, stRow.dataset.id) || {}, stRow.dataset.story);
-      if (stH && stH.startDay == null) { target = stRow; dur = 5; }
+      if (stH && stH.startDay == null) { target = stRow; dur = RM.sprintDays(state.meta); }
     } else if (itRow) {
       var itH = RM.itemById(state, itRow.dataset.id);
       if (itH && !isScheduled(itH)) { target = itRow; dur = placeDurFor(itH); ms = !!itH.milestone; }
     }
     if (!target) { hidePlaceGhost(); return; }
-    var day = centeredDayAt(e.clientX, dur);
+    var day = centeredDayAt(e.clientX, dur, stRow ? 'story' : 'feature');
     var lane = target.querySelector('.row-lane');
     if (!placeGhost) {
       placeGhost = document.createElement('div');
@@ -6167,22 +6379,36 @@
   });
 
   function daysFromDx(dx) { return Math.round(dx / dayPx()); }
-  // touched items align to the snap grid: position AND width become multiples
-  // snapDays is a MODE (1 = day, 5 = week, 10 = two weeks) — the actual
-  // grid follows the selected working days, so a week is SPW() slots and
-  // week snaps land on week starts regardless of holidays
-  function snapUnit() { return snapDays === 1 ? 1 : SPW() * (snapDays === 10 ? 2 : 1); }
-  function snapTo(d) { return Math.round(d / snapUnit()) * snapUnit(); }
+  // touched items align to the snap grid. Features and stories each have a
+  // MODE (day / week / sprint) — the actual grid follows the selected working
+  // days, so a week is SPW() slots and week snaps land on week starts
+  // regardless of holidays; sprint snaps land on sprint boundaries, which
+  // follow the sprint anchor in Setup
+  var SNAP_LABELS = { day: 'day', week: 'week', sprint: 'sprint' };
+  function snapModeFor(kind) { return kind === 'story' ? snapStory : snapFeat; }
+  function setSnapMode(kind, mode) { if (kind === 'story') snapStory = mode; else snapFeat = mode; }
+  function snapUnit(kind) {
+    var mode = snapModeFor(kind);
+    return mode === 'day' ? 1 : mode === 'sprint' ? RM.sprintDays(state.meta) : SPW();
+  }
+  function snapTo(d, kind) {
+    var u = snapUnit(kind);
+    var off = snapModeFor(kind) === 'sprint' ? ((RM.sprintInfo(state.meta).anchorWeek * SPW()) % u + u) % u : 0;
+    return Math.round((d - off) / u) * u + off;
+  }
 
   function barDragMove(e, dx) {
     var it = RM.itemById(state, drag.itemId);
     var dd = daysFromDx(dx);
-    var su = e.altKey ? 1 : snapUnit(); // ⌥ ignores the snap grid: any day
-    var sn = function (d) { return Math.round(d / su) * su; };
+    var su = e.altKey ? 1 : snapUnit('feature'); // ⌥ ignores the snap grid: any day
+    var sn = e.altKey ? function (d) { return d; } : function (d) { return snapTo(d, 'feature'); };
     var ns = drag.start0, nd = drag.dur0, nr = drag.risk0;
     if (drag.mode === 'move') ns = Math.max(0, sn(drag.start0 + dd));
-    else if (drag.mode === 'resize-r') nd = Math.max(su, sn(drag.dur0 + dd));
-    else if (drag.mode === 'resize-l') {
+    else if (drag.mode === 'resize-r') {
+      // the END edge lands on a grid line; never shorter than one grid step
+      nd = sn(drag.start0 + drag.dur0 + dd) - drag.start0;
+      if (nd < 1) nd = Math.max(1, su);
+    } else if (drag.mode === 'resize-l') {
       ns = Math.max(0, Math.min(sn(drag.start0 + dd), drag.start0 + drag.dur0 - su));
       nd = drag.dur0 + (drag.start0 - ns);
       if (nd < 1) nd = Math.max(1, su);
@@ -6285,12 +6511,14 @@
 
   function stBarDragMove(e, dx) {
     var dd = daysFromDx(dx);
-    var su = e.altKey ? 1 : snapUnit();
-    var sn = function (d) { return Math.round(d / su) * su; };
+    var su = e.altKey ? 1 : snapUnit('story');
+    var sn = e.altKey ? function (d) { return d; } : function (d) { return snapTo(d, 'story'); };
     var ns = drag.start0, nd = drag.dur0;
     if (drag.mode === 'move') ns = Math.max(0, sn(drag.start0 + dd));
-    else if (drag.mode === 'resize-r') nd = Math.max(su, sn(drag.dur0 + dd));
-    else if (drag.mode === 'resize-l') {
+    else if (drag.mode === 'resize-r') {
+      nd = sn(drag.start0 + drag.dur0 + dd) - drag.start0;
+      if (nd < 1) nd = Math.max(1, su);
+    } else if (drag.mode === 'resize-l') {
       ns = Math.max(0, Math.min(sn(drag.start0 + dd), drag.start0 + drag.dur0 - su));
       nd = drag.dur0 + (drag.start0 - ns);
       if (nd < 1) nd = Math.max(1, su);
@@ -6324,7 +6552,7 @@
 
   function ghostDragMove(e) {
     var it = RM.itemById(state, drag.itemId);
-    var day = Math.max(0, e.altKey ? laneDayAt(e.clientX) : snapTo(laneDayAt(e.clientX)));
+    var day = Math.max(0, e.altKey ? laneDayAt(e.clientX) : snapTo(laneDayAt(e.clientX), 'feature'));
     var dur = it.milestone ? 1
       : (it.durDays != null ? it.durDays : RM.stretchSpan(state.meta, day, RM.effortDays(state, it)));
     if (!drag.preview) {
@@ -6907,12 +7135,16 @@
       ];
     }
     // view
-    var snapItems = [[1, 'day'], [5, 'week'], [10, '2 weeks']].map(function (sn) {
-      return { icon: 'magnet', label: 'Snap to ' + sn[1], checked: snapDays === sn[0], fn: function () {
-        snapDays = sn[0];
-        saveLocal(); renderTopbar();
-        toast('Drag snap: ' + sn[1]);
-      } };
+    var snapItems = [];
+    [['feature', 'Features'], ['story', 'Stories']].forEach(function (k, ki) {
+      if (ki) snapItems.push({ sep: true });
+      SNAP_MODES.forEach(function (mode) {
+        snapItems.push({ icon: 'magnet', label: k[1] + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
+          setSnapMode(k[0], mode);
+          saveLocal(); renderTopbar();
+          toast(k[1] + ' snap: ' + SNAP_LABELS[mode]);
+        } });
+      });
     });
     return snapItems.concat([
       { sep: true },
@@ -7079,6 +7311,24 @@
       selectedId = newId;
     });
     select(newId, true);
+    focusRowTitle(newId);
+  }
+  // put the caret in a row's title in the left pane (Planning input or
+  // Scoping cell); the panel's name field is the fallback
+  function focusRowTitle(itemId) {
+    var nameEl = rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-name');
+    if (nameEl) {
+      nameEl.focus();
+      if (nameEl.isContentEditable && window.getSelection) {
+        var rg = document.createRange();
+        rg.selectNodeContents(nameEl);
+        rg.collapse(false);
+        var sl = window.getSelection();
+        sl.removeAllRanges();
+        sl.addRange(rg);
+      }
+      return;
+    }
     var nameInput = $('#panel .p-name');
     if (nameInput) nameInput.focus();
   }
@@ -7243,10 +7493,12 @@
   var BU_KEYS = ['role', 'type', 'ws', 'cost', 'rate', 'margin', 'total'];
   var PL_COL_DEFS = {
     size: ['Size', 'Size — click a row chip to change', 34],
+    pri: ['Pri', 'Priority — click a row chip to change', 26],
+    risk: ['Risk', 'Risk — click a row chip to change', 26],
     dur: ['Wks', 'Duration in weeks', 34],
     asg: ['Ppl', 'Assignees', 44]
   };
-  var PL_KEYS = ['size', 'dur', 'asg'];
+  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg'];
   function orderedCols(order, allKeys) {
     var out = (order || []).filter(function (k) { return allKeys.indexOf(k) !== -1; });
     allKeys.forEach(function (k) { if (out.indexOf(k) === -1) out.push(k); });
@@ -7260,7 +7512,9 @@
   function plColsVisible() {
     return plColsOrdered().filter(function (k) {
       if (plColHide[k]) return false;
-      if (k === 'size') return RM.sizingEnabled(state);
+      if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
+      if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
+      if (k === 'risk') return RM.riskEnabled(state);
       return true;
     });
   }
@@ -8032,23 +8286,51 @@
 
     // sizing approach picker + a fully editable option table (label → days);
     // editing options flips the scheme to Custom
-    var schemeRows = RM.SIZE_SCHEME_ORDER.map(function (k) {
-      var sch = RM.SIZE_SCHEMES[k];
-      return '<button class="su-scheme' + (m.sizeScheme === k ? ' on' : '') + '" data-suscheme="' + k + '">' +
-        '<span class="su-scheme-check"><i data-lucide="' + (m.sizeScheme === k ? 'circle-check' : 'circle') + '"></i></span>' +
-        '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
-        '</button>';
-    }).join('') + (m.sizeScheme === 'custom'
-      ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
-        '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
-      : '');
-    var sizeOptRows = RM.sizeOrderOf(state).map(function (s2) {
-      return '<tr>' +
-        '<td><input data-suszlabel="' + esc(s2) + '" value="' + esc(s2) + '" aria-label="Option label"></td>' +
-        '<td><input type="number" min="1" data-susz="' + esc(s2) + '" value="' + m.sizeDays[s2] + '" aria-label="Working days"></td>' +
-        '<td class="hol-x"><button data-suszrm="' + esc(s2) + '" title="Remove option"><i data-lucide="x"></i></button></td>' +
-        '</tr>';
-    }).join('');
+    // features and stories each pick a scale; the story controls carry
+    // data-kind="story" and share the feature handlers
+    function schemeRowsFor(kind) {
+      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
+      var cur = m[RM.sizeKeys(kind).scheme];
+      return RM.SIZE_SCHEME_ORDER.map(function (k) {
+        var sch = RM.SIZE_SCHEMES[k];
+        return '<button class="su-scheme' + (cur === k ? ' on' : '') + '" data-suscheme="' + k + '"' + kAttr + '>' +
+          '<span class="su-scheme-check"><i data-lucide="' + (cur === k ? 'circle-check' : 'circle') + '"></i></span>' +
+          '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
+          '</button>';
+      }).join('') + (cur === 'custom'
+        ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
+          '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
+        : '');
+    }
+    function sizeOptRowsFor(kind) {
+      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
+      var days = m[RM.sizeKeys(kind).days] || {};
+      return RM.sizeOrderOf(state, kind).map(function (s2) {
+        return '<tr>' +
+          '<td><input data-suszlabel="' + esc(s2) + '"' + kAttr + ' value="' + esc(s2) + '" aria-label="Option label"></td>' +
+          '<td><input type="number" min="1" data-susz="' + esc(s2) + '"' + kAttr + ' value="' + days[s2] + '" aria-label="Working days"></td>' +
+          '<td class="hol-x"><button data-suszrm="' + esc(s2) + '"' + kAttr + ' title="Remove option"><i data-lucide="x"></i></button></td>' +
+          '</tr>';
+      }).join('');
+    }
+    function sizingCardsFor(kind) {
+      var label = kind === 'story' ? 'Story size options' : 'Size options';
+      return RM.sizingEnabled(state, kind)
+        ? '<section class="su-card"><h2>' + label + '</h2>' +
+          '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
+          '<tbody>' + sizeOptRowsFor(kind) + '</tbody></table>' +
+          '<button id="suSzAdd' + (kind === 'story' ? 'Story' : '') + '" style="margin-top:8px"><i data-lucide="plus"></i> Add option</button>' +
+          (kind === 'story'
+            ? '<div class="m-hint">A sized story that lands on the timeline takes its size in working days; unsized stories take one sprint.</div>'
+            : '<div class="m-hint">Working days drive scheduling and the duration estimate; the risk rating stays a separate L/M/H flag.</div>') +
+          '</section>'
+        : '<section class="su-card"><h2>' + label + '</h2>' +
+          '<div class="m-hint">Sizing is off — set durations directly ' + (kind === 'story' ? 'on stories' : 'on items') + ' when you need them.</div>' +
+          '</section>';
+    }
+    var schemeRows = schemeRowsFor('feature');
+    var storySchemeRows = schemeRowsFor('story');
+    var storySizingCards = sizingCardsFor('story');
     var riskRows = RM.RISK_SCHEME_ORDER.map(function (k) {
       var rs = RM.RISK_SCHEMES[k];
       var on = RM.riskSchemeOf(state) === k;
@@ -8057,30 +8339,31 @@
         '<span class="su-scheme-main"><b>' + esc(rs.name) + '</b><span>' + esc(rs.desc) + '</span></span>' +
         '</button>';
     }).join('');
-    var priRows = RM.PRIORITY_SCHEME_ORDER.map(function (k) {
-      var ps = RM.PRIORITY_SCHEMES[k];
-      var on = RM.prioritySchemeOf(state) === k;
-      return '<button class="su-scheme' + (on ? ' on' : '') + '" data-supri="' + k + '">' +
-        '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-        '<span class="su-scheme-main"><b>' + esc(ps.name) + '</b><span>' + esc(ps.desc) + '</span></span>' +
-        '</button>';
-    }).join('');
-    var sizingCards = RM.sizingEnabled(state)
-      ? '<section class="su-card"><h2>Size options</h2>' +
-        '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
-        '<tbody>' + sizeOptRows + '</tbody></table>' +
-        '<button id="suSzAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add option</button>' +
-        '<div class="m-hint">Working days drive scheduling and the duration estimate; the risk rating stays a separate L/M/H flag.</div>' +
-        '</section>'
-      : '<section class="su-card"><h2>Size options</h2>' +
-        '<div class="m-hint">Sizing is off — set durations directly on items when you need them.</div>' +
-        '</section>';
+    function priRowsFor(kind) {
+      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
+      var list = kind === 'story' ? RM.STORY_PRIORITY_SCHEME_ORDER : RM.PRIORITY_SCHEME_ORDER;
+      return list.map(function (k) {
+        var ps = RM.PRIORITY_SCHEMES[k];
+        var on = RM.prioritySchemeOf(state, kind) === k;
+        return '<button class="su-scheme' + (on ? ' on' : '') + '" data-supri="' + k + '"' + kAttr + '>' +
+          '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+          '<span class="su-scheme-main"><b>' + esc(ps.name) + '</b><span>' + esc(ps.desc) + '</span></span>' +
+          '</button>';
+      }).join('');
+    }
+    var priRows = priRowsFor('feature');
+    var storyPriRows = priRowsFor('story');
+    var sizingCards = sizingCardsFor('feature');
 
+    // every range edits in place: name is free text, the dates open the calendar
     var holRows = (m.holidayRanges || []).map(function (r, i) {
-      var dates = r.start === r.end ? r.start : r.start + ' → ' + r.end;
       return '<tr>' +
-        '<td>' + (r.name ? esc(r.name) : '<i class="hol-unnamed">—</i>') + '</td>' +
-        '<td class="hol-dates">' + esc(dates) + '</td>' +
+        '<td><input data-suholname="' + i + '" value="' + esc(r.name || '') + '" placeholder="—" aria-label="Holiday name" title="Rename"></td>' +
+        '<td class="hol-dates"><span class="hol-range">' +
+        '<input type="text" readonly class="cal-in" data-suholstart="' + i + '" value="' + esc(r.start) + '" aria-label="First day" title="First day">' +
+        '<span class="hol-arrow">→</span>' +
+        '<input type="text" readonly class="cal-in" data-suholend="' + i + '" value="' + esc(r.end) + '" aria-label="Last day" title="Last day">' +
+        '</span></td>' +
         '<td class="hol-x"><button data-suholrm="' + i + '" title="Remove"><i data-lucide="x"></i></button></td>' +
         '</tr>';
     }).join('');
@@ -8234,9 +8517,9 @@
         '</section>',
       columns: (function () {
         var offNotes = [];
-        if (!RM.sizingEnabled(state)) offNotes.push('Size (enable in Sizing)');
+        if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing)');
         if (!RM.riskEnabled(state)) offNotes.push('Risk (pick a scheme in Sizing)');
-        if (!RM.priorityEnabled(state)) offNotes.push('Priority (pick a scheme in Sizing)');
+        if (!RM.priorityEnabled(state) && !RM.priorityEnabled(state, 'story')) offNotes.push('Priority (pick a scheme in Sizing)');
         if (!state.meta.workstreamsEnabled) offNotes.push('Workstream (enable in Workstreams)');
         var colRows = allScopeCols().map(function (c) {
           var fixed = isFixedColKey(c[0]);
@@ -8259,44 +8542,36 @@
           (offNotes.length ? '<br>Hidden right now: ' + esc(offNotes.join(', ')) + '.' : '') + '</div>' +
           '</section>';
       })(),
-      statuses: ['feature', 'story'].map(function (kind) {
-        var list = RM.statusesOf(state, kind);
-        var rows = list.map(function (stName, si2) {
-          var last = si2 === list.length - 1;
-          return '<tr>' +
-            '<td style="width:26px"><button class="st-sw" data-stcsw="' + kind + ':' + esc(stName) +
-            '" style="background:#' + RM.statusColor(state, kind, stName) + '" title="Status color — click to change"></button></td>' +
-            '<td><input data-sustat="' + kind + '" data-old="' + esc(stName) + '" value="' + esc(stName) + '" aria-label="Status name"></td>' +
-            '<td>' + (last ? '<span class="band-bucket-tag">done</span>' : '') + '</td>' +
-            '<td class="hol-x">' + (list.length > 2 ? '<button data-sustatrm="' + kind + ':' + esc(stName) + '" title="Remove status"><i data-lucide="x"></i></button>' : '') + '</td>' +
-            '</tr>';
-        }).join('');
-        return '<section class="su-card"><h2>' + (kind === 'feature' ? 'Feature statuses' : 'Story statuses') + '</h2>' +
-          '<table class="hol-table"><thead><tr><th></th><th>Status</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
-          '<div class="p-row" style="margin-top:8px"><input id="suStAdd-' + kind + '" placeholder="New status\u2026"><button data-sustatadd="' + kind + '" class="fixed">Add</button></div>' +
-          (kind === 'feature'
-            ? '<div class="m-hint">Workflow statuses for features and stories. The last status counts as done.</div>'
-            : '') +
-          '</section>';
-      }).join(''),
       sizing:
-        '<section class="su-card"><h2>Approach</h2>' +
+        '<section class="su-card"><h2>Feature sizing</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
         '</section>' + sizingCards +
+        '<section class="su-card"><h2>Story sizing</h2>' +
+        '<div class="su-schemes">' + storySchemeRows + '</div>' +
+        '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
+        '</section>' + storySizingCards +
         '<section class="su-card"><h2>Risk column</h2>' +
         '<div class="su-schemes">' + riskRows + '</div>' +
-        '<div class="m-hint">Risk measures uncertainty. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
+        '<div class="m-hint">Risk measures uncertainty, for features and stories alike. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Priority column</h2>' +
+        '<section class="su-card"><h2>Feature priority</h2>' +
         '<div class="su-schemes">' + priRows + '</div>' +
         '<div class="m-hint">Priority ranks importance — separate from risk.</div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Story priority</h2>' +
+        '<div class="su-schemes">' + storyPriRows + '</div>' +
+        '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
         '</section>',
       appearance:
         '<section class="su-card">' + personalFieldsHtml('appearance') +
         '<div class="m-hint">System follows your OS.</div>' +
         '</section>',
       prefs:
-        '<section class="su-card">' + personalFieldsHtml('behavior') + '</section>'
+        '<section class="su-card">' + personalFieldsHtml('behavior') + '</section>',
+      ai:
+        '<section class="su-card" id="aiSettingsCard">' +
+        (window.HeadwayAI ? HeadwayAI.settingsHtml() : '<div class="m-hint">AI module not loaded.</div>') +
+        '</section>'
     };
     if (!tabBodies[setupTab]) setupTab = 'timeline';
 
@@ -8320,6 +8595,7 @@
       '<nav class="su-rail" aria-label="Settings sections">' + rail + '</nav>' +
       '<div class="su-content"><h1 class="su-page">' + esc(pageTitle) + '</h1>' + tabBodies[setupTab] + '</div>' +
       '</div>';
+    if (setupTab === 'ai' && window.HeadwayAI) HeadwayAI.wireSettings($('#aiSettingsCard', host));
     if (window.lucide) lucide.createIcons();
   }
 
@@ -8329,13 +8605,13 @@
       ['phases', 'Phases', 'flag'],
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
-      ['statuses', 'Statuses', 'list-checks'],
       ['columns', 'Columns', 'columns-3'],
       ['sizing', 'Sizing', 'ruler']
     ]],
     ['Personal', [
       ['appearance', 'Appearance', 'palette'],
-      ['prefs', 'Preferences', 'sliders-horizontal']
+      ['prefs', 'Preferences', 'sliders-horizontal'],
+      ['ai', 'AI assistant', 'sparkles']
     ]]
   ];
 
@@ -8368,6 +8644,15 @@
       var wsOn = t.checked;
       commit('workstream feature', function (s2) { s2.meta.workstreamsEnabled = wsOn; });
       toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
+      return;
+    }
+    if (t.dataset.suholname != null || t.dataset.suholstart != null || t.dataset.suholend != null) {
+      var hIdx = parseInt(t.dataset.suholname != null ? t.dataset.suholname
+        : t.dataset.suholstart != null ? t.dataset.suholstart : t.dataset.suholend, 10);
+      var hPatch = t.dataset.suholname != null ? { name: t.value }
+        : t.dataset.suholstart != null ? { start: t.value } : { end: t.value };
+      if ((hPatch.start != null && !hPatch.start) || (hPatch.end != null && !hPatch.end)) { render(); return; }
+      commit('holiday edit', function (s2) { RM.updateHolidayRange(s2.meta, hIdx, hPatch); });
       return;
     }
     if (t.id === 'suWeekHours') {
@@ -8404,19 +8689,6 @@
       commit('rename column', function (s2) { RM.renameScopeCol(s2, cKey, cLbl); });
       return;
     }
-    if (t.dataset.sustat != null) {
-      var stKind = t.dataset.sustat;
-      var oldSt = t.dataset.old;
-      var newSt = t.value.trim();
-      if (!newSt || newSt === oldSt) { render(); return; }
-      if (RM.statusesOf(state, stKind).indexOf(newSt) !== -1) {
-        toast('\u201C' + newSt + '\u201D already exists', 'err');
-        render();
-        return;
-      }
-      commit('rename status', function (s2) { RM.renameStatus(s2, stKind, oldSt, newSt); });
-      return;
-    }
     if (t.dataset.rcname != null) {
       var oldRole = t.dataset.rcname;
       var newRole = t.value.trim();
@@ -8442,15 +8714,15 @@
       return;
     }
     if (t.dataset.suszlabel != null) {
-      var oldLbl = t.dataset.suszlabel;
+      var oldLbl = t.dataset.suszlabel, lblKind = t.dataset.kind || 'feature';
       var newLbl = t.value.trim();
       if (!newLbl || newLbl === oldLbl) { render(); return; }
-      if (RM.sizeOrderOf(state).indexOf(newLbl) !== -1) {
+      if (RM.sizeOrderOf(state, lblKind).indexOf(newLbl) !== -1) {
         toast('“' + newLbl + '” already exists', 'err');
         render();
         return;
       }
-      commit('rename size', function (s2) { RM.renameSizeOption(s2, oldLbl, newLbl); });
+      commit('rename size', function (s2) { RM.renameSizeOption(s2, oldLbl, newLbl, lblKind); });
       return;
     }
     if (t.id === 'suStart') {
@@ -8487,11 +8759,11 @@
       return;
     }
     if (t.dataset.susz) {
-      var sz = t.dataset.susz;
-      var v = Math.max(1, parseInt(t.value, 10) || state.meta.sizeDays[sz] || 5);
+      var sz = t.dataset.susz, szKeys = RM.sizeKeys(t.dataset.kind || 'feature');
+      var v = Math.max(1, parseInt(t.value, 10) || (state.meta[szKeys.days] || {})[sz] || 5);
       commit('size days', function (s2) {
-        s2.meta.sizeDays[sz] = v;
-        s2.meta.sizeScheme = 'custom';
+        s2.meta[szKeys.days][sz] = v;
+        s2.meta[szKeys.scheme] = 'custom';
       });
       return;
     }
@@ -8518,9 +8790,9 @@
       return;
     }
     if (t.dataset.suscheme) {
-      var schemeKey = t.dataset.suscheme;
-      if (schemeKey === state.meta.sizeScheme) return;
-      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey); });
+      var schemeKey = t.dataset.suscheme, schemeKind = t.dataset.kind || 'feature';
+      if (schemeKey === state.meta[RM.sizeKeys(schemeKind).scheme]) return;
+      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey, schemeKind); });
       return;
     }
     if (t.dataset.surisk) {
@@ -8530,22 +8802,23 @@
       return;
     }
     if (t.dataset.supri) {
-      var priKey = t.dataset.supri;
-      if (priKey === RM.prioritySchemeOf(state)) return;
-      commit('priority column', function (s2) { RM.setPriorityScheme(s2, priKey); });
+      var priKey = t.dataset.supri, priKind = t.dataset.kind || 'feature';
+      if (priKey === RM.prioritySchemeOf(state, priKind)) return;
+      commit('priority column', function (s2) { RM.setPriorityScheme(s2, priKey, priKind); });
       return;
     }
-    if (t.id === 'suSzAdd') {
+    if (t.id === 'suSzAdd' || t.id === 'suSzAddStory') {
+      var addKind = t.id === 'suSzAddStory' ? 'story' : 'feature';
       commit('add size', function (s2) {
         var lbl = 'New', n2 = 2;
-        while (s2.meta.sizeOrder.indexOf(lbl) !== -1) lbl = 'New ' + n2++;
-        RM.addSizeOption(s2, lbl, 5);
+        while (s2.meta[RM.sizeKeys(addKind).order].indexOf(lbl) !== -1) lbl = 'New ' + n2++;
+        RM.addSizeOption(s2, lbl, 5, addKind);
       });
       return;
     }
     if (t.dataset.suszrm) {
-      var rmLbl = t.dataset.suszrm;
-      commit('remove size', function (s2) { RM.removeSizeOption(s2, rmLbl); });
+      var rmLbl = t.dataset.suszrm, rmKind = t.dataset.kind || 'feature';
+      commit('remove size', function (s2) { RM.removeSizeOption(s2, rmLbl, rmKind); });
       return;
     }
     if (t.id === 'suWsAddBtn') {
@@ -8565,27 +8838,6 @@
     if (t.dataset.sucolrm) {
       var rmKey = t.dataset.sucolrm;
       commit('remove column', function (s2) { RM.removeScopeCol(s2, rmKey); });
-      return;
-    }
-    if (t.dataset.sustatadd) {
-      var addKind = t.dataset.sustatadd;
-      var addInp = $('#suStAdd-' + addKind);
-      var addVal = addInp && addInp.value.trim();
-      if (!addVal) return;
-      if (RM.statusesOf(state, addKind).indexOf(addVal) !== -1) { toast('Status already exists', 'err'); return; }
-      commit('add status', function (s2) { RM.addStatus(s2, addKind, addVal); });
-      return;
-    }
-    if (t.dataset.sustatrm) {
-      var rmParts = t.dataset.sustatrm.split(':');
-      var rmKind = rmParts.shift();
-      var rmName = rmParts.join(':');
-      commit('remove status', function (s2) { RM.removeStatus(s2, rmKind, rmName); });
-      return;
-    }
-    if (t.dataset.stcsw) {
-      var swParts = t.dataset.stcsw.split(':');
-      statusColorMenu(t, swParts.shift(), swParts.join(':'));
       return;
     }
     if (t.dataset.suwps != null) {
@@ -8608,12 +8860,16 @@
     }
     var ttrm = t.dataset.suttrm;
     if (ttrm) {
-      var used = state.team.some(function (mm) { return mm.type === ttrm; }) ||
-        state.items.some(function (x) { return x.teamType === ttrm; });
-      if (used) { toast('“' + ttrm + '” is in use by roles or features', 'err'); return; }
-      commit('remove type', function (s2) {
-        s2.teamTypes = s2.teamTypes.filter(function (x) { return x !== ttrm; });
-      });
+      // people and features that had the role simply lose it
+      var usedP = state.team.filter(function (mm) { return mm.type === ttrm; }).length;
+      var usedF = state.items.filter(function (x) { return x.teamType === ttrm; }).length;
+      commit('remove type', function (s2) { RM.removeRole(s2, ttrm); });
+      if (usedP || usedF) {
+        var parts = [];
+        if (usedP) parts.push(usedP + (usedP === 1 ? ' person' : ' people'));
+        if (usedF) parts.push(usedF + (usedF === 1 ? ' feature' : ' features'));
+        toast('Removed “' + ttrm + '” — ' + parts.join(' and ') + ' now have no role');
+      }
       return;
     }
   });
@@ -8730,7 +8986,7 @@
       '<div class="m-head"><h2>Headway</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body" style="font-size:12.5px;line-height:1.75;color:var(--ink-2)">' +
       '<b>Views</b> — Scoping (spreadsheet, resizable columns) and Planning (timeline), tabs up top<br>' +
-      '<b>Bars</b> — drag to move · edges resize · <span class="kbd">⌘drag</span> pushes dependents along · <span class="kbd">←</span><span class="kbd">→</span> nudge (<span class="kbd">⇧</span> = 1 week) · snap grid in View<br>' +
+      '<b>Bars</b> — drag to move · edges resize · <span class="kbd">⌘drag</span> pushes dependents along · <span class="kbd">←</span><span class="kbd">→</span> nudge (<span class="kbd">⇧</span> = 1 week) · snap grids (features / stories) in View<br>' +
       '<b>Sizes in weeks</b> — XS 2d · S 1w · M 2w · L 4w · XL 8w; the risk buffer uses the same scale (panel), shown as one duration<br>' +
       '<b>Rows</b> — drag the left pane to reorder / move phase (auto-order can re-sort by start) · right-click for insert/delete · chips cycle on click<br>' +
       '<b>Links</b> — drag a bar’s edge circles onto another row (left = depends ON it, right = dependency FOR it; Esc cancels) · click an arrow, Delete removes · orange = critical path<br>' +
@@ -9253,16 +9509,21 @@
       return '<button data-pref-theme="' + t[0] + '"' + (themePref === t[0] ? ' class="on"' : '') + '>' +
         t[1].replace(' theme', '') + '</button>';
     }).join('') + '</div>';
-    var snapSeg = '<div class="seg">' + [[1, 'Day'], [5, 'Week'], [10, '2 weeks']].map(function (sn) {
-      return '<button data-pref-snap="' + sn[0] + '"' + (snapDays === sn[0] ? ' class="on"' : '') + '>' +
-        sn[1] + '</button>';
-    }).join('') + '</div>';
+    function snapSeg(kind) {
+      return '<div class="seg">' + SNAP_MODES.map(function (mode) {
+        return '<button data-pref-snap="' + kind + ':' + mode + '"' + (snapModeFor(kind) === mode ? ' class="on"' : '') + '>' +
+          SNAP_LABELS[mode].charAt(0).toUpperCase() + SNAP_LABELS[mode].slice(1) + '</button>';
+      }).join('') + '</div>';
+    }
     var appearance =
       '<div class="m-sec"><label>Your name</label>' +
       '<input type="text" data-pref-user maxlength="60" style="width:100%" placeholder="e.g. Alex Rivera" value="' + esc(userName()) + '">' +
       '<div class="m-hint">Recorded with your edits in Version history. Stored on this machine only.</div></div>' +
       '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>';
-    var behavior = '<div class="m-sec"><label>Drag snap</label>' + snapSeg + '</div>' +
+    var behavior = '<div class="m-sec"><label>Feature snap</label>' + snapSeg('feature') +
+      '<div class="m-hint">Grid for dragging, resizing and placing feature bars.</div></div>' +
+      '<div class="m-sec"><label>Story snap</label>' + snapSeg('story') +
+      '<div class="m-hint">Same for story bars — a sprint by default.</div></div>' +
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
@@ -9286,7 +9547,7 @@
       var tb = e.target.closest('[data-pref-theme]');
       if (tb) { setTheme(tb.dataset.prefTheme); after(); return; }
       var sb = e.target.closest('[data-pref-snap]');
-      if (sb) { snapDays = parseInt(sb.dataset.prefSnap, 10); saveLocal(); renderTopbar(); after(); return; }
+      if (sb) { var sp = sb.dataset.prefSnap.split(':'); setSnapMode(sp[0], sp[1]); saveLocal(); renderTopbar(); after(); return; }
     });
     host.addEventListener('change', function (e) {
       if (e.target.dataset.prefUser != null) { setUserName(e.target.value); return; }
@@ -9680,7 +9941,72 @@
     guardUnsaved: guardUnsaved,
     menuItems: menuItems,
     noteRecent: noteRecent,
-    renderStartPage: renderStartPage
+    renderStartPage: renderStartPage,
+    // hooks for the AI assistant (js/ai.js): reads are clones, every write
+    // goes through commit() so it lands in undo + Version history (as
+    // "<name> · AI")
+    ai: {
+      state: function () { return RM.clone(state); },
+      hasDoc: function () { return !!state && !document.body.classList.contains('start'); },
+      commit: function (label, mutate) {
+        aiActor = true;
+        try { commit(label, mutate); } finally { aiActor = false; }
+      },
+      validation: function () { return validation || RM.validate(state); },
+      userName: userName,
+      ui: function () {
+        var sel = selectedId ? RM.itemById(state, selectedId) : null;
+        return {
+          view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory,
+          deps: depsMode === 'on', crit: showCrit, cap: showCap, autoOrder: autoOrder,
+          groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
+          desktop: !!window.HeadwayDesktop, userName: userName()
+        };
+      },
+      setPref: function (key, val) {
+        if (key === 'theme') { if (['system', 'light', 'dark'].indexOf(val) !== -1) setTheme(val); return true; }
+        if (key === 'userName') { setUserName(val); return true; }
+        if (key === 'snapFeat' || key === 'snapStory') { if (SNAP_MODES.indexOf(val) === -1) return false; setSnapMode(key === 'snapStory' ? 'story' : 'feature', val); }
+        else if (key === 'deps') depsMode = val ? 'on' : 'none';
+        else if (key === 'crit') showCrit = !!val;
+        else if (key === 'cap') showCap = !!val;
+        else if (key === 'autoOrder') {
+          autoOrder = !!val;
+          if (autoOrder) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
+        }
+        else if (key === 'groupWs') groupWs = !!val;
+        else if (key === 'groupEpic') groupEpic = !!val;
+        else if (key === 'autoSave') { autoSave = !!val; if (autoSave) scheduleAutoSave(); }
+        else if (key === 'detailMode') { if (['phase', 'feature', 'story'].indexOf(val) === -1) return false; detailMode = val; }
+        else return false;
+        saveLocal();
+        render();
+        return true;
+      },
+      setView: function (v) {
+        if (['planning', 'scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(v) === -1) return false;
+        flushPanelEdit();
+        view = v;
+        if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
+        saveLocal();
+        render();
+        return true;
+      },
+      selectNum: function (num) {
+        var it = RM.itemByNum(state, num);
+        if (!it) return false;
+        if (view !== 'planning' && view !== 'scoping') { view = 'planning'; saveLocal(); }
+        select(it.id, true);
+        return true;
+      },
+      openSettings: function () {
+        setupTab = 'ai';
+        view = 'setup';
+        saveLocal();
+        render();
+      },
+      toast: toast
+    }
   };
 
   // ------------------------------------------------------------ keyboard

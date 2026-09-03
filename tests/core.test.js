@@ -485,8 +485,8 @@ var sOffMig = RM.normalizeState({
 });
 eq(sOffMig.team[0].weekHours['2026-08-03'], 0, 'offWeeks -> 0-hour week');
 ok(RM.memberOffWeek(sOffMig.meta, sOffMig.team[0], 1), 'memberOffWeek still answers via hours');
-// items default to 1 × Development
-eq(mkState([{ num: 1, feature: 'x' }]).items[0].teamType, 'Development', 'default work type');
+// items default to 1 × any role (empty) — a removed role leaves nothing behind
+eq(mkState([{ num: 1, feature: 'x' }]).items[0].teamType, '', 'default work type is none');
 
 // capacity factor: PE at 40h scales availability
 var sCf = mkState([], { team: [{ name: 'Half', type: 'Development', capacity: 0.5 }] });
@@ -1426,7 +1426,7 @@ section('sprint moves');
   RM.moveStoryToSprint(sSp, 'a', 'a2', 2, 'a1');
   eq(a.stories.map(function (x) { return x.id; }), ['a2', 'a1'], 'story reorders before its sibling');
   eq(a.stories[0].startDay, 10, 'story lands on the sprint start');
-  eq(a.stories[0].durDays, 5, 'a story without a span gets one week');
+  eq(a.stories[0].durDays, RM.sprintDays(sSp.meta), 'a story without a span gets one sprint');
   RM.moveStoryToSprint(sSp, 'a', 'a2', null, null);
   ok(a.stories[1].id === 'a2' && a.stories[1].startDay == null && a.stories[1].durDays == null,
     'unscheduling a story clears its timeline and moves it last');

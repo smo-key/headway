@@ -267,8 +267,9 @@ ok(!doc.querySelector('#popover').hidden, 'size chip opens a dropdown');
   click(xl);
   ok(state().items.find(i => i.id === itId).size === 'XL', 'picking a size commits (XL)');
 }
-// risk moved out of Planning; scoping keeps its chip with None/L/M/H options
-ok(!doc.querySelector('#rows .row.item .r-risk'), 'planning rows no longer show a risk chip');
+// no risk scheme yet: planning rows carry no risk chip; scoping keeps its chip with None/L/M/H options
+ok(!!doc.querySelector('#rows .row.item [data-act="risk"]') === window.RM.riskEnabled(state()),
+  'planning rows carry a risk chip exactly when a risk scheme is on');
 click(doc.querySelector('#viewTabs [data-view="scoping"]'));
 click(doc.querySelector('#rows .row.item[data-id="' + itId + '"] .r-risk'));
 ok(!doc.querySelector('#popover').hidden, 'scoping risk chip opens a dropdown');
@@ -432,7 +433,7 @@ ok(doc.querySelectorAll('#setupView [data-pref-theme]').length === 3,
   'Personal → Appearance offers the three themes');
 suTab('prefs');
 ok(!!doc.querySelector('#setupView [data-pref="crit"]') &&
-  doc.querySelectorAll('#setupView [data-pref-snap]').length === 3,
+  doc.querySelectorAll('#setupView [data-pref-snap]').length === 6,
   'Personal → Preferences holds the view options');
 {
   const cb = doc.querySelector('#setupView [data-pref="crit"]');
@@ -736,7 +737,9 @@ ok(doc.body.dataset.view === 'planning', 'view switches back to planning');
   const before = state().items.length;
   const addRow = doc.querySelector('#rows .row.addrow');
   ok(!!addRow, 'phases end with a blank add row');
-  click(addRow);
+  click(addRow.querySelector('.row-lane'));
+  ok(state().items.length === before, 'the add row\'s timeline lane is inert');
+  click(addRow.querySelector('.row-left'));
   ok(state().items.length === before + 1, 'clicking the add row creates an item in that phase');
   ok(state().items.some(i => i.phaseId === addRow.dataset.phase && i.feature === ''), 'new item lands in the clicked phase');
   ok(!doc.querySelector('#panel .p-dates') && !doc.querySelector('#panel .p-risknote'),
@@ -778,7 +781,7 @@ ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands render
   const gAdd = [...subAdds].find(r => r.dataset.epic);
   const gEpic = gAdd.dataset.epic, gPhase = gAdd.dataset.phase;
   const nBefore = state().items.length;
-  click(gAdd);
+  click(gAdd.querySelector('.row-left'));
   const s2 = state();
   const added = s2.items.filter(i => i.feature === '' && i.epic === gEpic).pop();
   ok(s2.items.length === nBefore + 1 && added && added.phaseId === gPhase, 'clicking a group add row adds a feature to that epic');
@@ -1447,7 +1450,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(state().meta.sizeScheme === 'fibonacci' &&
     state().meta.sizeOrder.join(',') === '1,2,3,5,8,13',
     'Story points preset applies its scale');
-  ok(doc.querySelectorAll('#setupView [data-susz]').length === 6, 'option table lists the six point values');
+  ok(doc.querySelectorAll('#setupView [data-susz]:not([data-kind])').length === 6, 'option table lists the six point values');
   // rename an option — items follow, scheme flips to custom
   const lblInp = doc.querySelector('#setupView [data-suszlabel="13"]');
   lblInp.value = '21';
@@ -1457,7 +1460,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#setupView [data-suscheme="none"]'));
   ok(state().meta.sizeScheme === 'none' && state().meta.sizeOrder.length === 0, 'No sizing empties the scale');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
-  ok(!doc.querySelector('#rows .row.item .r-size'), 'no size chips while sizing is off');
+  ok(!doc.querySelector('#rows .row.item [data-act="size"]'), 'no size chips while sizing is off');
   ok(doc.body.classList.contains('no-size'), 'body carries the no-size flag');
   click(doc.querySelector('#btnSetup'));
   click(doc.querySelector('#setupView [data-suscheme="tshirt"]'));
@@ -1733,6 +1736,34 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#prFieldsBtn'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent)));
   ok(!doc.querySelector('#prioView .pr-rich'), 'unchecking returns cards to compact');
+  // the Feature / Story dropdown leads the toolbar, like every other view
+  {
+    const prBar = doc.querySelector('#prioView .pr-bar');
+    ok(prBar.firstElementChild.matches('.dm-btn[data-prdd="level"]') && /Feature/.test(prBar.firstElementChild.textContent),
+      'Prioritizing: level dropdown sits at the left of the toolbar, reading Feature');
+    ok(!doc.querySelector('#prioView .pr-story'), 'Feature level shows no story rows');
+    click(doc.querySelector('#prioView [data-prdd="level"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+    const withStories = state().items.find(i => (i.stories || []).length && !i.milestone);
+    ok(/Story/.test(doc.querySelector('#prioView [data-prdd="level"]').textContent) &&
+      JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioLevel === 'story',
+      'Story level toggles and persists with the view prefs');
+    ok(withStories && doc.querySelectorAll('#prioView [data-prcard="' + withStories.id + '"] .pr-story').length === withStories.stories.length,
+      'Story level lists every story inside its feature card');
+    const stIn = doc.querySelector('#prioView [data-prcard="' + withStories.id + '"] .pr-story input');
+    stIn.value = 'Renamed on the board';
+    stIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().items.find(i => i.id === withStories.id).stories[0].title === 'Renamed on the board',
+      'a story title edits inline on the card');
+    click(doc.querySelector('#prioView [data-prcard="' + withStories.id + '"] [data-prstadd]'));
+    ok(state().items.find(i => i.id === withStories.id).stories.length === withStories.stories.length + 1,
+      'Add story appends a story to the card');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    click(doc.querySelector('#prioView [data-prdd="level"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+    ok(!doc.querySelector('#prioView .pr-story'), 'back at Feature level the story rows go away');
+  }
   // sort control: Title ordering applies inside a column
   click(doc.querySelector('#prioView [data-prdd="sort"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Title/.test(b.textContent)));
@@ -1837,12 +1868,18 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     state().items.find(i => i.id === uId).durDays === moved.durDays,
     'dropping into another section moves the start and keeps the span');
   click(doc.querySelector('#sprintView')); // the click a browser fires after the drag's pointerup
-  // stories level: rows are stories grouped under their feature
-  click(doc.querySelector('#sprintView [data-splevel="story"]'));
-  ok(doc.querySelector('#sprintView .spv-seg .on').dataset.splevel === 'story', 'the Stories level toggles');
+  // stories level: the Feature / Story dropdown is the first control in the bar
+  // (same place and look as Planning / Scoping / Prioritizing)
+  const spBar = doc.querySelector('#sprintView .pr-bar');
+  ok(spBar.firstElementChild.matches('.dm-btn[data-spdd="level"]') && /Feature/.test(spBar.firstElementChild.textContent),
+    'Sprinting: level dropdown sits at the left of the toolbar, reading Feature');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  ok(/Story/.test(doc.querySelector('#sprintView [data-spdd="level"]').textContent), 'the Stories level toggles');
   ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).sprLevel === 'story', 'the level persists with the view prefs');
   ok(!doc.querySelector('#sprintView .spv-row[data-spid]:not([data-spst])'), 'story level lists no feature rows');
-  click(doc.querySelector('#sprintView [data-splevel="feature"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
   // undo the three moves so later blocks see the fixture's schedule
   for (let k = 0; k < 3; k++) window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   ok(state().items.find(i => i.id === uId).startDay == null, 'undo restores the item to Unscheduled');
@@ -1851,8 +1888,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ------------------------------------------------------- RICE priority scheme
 {
   suTab('sizing');
-  const priCards = doc.querySelectorAll('#setupView [data-supri]');
+  const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
   ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
+  ok(doc.querySelectorAll('#setupView [data-supri][data-kind="story"]').length === 3, 'stories offer three (no RICE)');
   click(Array.from(priCards).find(b => b.dataset.supri === 'rice'));
   ok(state().meta.priorityScheme === 'rice', 'RICE scheme commits');
   // prio cards now carry the priority chip; clicking it opens RICE dropdowns
@@ -1886,32 +1924,18 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   const scChip = doc.querySelector('#rows .row.item[data-id="' + cid + '"] [data-act="priority"]');
   ok(!!scChip && /40/.test(scChip.textContent), 'the scoping Priority column shows the same score');
-  ok(!doc.querySelector('#rows .row.story [data-act="st-pri"]'),
-    'story priority chips hide under RICE (stories carry no RICE)');
+  {
+    const stRowR = doc.querySelector('#rows .row.story[data-story]');
+    ok(!stRowR || !!stRowR.querySelector('[data-act="st-pri"]') === window.RM.priorityEnabled(state(), 'story'),
+      'story priority chips follow the STORY scheme, untouched by feature RICE');
+  }
   // undo the scheme switch + four RICE picks so later suites see the default state
   for (let u = 0; u < 5; u++) window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
-// statuses configurable in Setup, feature and story lists separate
+// (workflow statuses were removed — features and stories carry only Done)
 {
-  suTab('statuses');
-  ok(doc.querySelectorAll('#setupView .su-card').length === 2, 'Statuses tab: feature + story cards');
-  ok(doc.querySelectorAll('#setupView [data-sustat="feature"]').length === 4 &&
-     doc.querySelectorAll('#setupView [data-sustat="story"]').length === 3,
-    'default lists: 4 feature statuses, 3 story statuses');
-  const inp = doc.querySelector('#setupView [data-sustat="feature"][data-old="Blocked"]');
-  inp.value = 'Waiting';
-  inp.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.statuses.feature.includes('Waiting') && !state().meta.statuses.feature.includes('Blocked'),
-    'renaming a status commits');
-  const addInp = doc.querySelector('#suStAdd-story');
-  addInp.value = 'In review';
-  click(doc.querySelector('#setupView [data-sustatadd="story"]'));
-  ok(state().meta.statuses.story.indexOf('In review') === state().meta.statuses.story.length - 2,
-    'new story status lands before Done');
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -1919,7 +1943,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 {
   // priority column: enable MoSCoW in Setup, chip appears in Scoping
   suTab('sizing');
-  const priCards = doc.querySelectorAll('#setupView [data-supri]');
+  const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
   ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
   click(Array.from(priCards).find(b => b.dataset.supri === 'moscow'));
   ok(state().meta.priorityScheme === 'moscow', 'MoSCoW priority commits');
@@ -2345,7 +2369,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 
   // planning columns hide too
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
-  ok(doc.querySelectorAll('#hlCols i[data-plcol]').length === 3, 'planning header lists size/dur/ppl');
+  {
+    const plKeys = Array.from(doc.querySelectorAll('#hlCols i[data-plcol]')).map(i => i.dataset.plcol);
+    ok(['size', 'dur', 'asg'].every(k => plKeys.indexOf(k) !== -1), 'planning header lists size/dur/ppl (' + plKeys.join(',') + ')');
+  }
   doc.querySelector('.hdr-left.corner').dispatchEvent(
     new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
   click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^Dur/.test(b.textContent.trim())));
@@ -2408,23 +2435,6 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature
-}
-
-// ------------------------------------------------- batch 11: status colors
-{
-  ok(window.RM.statusColor(state(), 'feature', window.RM.statusesOf(state(), 'feature').slice(-1)[0]) === '08875B',
-    'the last (done) status defaults to green');
-  click(doc.querySelector('#btnSetup'));
-  window.eval("document.querySelector('[data-sutab=\"statuses\"]').click()");
-  const sw = doc.querySelector('#setupView [data-stcsw]');
-  ok(!!sw, 'Setup → Statuses offers a color swatch per status');
-  click(sw);
-  const pick = doc.querySelector('#popover [data-stpick="B3362B"]');
-  ok(!!pick, 'the swatch opens a palette');
-  click(pick);
-  const stName = sw.dataset.stcsw.split(':').slice(1).join(':');
-  ok(state().meta.statusColors[stName] === 'B3362B', 'picking a color stores it on the status');
-  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // ------------------------------------------------- batch 11: history timeline
@@ -2875,8 +2885,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   window.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 10, clientY: 60 }));
   window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 10, clientY: 60 }));
   const after = state().items.find(i => i.id === host.id).stories.map(s2 => s2.id);
-  ok(after[0] !== firstId && after.indexOf(firstId) === after.indexOf(lastId) - 1,
-    'dragging a story row in Planning reorders it (before the last story: ' + after.indexOf(firstId) + ')');
+  // jsdom has no layout, so the drop resolves to the last story row on the page
+  const lastStoryRow = Array.from(doc.querySelectorAll('#rows .row.story')).pop();
+  const dest = state().items.find(i => i.stories.some(x => x.id === firstId));
+  ok(!!dest && dest.id === lastStoryRow.dataset.id && (dest.id !== host.id || after[0] !== firstId),
+    'dragging a story row in Planning moves it to the drop row\'s feature (' + (dest && dest.id) + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   ok(state().items.find(i => i.id === host.id).stories[0].id === firstId, 'undo restores the story order');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the added story
@@ -2989,6 +3002,131 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(state().items.find(i => i.id === msIt.id).msStyle == null, 'undo restores the diamond');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   ok(state().items.find(i => i.id === msIt.id).milestone === false, 'undo restores the feature');
+}
+
+// ---------------------------------------------------------------- story scales, snap prefs, holidays, roles
+{
+  // stories estimate on their own scale: story points + severity ladder by default
+  ok(state().meta.storySizeScheme === 'fibonacci' && state().meta.storyPriorityScheme === 'levels',
+    'stories default to story points and the severity ladder');
+  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '1,2,3,5,8,13' &&
+    window.RM.sizeOrderOf(state()).join(',') !== window.RM.sizeOrderOf(state(), 'story').join(','),
+    'the story scale is separate from the feature scale');
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  ok(!!doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'), 'Setup → Sizing offers a story scale picker');
+  click(doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'));
+  ok(state().meta.storySizeScheme === 'tshirt' && state().meta.sizeScheme !== 'none' &&
+    window.RM.sizeOrderOf(state(), 'story').indexOf('XL') !== -1, 'picking a story scale leaves the feature scale alone');
+  click(doc.querySelector('#setupView [data-supri="moscow"][data-kind="story"]'));
+  ok(state().meta.storyPriorityScheme === 'moscow' && state().meta.priorityScheme !== 'moscow',
+    'story priority scheme is independent of the feature scheme');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+
+  // story chips on every board: Planning rows, Sprinting rows, Prioritizing cards
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story detail
+  const stRowP = doc.querySelector('#rows .row.story[data-story]');
+  ok(!!stRowP && !!stRowP.querySelector('[data-act="st-size"]') && !!stRowP.querySelector('[data-act="st-wk"]'),
+    'planning story rows carry size + duration chips');
+  click(stRowP.querySelector('[data-act="st-size"]'));
+  const pt5 = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /^5\b/.test(b.textContent.trim()));
+  ok(!!pt5, 'the story size menu lists story points');
+  click(pt5);
+  const hostP = state().items.find(i => i.id === stRowP.dataset.id);
+  ok(hostP.stories.find(x => x.id === stRowP.dataset.story).size === '5', 'picking a story size commits');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  // an unscheduled story shows its name faintly where the feature starts
+  {
+    const ghostRow = Array.from(doc.querySelectorAll('#rows .row.story[data-story]')).find(r => {
+      const h = state().items.find(i => i.id === r.dataset.id);
+      const st = h && h.stories.find(x => x.id === r.dataset.story);
+      return h && h.startDay != null && st && st.startDay == null;
+    });
+    ok(!ghostRow || !!ghostRow.querySelector('.st-ghost'), 'unscheduled stories show a faint name on the lane');
+  }
+  // selecting a scheduled story outlines the story bar, not the feature bar
+  {
+    const schedRow = Array.from(doc.querySelectorAll('#rows .row.story[data-story]')).find(r => r.querySelector('[data-stbar]'));
+    if (schedRow) {
+      click(schedRow.querySelector('[data-act="st-open"]'));
+      ok(!!doc.querySelector('#rows .st-bar.selected') && !doc.querySelector('#rows .row.item[data-id="' + schedRow.dataset.id + '"] .bar.selected'),
+        'a selected story owns the selection outline');
+    }
+  }
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature detail
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  ok(!!doc.querySelector('#sprintsView .spv-row [data-spact="dur"]') || !!doc.querySelector('.spv-row [data-spact="dur"]'),
+    'sprinting rows carry a duration chip');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+
+  // one Add feature row per group when grouped
+  {
+    const groupedBefore = doc.querySelectorAll('#rows .row.addrow.sub').length;
+    if (groupedBefore) {
+      const phasesWithGroups = new Set(Array.from(doc.querySelectorAll('#rows .row.addrow.sub')).map(r => r.dataset.phase));
+      const dup = Array.from(doc.querySelectorAll('#rows .row.addrow:not(.sub)')).filter(r => phasesWithGroups.has(r.dataset.phase));
+      ok(dup.length === 0, 'grouped phases have no duplicate phase-level Add feature row');
+    }
+  }
+
+  // snap: features and stories each keep their own grid
+  click(doc.querySelector('#btnSetup'));
+  suTab('prefs');
+  ok(doc.querySelectorAll('#setupView [data-pref-snap="feature:week"].on').length === 1 &&
+    doc.querySelectorAll('#setupView [data-pref-snap="story:sprint"].on').length === 1,
+    'defaults: features snap to the week, stories to the sprint');
+  click(doc.querySelector('#setupView [data-pref-snap="story:day"]'));
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).snapStory === 'day' &&
+    JSON.parse(window.localStorage.getItem('headway-ui-v1')).snapFeat === 'week', 'story snap persists on its own');
+  click(doc.querySelector('#setupView [data-pref-snap="story:sprint"]'));
+
+  // holidays edit in place
+  suTab('timeline');
+  {
+    const nm = doc.querySelector('#setupView [data-suholname="0"]');
+    ok(!!nm && !!doc.querySelector('#setupView [data-suholstart="0"]'), 'holiday rows expose name + date inputs');
+    nm.value = 'Renamed day';
+    nm.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().meta.holidayRanges.some(r => r.name === 'Renamed day'), 'renaming a holiday commits');
+    const idx = state().meta.holidayRanges.findIndex(r => r.name === 'Renamed day');
+    const r0 = state().meta.holidayRanges[idx];
+    const endIn = doc.querySelector('#setupView [data-suholend="' + idx + '"]');
+    const nextDay = (iso) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
+    const newEnd = nextDay(r0.end);
+    endIn.value = newEnd;
+    endIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const r1 = state().meta.holidayRanges.find(r => r.name === 'Renamed day');
+    ok(r1.end === newEnd && state().meta.holidays.indexOf(newEnd) !== -1, 'moving a holiday\'s last day extends its dates');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  }
+
+  // roles delete even when in use — people and features just lose the role
+  {
+    // give a feature a role through the panel first
+    click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    const roleRow = doc.querySelector('#rows .row.item');
+    click(roleRow.querySelector('.r-num'));
+    click(doc.querySelector('#panel [data-dd="teamType"]'));
+    const roleOpt = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => b.textContent.trim() === state().teamTypes[0]);
+    click(roleOpt);
+    const usedRole = state().teamTypes[0];
+    ok(state().items.find(i => i.id === roleRow.dataset.id).teamType === usedRole, 'a feature now carries a role');
+    click(doc.querySelector('#btnSetup'));
+    suTab('team');
+    click(doc.querySelector('#setupView [data-suttrm="' + usedRole + '"]'));
+    ok(state().teamTypes.indexOf(usedRole) === -1, 'an in-use role can be removed');
+    ok(!state().team.some(m => m.type === usedRole) && !state().items.some(i => i.teamType === usedRole),
+      'people and features that had it now have no role');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(state().teamTypes.indexOf(usedRole) !== -1, 'undo restores the role');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  }
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');

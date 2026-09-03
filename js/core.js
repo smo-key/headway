@@ -52,44 +52,63 @@
     }
   };
   RM.SIZE_SCHEME_ORDER = ['tshirt', 'fibonacci', 'points5', 'none'];
-  RM.sizeOrderOf = function (state) {
+  // Features and stories size on SEPARATE scales: features under
+  // meta.sizeScheme / sizeOrder / sizeDays, stories under the story* twins.
+  // Every helper takes an optional kind ('feature' default | 'story').
+  RM.DEFAULT_STORY_SIZE_SCHEME = 'fibonacci';
+  RM.DEFAULT_STORY_PRIORITY_SCHEME = 'levels';
+  function sizeKeys(kind) {
+    return kind === 'story'
+      ? { scheme: 'storySizeScheme', order: 'storySizeOrder', days: 'storySizeDays' }
+      : { scheme: 'sizeScheme', order: 'sizeOrder', days: 'sizeDays' };
+  }
+  RM.sizeKeys = sizeKeys;
+  // walk every sized thing of a kind (features, or every story)
+  function eachOfKind(state, kind, fn) {
+    (state.items || []).forEach(function (it) {
+      if (kind === 'story') (it.stories || []).forEach(fn);
+      else fn(it);
+    });
+  }
+  RM.sizeOrderOf = function (state, kind) {
     var m = state.meta || state;
-    return m.sizeOrder || RM.SIZE_ORDER;
+    var k = sizeKeys(kind);
+    return m[k.order] || (kind === 'story' ? RM.SIZE_SCHEMES[RM.DEFAULT_STORY_SIZE_SCHEME].sizes : RM.SIZE_ORDER);
   };
-  RM.sizingEnabled = function (state) {
+  RM.sizingEnabled = function (state, kind) {
     var m = state.meta || state;
-    return m.sizeScheme !== 'none' && RM.sizeOrderOf(state).length > 0;
+    return m[sizeKeys(kind).scheme] !== 'none' && RM.sizeOrderOf(state, kind).length > 0;
   };
-  RM.setSizeScheme = function (state, scheme) {
+  RM.setSizeScheme = function (state, scheme, kind) {
     var def = RM.SIZE_SCHEMES[scheme];
     if (!def || scheme === 'custom') return;
-    var m = state.meta;
-    m.sizeScheme = scheme;
-    m.sizeOrder = def.sizes.slice();
-    m.sizeDays = RM.clone(def.days);
+    var m = state.meta, k = sizeKeys(kind);
+    m[k.scheme] = scheme;
+    m[k.order] = def.sizes.slice();
+    m[k.days] = RM.clone(def.days);
   };
-  RM.renameSizeOption = function (state, oldLabel, newLabel) {
-    var m = state.meta;
-    if (!newLabel || oldLabel === newLabel || m.sizeOrder.indexOf(newLabel) !== -1) return;
-    m.sizeOrder = m.sizeOrder.map(function (l) { return l === oldLabel ? newLabel : l; });
-    m.sizeDays[newLabel] = m.sizeDays[oldLabel];
-    delete m.sizeDays[oldLabel];
-    state.items.forEach(function (it) { if (it.size === oldLabel) it.size = newLabel; });
-    m.sizeScheme = 'custom';
+  RM.renameSizeOption = function (state, oldLabel, newLabel, kind) {
+    var m = state.meta, k = sizeKeys(kind);
+    if (!newLabel || oldLabel === newLabel || m[k.order].indexOf(newLabel) !== -1) return;
+    m[k.order] = m[k.order].map(function (l) { return l === oldLabel ? newLabel : l; });
+    m[k.days][newLabel] = m[k.days][oldLabel];
+    delete m[k.days][oldLabel];
+    eachOfKind(state, kind, function (o) { if (o.size === oldLabel) o.size = newLabel; });
+    m[k.scheme] = 'custom';
   };
-  RM.addSizeOption = function (state, label, days) {
-    var m = state.meta;
-    if (!label || m.sizeOrder.indexOf(label) !== -1) return;
-    m.sizeOrder.push(label);
-    m.sizeDays[label] = isFinite(+days) && +days > 0 ? +days : 5;
-    m.sizeScheme = 'custom';
+  RM.addSizeOption = function (state, label, days, kind) {
+    var m = state.meta, k = sizeKeys(kind);
+    if (!label || m[k.order].indexOf(label) !== -1) return;
+    m[k.order].push(label);
+    m[k.days][label] = isFinite(+days) && +days > 0 ? +days : 5;
+    m[k.scheme] = 'custom';
   };
-  RM.removeSizeOption = function (state, label) {
-    var m = state.meta;
-    m.sizeOrder = m.sizeOrder.filter(function (l) { return l !== label; });
-    delete m.sizeDays[label];
-    state.items.forEach(function (it) { if (it.size === label) it.size = null; });
-    m.sizeScheme = 'custom';
+  RM.removeSizeOption = function (state, label, kind) {
+    var m = state.meta, k = sizeKeys(kind);
+    m[k.order] = m[k.order].filter(function (l) { return l !== label; });
+    delete m[k.days][label];
+    eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
+    m[k.scheme] = 'custom';
   };
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
 
@@ -123,20 +142,25 @@
       desc: 'Reach × Impact × Confidence ÷ Effort — evidence-based scoring.' }
   };
   RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels', 'rice'];
-  RM.prioritySchemeOf = function (state) {
-    var s = state && state.meta && state.meta.priorityScheme;
+  // stories carry no RICE inputs, so their scheme list stops at the ladders
+  RM.STORY_PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels'];
+  function prioKey(kind) { return kind === 'story' ? 'storyPriorityScheme' : 'priorityScheme'; }
+  RM.prioritySchemeOf = function (state, kind) {
+    var s = state && state.meta && state.meta[prioKey(kind)];
+    if (kind === 'story' && s === 'rice') return 'none';
     return RM.PRIORITY_SCHEMES[s] ? s : 'none';
   };
-  RM.priorityEnabled = function (state) { return RM.prioritySchemeOf(state) !== 'none'; };
-  RM.priorityOrderOf = function (state) {
-    return (RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state)].order || []).slice();
+  RM.priorityEnabled = function (state, kind) { return RM.prioritySchemeOf(state, kind) !== 'none'; };
+  RM.priorityOrderOf = function (state, kind) {
+    return (RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state, kind)].order || []).slice();
   };
-  RM.setPriorityScheme = function (state, key) {
+  RM.setPriorityScheme = function (state, key, kind) {
     if (!RM.PRIORITY_SCHEMES[key]) return;
-    state.meta.priorityScheme = key;
+    if (kind === 'story' && key === 'rice') return;
+    state.meta[prioKey(kind)] = key;
     var order = RM.PRIORITY_SCHEMES[key].order || [];
-    state.items.forEach(function (it) {
-      if (it.priority && order.indexOf(it.priority) === -1) it.priority = null;
+    eachOfKind(state, kind, function (o) {
+      if (o.priority && order.indexOf(o.priority) === -1) o.priority = null;
     });
   };
   RM.riskSchemeOf = function (state) {
@@ -156,15 +180,12 @@
     var order = RM.RISK_SCHEMES[key].order || [];
     state.items.forEach(function (it) {
       if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
+      (it.stories || []).forEach(function (st) {
+        if (st.risk && order.indexOf(st.risk) === -1) st.risk = null;
+      });
     });
   };
 
-  // workflow statuses — features and stories carry separate lists; the
-  // LAST status of a list means done (kept in sync with the done flag)
-  RM.DEFAULT_STATUSES = {
-    feature: ['Not started', 'In progress', 'Blocked', 'Done'],
-    story: ['To do', 'In progress', 'Done']
-  };
   // RICE: reach × impact × confidence% ÷ effort. Null until every input is
   // in — a partial score would sort above honestly-unscored work.
   RM.riceScore = function (it) {
@@ -173,79 +194,6 @@
     return r.reach * r.impact * (r.confidence / 100) / r.effort;
   };
 
-  RM.statusesOf = function (state, kind) {
-    var st = state.meta && state.meta.statuses;
-    var list = st && Array.isArray(st[kind]) ? st[kind] : null;
-    return list && list.length ? list.slice() : RM.DEFAULT_STATUSES[kind].slice();
-  };
-  // effective status: explicit value, else done -> last, else first
-  RM.statusOf = function (state, obj, kind) {
-    var list = RM.statusesOf(state, kind);
-    if (obj.status && list.indexOf(obj.status) !== -1) return obj.status;
-    return obj.done ? list[list.length - 1] : list[0];
-  };
-  // status color: user-assigned (meta.statusColors, keyed by name) or a
-  // sensible default from the status's position (todo gray, doing blue,
-  // last-is-done green). Returns a 6-hex string, no '#'.
-  RM.statusColor = function (state, kind, name) {
-    var sc = (state.meta && state.meta.statusColors) || {};
-    if (typeof sc[name] === 'string' && /^[0-9a-fA-F]{6}$/.test(sc[name])) return sc[name];
-    var list = RM.statusesOf(state, kind);
-    var i = list.indexOf(name);
-    if (i === list.length - 1) return '08875B';
-    if (i <= 0) return '6E7883';
-    return '0057B8';
-  };
-  RM.setStatus = function (state, obj, kind, status) {
-    var list = RM.statusesOf(state, kind);
-    if (list.indexOf(status) === -1) return;
-    obj.status = status;
-    obj.done = status === list[list.length - 1];
-  };
-  RM.renameStatus = function (state, kind, oldName, newName) {
-    newName = String(newName || '').trim();
-    var list = RM.statusesOf(state, kind);
-    var i = list.indexOf(oldName);
-    if (!newName || i === -1 || list.indexOf(newName) !== -1) return false;
-    list[i] = newName;
-    state.meta.statuses = state.meta.statuses || {};
-    state.meta.statuses[kind] = list;
-    var fix = function (o) { if (o.status === oldName) o.status = newName; };
-    state.items.forEach(function (it) {
-      if (kind === 'feature') fix(it);
-      else (it.stories || []).forEach(fix);
-    });
-    // an assigned color follows the status through its rename
-    var sc = state.meta.statusColors;
-    if (sc && sc[oldName] != null) {
-      sc[newName] = sc[oldName];
-      delete sc[oldName];
-    }
-    return true;
-  };
-  RM.addStatus = function (state, kind, name) {
-    name = String(name || '').trim();
-    var list = RM.statusesOf(state, kind);
-    if (!name || list.indexOf(name) !== -1) return false;
-    // new statuses land before the done (last) column
-    list.splice(Math.max(0, list.length - 1), 0, name);
-    state.meta.statuses = state.meta.statuses || {};
-    state.meta.statuses[kind] = list;
-    return true;
-  };
-  RM.removeStatus = function (state, kind, name) {
-    var list = RM.statusesOf(state, kind);
-    if (list.length <= 2 || list.indexOf(name) === -1) return false;
-    list = list.filter(function (x) { return x !== name; });
-    state.meta.statuses = state.meta.statuses || {};
-    state.meta.statuses[kind] = list;
-    var fix = function (o) { if (o.status === name) o.status = null; };
-    state.items.forEach(function (it) {
-      if (kind === 'feature') fix(it);
-      else (it.stories || []).forEach(fix);
-    });
-    return true;
-  };
   // weeks [w0, w1) of a numbered sprint
   RM.sprintRange = function (meta, num) {
     var si = RM.sprintInfo(meta);
@@ -260,7 +208,6 @@
   };
 
   RM.DEFAULT_TEAM_TYPES = ['Software Engineer', 'Product Designer', 'Product Manager', 'Data Scientist', 'QA Engineer'];
-  RM.DEFAULT_WORK_TYPE = 'Software Engineer';
   RM.WEEK_HOURS = 40; // one person's full week
   RM.HISTORY_MAX = 300; // version-history entries kept per document
   RM.OPTIONS_MAX = 12;  // parked alternate-plan options kept per document
@@ -679,6 +626,19 @@
     m.holidayRanges.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
     RM.syncHolidayDates(m);
   };
+  // edit one range in place: patch = { name?, start?, end? }; a start past
+  // the end (or vice versa) swaps them so the range stays valid
+  RM.updateHolidayRange = function (m, idx, patch) {
+    var r = (m.holidayRanges || [])[idx];
+    if (!r) return false;
+    if (patch.name != null) r.name = String(patch.name).trim();
+    if (patch.start) r.start = patch.start;
+    if (patch.end) r.end = patch.end;
+    if (r.end < r.start) { var t = r.start; r.start = r.end; r.end = t; }
+    m.holidayRanges.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+    RM.syncHolidayDates(m);
+    return true;
+  };
   RM.removeHolidayRange = function (m, idx) {
     m.holidayRanges.splice(idx, 1);
     RM.syncHolidayDates(m);
@@ -740,6 +700,13 @@
     return { wps: wps, anchorWeek: anchorWeek, firstNum: meta.sprintAnchorNum != null ? meta.sprintAnchorNum : 1 };
   };
 
+  // working-day slots in one sprint (one week when sprints are off) — the
+  // default length of a newly scheduled story or unsized feature
+  RM.sprintDays = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    return RM.slotsOf(m) * RM.sprintInfo(m).wps;
+  };
+
   RM.sprintNumForWeek = function (meta, week) {
     var si = RM.sprintInfo(meta);
     return si.firstNum + Math.floor((week - si.anchorWeek) / si.wps);
@@ -766,9 +733,18 @@
     return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   };
 
-  RM.sizeDays = function (state, size) {
-    var map = (state.meta && state.meta.sizeDays) || RM.DEFAULT_SIZE_DAYS;
+  RM.sizeDays = function (state, size, kind) {
+    var k = sizeKeys(kind);
+    var map = (state.meta && state.meta[k.days]) || (kind === 'story' ? RM.SIZE_SCHEMES[RM.DEFAULT_STORY_SIZE_SCHEME].days : RM.DEFAULT_SIZE_DAYS);
     return size && map[size] != null ? map[size] : null;
+  };
+  // Effective working days for a story: its size, else its own span, else
+  // one sprint
+  RM.storyEffortDays = function (state, st) {
+    var sd = RM.sizeDays(state, st.size, 'story');
+    if (sd != null) return sd;
+    if (st.durDays != null) return st.durDays;
+    return RM.sprintDays(state.meta);
   };
 
   // Nearest size option for a working-day count (ties resolve to the smaller size).
@@ -936,6 +912,39 @@
         m.sizeDays[l] = schemeDays[l] || 5;
       }
     });
+    // the story scale: a doc from before it existed hands stories the
+    // feature scale when any story is already sized (so those sizes keep
+    // meaning); otherwise stories start on story points
+    if (m.storySizeScheme == null) {
+      var anyStorySize = (state.items || []).some(function (it) {
+        return (it && it.stories || []).some(function (st) { return st && st.size; });
+      });
+      if (anyStorySize) {
+        m.storySizeScheme = m.sizeScheme;
+        m.storySizeOrder = m.sizeOrder.slice();
+        m.storySizeDays = RM.clone(m.sizeDays);
+      } else {
+        m.storySizeScheme = RM.DEFAULT_STORY_SIZE_SCHEME;
+      }
+    }
+    m.storySizeScheme = RM.SIZE_SCHEMES[m.storySizeScheme] ? m.storySizeScheme : RM.DEFAULT_STORY_SIZE_SCHEME;
+    if (Array.isArray(m.storySizeOrder)) {
+      var seenSs = {};
+      m.storySizeOrder = m.storySizeOrder.map(String).filter(function (l) {
+        if (!l || seenSs[l]) return false;
+        seenSs[l] = true;
+        return true;
+      });
+    } else {
+      m.storySizeOrder = (RM.SIZE_SCHEMES[m.storySizeScheme].sizes || []).slice();
+    }
+    var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
+    m.storySizeDays = m.storySizeDays && typeof m.storySizeDays === 'object' ? m.storySizeDays : {};
+    m.storySizeOrder.forEach(function (l) {
+      if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] <= 0) {
+        m.storySizeDays[l] = storySchemeDays[l] || 5;
+      }
+    });
     // workstream feature switch — ON unless the project turned it off
     m.workstreamsEnabled = m.workstreamsEnabled !== false;
     // the default (null) workstream: user-visible name + color
@@ -945,31 +954,20 @@
       var hex = String(m.defaultWsColor || '').replace(/^#/, '').toUpperCase();
       return /^[0-9A-F]{6}$/.test(hex) ? hex : RM.PALETTE.neutral;
     })();
-    // workflow statuses (feature + story lists may differ)
-    m.statuses = (function () {
-      var out = {};
-      ['feature', 'story'].forEach(function (kind) {
-        var raw = m.statuses && Array.isArray(m.statuses[kind]) ? m.statuses[kind] : null;
-        var seenS = {}, list = [];
-        (raw || RM.DEFAULT_STATUSES[kind]).forEach(function (x) {
-          x = String(x || '').trim();
-          if (x && !seenS[x]) { seenS[x] = true; list.push(x); }
-        });
-        out[kind] = list.length >= 2 ? list : RM.DEFAULT_STATUSES[kind].slice();
-      });
-      // user-assigned status colors: name -> 6-hex
-      var sc = {};
-      if (m.statusColors && typeof m.statusColors === 'object') {
-        Object.keys(m.statusColors).forEach(function (nm) {
-          var hex = String(m.statusColors[nm] || '').replace(/^#/, '');
-          if (/^[0-9a-fA-F]{6}$/.test(hex)) sc[String(nm).slice(0, 60)] = hex.toUpperCase();
-        });
-      }
-      m.statusColors = sc;
-      return out;
-    })();
     // priority column scheme (own column, separate from risk)
     m.priorityScheme = RM.PRIORITY_SCHEMES[m.priorityScheme] ? m.priorityScheme : 'none';
+    // stories rank on their own scheme. A doc from before story schemes
+    // existed keeps the feature scheme for stories that already carry a
+    // priority; otherwise stories start on the severity ladder.
+    var anyStoryPri = (state.items || []).some(function (it) {
+      return (it && it.stories || []).some(function (st) { return st && st.priority; });
+    });
+    if (m.storyPriorityScheme == null) {
+      m.storyPriorityScheme = anyStoryPri && m.priorityScheme !== 'rice' ? m.priorityScheme : RM.DEFAULT_STORY_PRIORITY_SCHEME;
+    }
+    if (!RM.PRIORITY_SCHEMES[m.storyPriorityScheme] || m.storyPriorityScheme === 'rice') {
+      m.storyPriorityScheme = RM.DEFAULT_STORY_PRIORITY_SCHEME;
+    }
     // a doc saved while MoSCoW lived under Risk migrates to the Priority column
     if (m.riskScheme === 'moscow') {
       m.riskScheme = 'none';
@@ -1025,8 +1023,7 @@
 
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
     var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
-    var firstType = state.teamTypes && state.teamTypes.length
-      ? state.teamTypes[0] : RM.DEFAULT_WORK_TYPE;
+    var storyPrioOrder = RM.PRIORITY_SCHEMES[m.storyPriorityScheme].order || [];
     state.items = (state.items || []).map(function (it) {
       return {
         id: it.id || RM.uid('i'),
@@ -1060,8 +1057,8 @@
         // hard deadline: a calendar date (ISO), so it survives work-week edits
         deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(it.deadline || '')) ? String(it.deadline) : null,
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
-        // role is descriptive metadata (capacity is role-agnostic)
-        teamType: it.teamType != null && it.teamType !== '' ? it.teamType : firstType,
+        // role is descriptive metadata (capacity is role-agnostic); empty = any role
+        teamType: it.teamType != null && it.teamType !== '' ? String(it.teamType) : '',
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
         // milestone marker shape; absent = diamond (kept on bars so a
@@ -1095,8 +1092,6 @@
         // team-member ids working on this feature (validated against the
         // roster once the team is normalized below)
         assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
-        // workflow status; null = derived from done (last) / first
-        status: it.status && m.statuses.feature.indexOf(it.status) !== -1 ? it.status : null,
         done: !!it.done,
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
@@ -1105,10 +1100,12 @@
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
             jiraKey: RM.jiraKeyOf(s.jiraKey),
-            status: s.status && m.statuses.story.indexOf(s.status) !== -1 ? s.status : null,
             size: s.size || null,
-            priority: s.priority && prioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
+            priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
+            // stories rate risk on the document's risk scheme, like features
+            risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
+              ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
             // stories carry their own hard deadline, same shape as items
             deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
@@ -1429,7 +1426,7 @@
     var sd = RM.sizeDays(state, it.size);
     if (sd != null) return sd;
     if (it.durDays != null) return it.durDays;
-    return 5;
+    return RM.sprintDays(state.meta);
   };
 
   // End of an item INCLUDING its risk buffer — dependents plan around the
@@ -2123,7 +2120,7 @@
       var day = RM.sprintStartDay(meta, num);
       var was = t.startDay;
       if (t.durDays == null) {
-        t.durDays = t.milestone ? 1 : RM.stretchSpan(meta, day, RM.effortDays(state, t) || RM.slotsOf(meta));
+        t.durDays = t.milestone ? 1 : RM.stretchSpan(meta, day, RM.effortDays(state, t) || RM.sprintDays(meta));
       }
       t.startDay = day;
       if (was != null) RM.shiftStories(t, day - was);
@@ -2131,7 +2128,7 @@
     RM.reorderItem(state, itemId, beforeId);
     return true;
   };
-  // story variant: a story gets its own timeline in sprint `num` (one week
+  // story variant: a story gets its own timeline in sprint `num` (one sprint
   // unless it already has a span), or loses it (num = null); reorders only
   // inside its feature's story list (before `beforeStId`, else last)
   RM.moveStoryToSprint = function (state, itemId, stId, num, beforeStId) {
@@ -2142,7 +2139,7 @@
     if (num == null) { st.startDay = null; st.durDays = null; }
     else {
       st.startDay = RM.sprintStartDay(state.meta, num);
-      if (st.durDays == null) st.durDays = RM.slotsOf(state.meta);
+      if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, RM.storyEffortDays(state, st));
     }
     if (beforeStId !== stId) {
       it.stories = it.stories.filter(function (x) { return x.id !== stId; });
@@ -2171,6 +2168,18 @@
       state.meta.rateCard[newName] = state.meta.rateCard[oldName];
       delete state.meta.rateCard[oldName];
     }
+    return true;
+  };
+
+  // Remove a role everywhere: people and features that had it are left with
+  // no role (empty), and its rate card entry goes with it.
+  RM.removeRole = function (state, name) {
+    var i = state.teamTypes.indexOf(name);
+    if (i === -1) return false;
+    state.teamTypes.splice(i, 1);
+    state.team.forEach(function (m) { if (m.type === name) m.type = ''; });
+    state.items.forEach(function (it) { if (it.teamType === name) it.teamType = ''; });
+    if (state.meta.rateCard) delete state.meta.rateCard[name];
     return true;
   };
 

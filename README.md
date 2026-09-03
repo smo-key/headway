@@ -75,7 +75,7 @@ rows have right-click context menus; dropdowns share one list UI.
 | Area | How |
 |---|---|
 | Timeline | Biweekly-sprint grid (dates primary, sprint numbers secondary — numbering anchor configurable, e.g. S1 = Sep 7). Holidays are individual DATES drawn as day-level hatched segments; click a week header to toggle a whole week, single dates in Settings. Drag empty space to pan, `⌘scroll` to zoom |
-| Bars | One uniform duration per item (the work/risk split lives in the panel). Drag to move, edges resize; `⌘-drag` pushes all downstream dependents along. Snap grid in View → Snap (day / week / 2 weeks, default week). View → Auto-order (default on) re-sorts rows by start date after a move |
+| Bars | One uniform duration per item (the work/risk split lives in the panel). Drag to move, edges resize; `⌘-drag` pushes all downstream dependents along. Snap grids in View → Snap, one for features (default week) and one for stories (default sprint); day / week / sprint each. View → Auto-order (default on) re-sorts rows by start date after a move |
 | Sizes | Measured in weeks: XS 2d · S 1w · M 2w · L 4w · XL 8w (editable in Settings). Risk buffers use the same scale |
 | Risk | Per-item severity — None / L / M / H (legacy t-shirt values migrate). Shown in Scoping and the panel only; Planning rows carry no risk chip. The panel also shows a computed dependency-risk estimate with reasons |
 | Phases | Header phase lane: spans auto-derive from items, or pin explicit dates (phase modal, or drag the span — body moves, edges resize). Pinned spans show a white outline |
