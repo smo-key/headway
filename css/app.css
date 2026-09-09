@@ -1195,6 +1195,13 @@ table.roster .rm { width: 30px; }
 .avstack { display: inline-flex; align-items: center; flex: 0 0 auto; margin-right: 2px; }
 .avstack .avatar { margin-left: -5px; box-shadow: 0 0 0 1.5px var(--surface); }
 .avstack .avatar:first-child { margin-left: 0; }
+/* presence: who else is on this row right now — the sm avatar with a ring
+   (surface gap + accent) so it reads "here now", not "assigned" */
+.r-presence { display: inline-flex; align-items: center; flex: 0 0 auto; margin-right: 4px; }
+.r-presence:empty { display: none; }
+.r-presence .avatar { margin-left: -4px; box-shadow: 0 0 0 1.5px var(--surface), 0 0 0 3px var(--blue); }
+.r-presence .avatar:first-child { margin-left: 0; }
+.avatar.presence.more { background: var(--blue-soft); color: var(--blue); }
 .asg-chip .avatar { margin-right: 3px; }
 .bu-nm .avatar { margin-right: 6px; vertical-align: -5px; }
 

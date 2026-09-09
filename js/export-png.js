@@ -155,14 +155,11 @@
     if (opts.arrows) {
       var rowByItem = {};
       rows.forEach(function (r) { if (r.kind === 'item') rowByItem[r.id] = r; });
-      var byNum = {};
-      state.items.forEach(function (o) { byNum[o.num] = o; });
       state.items.forEach(function (it) {
         var to = rowByItem[it.id];
         if (!to) return;
-        (it.deps || []).forEach(function (n) {
-          var dep = byNum[n];
-          var from = dep && rowByItem[dep.id];
+        (it.deps || []).forEach(function (depId) {
+          var from = rowByItem[depId];
           if (!from) return;
           var x0 = from.bar.x + from.bar.w, y0 = from.y + from.h / 2;
           var x1 = to.bar.x, y1 = to.y + to.h / 2;

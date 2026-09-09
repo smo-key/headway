@@ -227,6 +227,17 @@
   };
 
   // ------------------------------------------------------------ summaries
+  // deps are stored as item ids; the assistant reads and writes feature
+  // numbers (a legacy number still resolves). Numbers it writes back are
+  // turned into ids by RM.normalizeState (migrateDepsToIds) on commit.
+  function depNums(state, it) {
+    var out = [];
+    (it.deps || []).forEach(function (d) {
+      var dep = RM.itemById(state, d) || RM.itemByNum(state, +d);
+      if (dep && out.indexOf(dep.num) === -1) out.push(dep.num);
+    });
+    return out;
+  }
   function itemLine(state, it) {
     var meta = state.meta;
     var ph = null;
@@ -242,7 +253,7 @@
       o.durDays = it.durDays;
     } else o.start = null;
     if (it.deadline) o.deadline = it.deadline;
-    if (it.deps && it.deps.length) o.deps = it.deps.slice();
+    if (it.deps && it.deps.length) o.deps = depNums(state, it); // the model speaks feature numbers
     if (it.done) o.done = true;
     if (it.locked) o.locked = true;
     if (it.jiraKey) o.jiraKey = it.jiraKey;
@@ -256,6 +267,7 @@
   function itemFull(state, it) {
     var meta = state.meta;
     var o = clone(it);
+    o.deps = depNums(state, it);
     o.start = isoOfDay(meta, it.startDay);
     o.end = it.startDay != null && it.durDays != null ? spanEndIso(meta, it.startDay, it.durDays) : null;
     ['description', 'ac', 'enables', 'outOfScope', 'notes', 'extDeps'].forEach(function (k) { o[k] = RM.htmlToText(it[k]); });

@@ -32,18 +32,10 @@
     return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + argbHex } };
   }
 
-  // \u-escape every non-ASCII char: the result is still valid JSON, and
-  // pure-ASCII chunks are immune to the surrogate-pair corruption ExcelJS
-  // exhibits at certain in-cell offsets (splitting mid-escape is fine —
-  // concatenation restores it before JSON.parse).
-  function asciiJson(obj) {
-    return JSON.stringify(obj).replace(/[\u007F-\uFFFF]/g, function (ch) {
-      return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
-    });
-  }
   // The canonical serialized document: the EXACT string exportWorkbook embeds
-  // in the hidden sheet. Two files carry the same document iff these match.
-  RMExcel.stateJsonOf = function (state) { return asciiJson(state); };
+  // in the hidden sheet (RM.asciiJson: ASCII-only, so ExcelJS chunking can't
+  // corrupt it). Two files carry the same document iff these match.
+  RMExcel.stateJsonOf = function (state) { return RM.asciiJson(state); };
 
   // The embedded document JSON of a workbook (the string stateJsonOf wrote),
   // or null for foreign/template files with no valid _RoadmapTool sheet.
@@ -64,8 +56,15 @@
     });
   };
 
-  function depCellText(it) {
-    var parts = it.deps.map(String);
+  // Dependencies column: item numbers (deps are stored by id; the number is
+  // the human label parseDeps reads back) plus free-text deps. A dep whose
+  // item is gone is skipped.
+  function depCellText(state, it) {
+    var parts = [];
+    (it.deps || []).forEach(function (id) {
+      var dep = RM.itemById(state, id);
+      if (dep) parts.push(String(dep.num));
+    });
     (it.depsText || []).forEach(function (t) { parts.push(t); });
     return parts.length ? parts.join(', ') : 'None';
   }
@@ -232,7 +231,7 @@
         r.getCell(5).value = RM.htmlToText(it.enables || '') || null;
         r.getCell(6).value = RM.htmlToText(it.outOfScope || '') || null;
         r.getCell(7).value = RM.htmlToText(it.notes || '') || null;
-        r.getCell(8).value = depCellText(it);
+        r.getCell(8).value = depCellText(state, it);
         r.getCell(9).value = RM.htmlToText(it.extDeps || '') || null;
         r.getCell(10).value = it.size || null;
         r.getCell(11).value = it.risk || null;
@@ -340,7 +339,7 @@
       n += 1;
     }
     hws.getCell('A2').value = n; // chunk count
-    if (ui) hws.getCell('A3').value = asciiJson(ui);
+    if (ui) hws.getCell('A3').value = RM.asciiJson(ui);
     hws.state = 'veryHidden';
 
     return wb.xlsx.writeBuffer().then(function (buf) {
