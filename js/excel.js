@@ -477,8 +477,9 @@
           var ui = null;
           try { ui = JSON.parse(cellRaw(hws.getCell('A3')) || 'null'); } catch (e2) { /* prefs optional */ }
           var st = RM.normalizeState(parsed);
+          var capTypeChanges = RM.lastCapTypeChanges || 0; // people moved to their role's type
           try { reconcileVisibleEdits(wb, st); } catch (e3) { /* visible sheets optional */ }
-          return { state: st, source: 'tool', ui: ui };
+          return { state: st, source: 'tool', ui: ui, capTypeChanges: capTypeChanges };
         } catch (e) { /* fall through to template parse */ }
       }
       return parseTemplate(wb);

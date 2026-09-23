@@ -813,13 +813,11 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ti.value = 'Draft title'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.title === 'Draft title', 'Setup handlers edit the draft');
   ok(window.localStorage.getItem('headway-v1') === lsBefore, 'nothing from the draft is saved locally');
-  // a disk reload of the open document while the wizard is up lands in the stash, not the draft
-  const reloaded = JSON.parse(before); reloaded.meta.title = 'Changed on disk';
-  window.HeadwayApp.wizard.reloadForTest(reloaded);
-  ok(doc.body.classList.contains('wizard-open') && state().meta.title === 'Draft title', 'reload leaves the wizard and draft alone');
+  // (a disk reload under the wizard runs through the real file path, in the async tests below)
+  ok(!('reloadForTest' in window.HeadwayApp.wizard), 'no test-only hooks in the shipped wizard API');
+  // the top bar carries the step
+  ok(doc.querySelector('#wzTopStep').textContent === 'Step 1 of 9' && !doc.querySelector('#wizard .wz-kicker'), 'the top bar says Step 1 of 9');
   window.HeadwayApp.wizard.close(true);
-  ok(state().meta.title === 'Changed on disk', 'and the reloaded document is what comes back');
-  window.HeadwayApp.ai.commit('restore', (s) => { s.meta.title = JSON.parse(before).meta.title; });
   const beforeB = JSON.stringify(state());
   window.HeadwayApp.wizard.open();
   const ti2 = doc.querySelector('#wizard #suTitle');
@@ -931,18 +929,78 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(doc.body.classList.contains('start'), 'closing returns to the start page');
   doc.body.classList.remove('start');
 }
+// ---------------------------------------------------------------- Organization columns, size reset, Jira label, preset keys
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  suTab('org');
+  ok(doc.querySelectorAll('#setupView .su-org > .su-org-col').length === 3, 'Organization: Phases, Workstreams and Epics side by side');
+  const nPh = state().phases.length;
+  doc.querySelector('#suPhAddIn').value = 'Alpha\n\n  Beta  \nAlpha';
+  click(doc.querySelector('#suPhAddBtn'));
+  ok(state().phases.length === nPh + 2 && state().phases.slice(-2).map((p) => p.name).join() === 'Alpha,Beta', 'a pasted list adds one phase per line (blank and repeated lines skipped)');
+  if (!state().meta.workstreamsEnabled) { const we = doc.querySelector('#suWsEnable'); we.checked = true; we.dispatchEvent(new window.Event('change', { bubbles: true })); }
+  doc.querySelector('#suWsAdd').value = 'Stream one\nStream two';
+  click(doc.querySelector('#suWsAddBtn'));
+  ok(!!state().wsColors['Stream one'] && !!state().wsColors['Stream two'], 'a pasted list adds one workstream per line');
+  doc.querySelector('#suEpAdd').value = 'Epic one\nEpic two';
+  click(doc.querySelector('#suEpAddBtn'));
+  ok(!!doc.querySelector('#setupView [data-suepedit="Epic one"]') && !!doc.querySelector('#setupView [data-suepedit="Epic two"]'), 'epics can be added before any item uses them');
+  const reopened = window.RM.normalizeState(JSON.parse(JSON.stringify(state())));
+  ok(reopened.epicList.indexOf('Epic two') !== -1, 'added epics survive a reload');
+  undo(); undo(); undo();
+  ok(state().phases.length === nPh, 'the adds undo');
+  // size scales: Custom remembers its scheme and resets to it
+  suTab('est');
+  pickScheme('size', 'feature', 'fibonacci');
+  ok(!doc.querySelector('#setupView [data-suszreset]:not([data-kind])'), 'no Reset while the scale is the scheme\'s own');
+  const lbl = doc.querySelector('#setupView [data-suszlabel="13"]:not([data-kind])');
+  lbl.value = '21'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.sizeScheme === 'custom' && state().meta.sizeSchemeBase === 'fibonacci', 'editing marks it Custom and remembers the scheme');
+  const rst = doc.querySelector('#setupView [data-suszreset]:not([data-kind])');
+  ok(!!rst && /Story points|Fibonacci/i.test(rst.textContent), 'Reset names the scheme');
+  click(rst);
+  ok(state().meta.sizeScheme === 'fibonacci' && state().meta.sizeOrder.indexOf('13') !== -1 && state().meta.sizeOrder.indexOf('21') === -1, 'Reset puts the scheme\'s scale back');
+  undo(); undo(); undo();
+  // Jira Integration keeps a note that the mapping lives in the project
+  suTab('jira');
+  ok(/Saved in this project/.test(doc.querySelector('#setupView').textContent), 'Jira mapping says it is saved in this project');
+  // preset cards: arrow keys move the choice (radio group)
+  window.HeadwayApp.wizard.open();
+  const cards = () => [...doc.querySelectorAll('#wizard [data-wzpreset]')];
+  ok(cards()[0].tabIndex === 0 && cards().slice(1).every((c) => c.tabIndex === -1), 'one tab stop in the preset group');
+  cards()[0].focus();
+  cards()[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  ok(state().meta.preset === 'ascrum' && doc.activeElement === doc.querySelector('#wizard [data-wzpreset="ascrum"]'), 'ArrowRight picks and focuses the next preset');
+  doc.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  doc.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  ok(state().meta.preset === 'minimal', 'arrows wrap around');
+  window.HeadwayApp.wizard.go('sprints');
+  ok(doc.querySelector('#wzTopStep').textContent === 'Step 2 of 9', 'the top bar step follows');
+  window.HeadwayApp.wizard.close(true);
+  ok(!doc.querySelector('#wzTopStep'), 'and leaves with the wizard');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 // ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
 {
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   suTab('scheduling');
   ok(!doc.querySelector('#setupView [data-sucaprow]'), 'no Tracked checkboxes');
   ok(!/Tracked/.test(doc.querySelector('#setupView').textContent), 'no "Tracked" copy');
-  const sel = doc.querySelector('#setupView [data-surolect]');
-  ok(!!sel && doc.querySelectorAll('#setupView [data-surolect]').length === state().teamTypes.length, 'each role picks the capacity type it supplies');
-  const role = sel.dataset.surolect, t = state().capTypes[0];
-  sel.value = t; sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const t = state().capTypes[0];
+  const addRole = doc.querySelector('#setupView [data-suroleadd="' + t + '"]');
+  ok(!!addRole && doc.querySelectorAll('#setupView [data-suroleadd]').length === state().capTypes.length, 'each capacity type row has + Role');
+  click(addRole);
+  const roleBtn = [...doc.querySelectorAll('#popover .menu-list button')].find((b) => b.textContent.indexOf(state().teamTypes[0]) !== -1);
+  ok(!!roleBtn, '+ Role lists the roles');
+  const role = state().teamTypes[0];
+  click(roleBtn);
   ok(state().roleCapTypes[role] === t, 'role → type saved');
   ok(state().team.filter(m => m.type === role).every(m => m.capType === t), 'people follow their role');
+  ok(!!doc.querySelector('#setupView [data-surolerm="' + role + '"]') &&
+    doc.querySelector('#setupView [data-surolerm="' + role + '"]').closest('.su-row').dataset.key === t, 'the role shows as a Supplied by chip on its type');
+  click(doc.querySelector('#setupView [data-surolerm="' + role + '"]'));
+  ok(!state().roleCapTypes[role], 'the chip\'s × stops the role supplying it');
+  undo();
   ok(/How scheduling works/.test(doc.querySelector('#setupView').textContent), 'explainer card present');
   undo();
 
@@ -1471,6 +1529,8 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 {
   click(doc.querySelector('#btnSetup'));
   suTab('org');
+  ok(!doc.querySelector('#suHierAdd') && !!doc.querySelector('#setupView [data-suhieropen]'), 'Levels & item types starts collapsed');
+  click(doc.querySelector('#setupView [data-suhieropen]'));
   const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
   ok(!!card, 'Hierarchy card renders in the Workstreams tab');
   const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
@@ -6153,6 +6213,22 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
         'on open: the role takes its majority type; a person with no role keeps theirs');
       ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
         'on open: a toast says how many people changed type');
+      return window.RMExcel.exportWorkbook(old).then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+        .then((ab) => window.RMExcel.importWorkbook(Buffer.from(new Uint8Array(ab))))
+        .then((r) => ok(r.capTypeChanges === 1, 'the import result carries how many people changed type'));
+    }).then(() => {
+      // a browser session restored from this machine's local copy says so too
+      const dom2 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
+      const w2 = dom2.window;
+      w2.ExcelJS = ExcelJS;
+      w2.localStorage.setItem('headway-v1', JSON.stringify(old));
+      w2.localStorage.setItem('headway-user-v1', 'Probe');
+      for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+        w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+      }
+      ok([...w2.document.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
+        'restoring the local copy: the same toast');
+      w2.close();
     });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

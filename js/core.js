@@ -174,10 +174,17 @@
   RM.DEFAULT_STORY_PRIORITY_SCHEME = 'levels';
   function sizeKeys(kind) {
     return kind === 'story'
-      ? { scheme: 'storySizeScheme', order: 'storySizeOrder', days: 'storySizeDays' }
-      : { scheme: 'sizeScheme', order: 'sizeOrder', days: 'sizeDays' };
+      ? { scheme: 'storySizeScheme', order: 'storySizeOrder', days: 'storySizeDays', base: 'storySizeSchemeBase' }
+      : { scheme: 'sizeScheme', order: 'sizeOrder', days: 'sizeDays', base: 'sizeSchemeBase' };
   }
   RM.sizeKeys = sizeKeys;
+  // an edited scale turns Custom but remembers the scheme it came from, so
+  // Setup can offer "Reset to <scheme>"
+  function markSizeCustom(m, k) {
+    if (m[k.scheme] !== 'custom') m[k.base] = m[k.scheme];
+    m[k.scheme] = 'custom';
+  }
+  RM.markSizeCustom = function (state, kind) { markSizeCustom(state.meta, sizeKeys(kind)); };
   // walk every sized thing of a kind (features, or every story)
   function eachOfKind(state, kind, fn) {
     (state.items || []).forEach(function (it) {
@@ -206,6 +213,7 @@
       (state.items || []).forEach(function (it) { if (it) it.size = null; });
     }
     m[k.scheme] = scheme;
+    delete m[k.base];
     m[k.order] = def.sizes.filter(function (l) { return skip.indexOf(l) === -1; });
     m[k.days] = {};
     Object.keys(def.days).forEach(function (l) {
@@ -220,21 +228,21 @@
     m[k.days][newLabel] = m[k.days][oldLabel];
     delete m[k.days][oldLabel];
     eachOfKind(state, kind, function (o) { if (o.size === oldLabel) o.size = newLabel; });
-    m[k.scheme] = 'custom';
+    markSizeCustom(m, k);
   };
   RM.addSizeOption = function (state, label, days, kind) {
     var m = state.meta, k = sizeKeys(kind);
     if (!label || m[k.order].indexOf(label) !== -1) return;
     m[k.order].push(label);
     m[k.days][label] = isFinite(+days) && +days >= 0 ? +days : 5;
-    m[k.scheme] = 'custom';
+    markSizeCustom(m, k);
   };
   RM.removeSizeOption = function (state, label, kind) {
     var m = state.meta, k = sizeKeys(kind);
     m[k.order] = m[k.order].filter(function (l) { return l !== label; });
     delete m[k.days][label];
     eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
-    m[k.scheme] = 'custom';
+    markSizeCustom(m, k);
   };
   // Documents saved before Fibonacci grew its small steps pick them up, as
   // long as they still hold an untouched old default order (an edited scale is
@@ -1607,6 +1615,11 @@
     if (isLegacyMap) m.sizeDays = RM.clone(RM.DEFAULT_SIZE_DAYS);
     // sizing approach: preset scheme, or 'custom' once edited; 'none' = off
     m.sizeScheme = RM.SIZE_SCHEMES[m.sizeScheme] ? m.sizeScheme : 'tshirt';
+    // the scheme a Custom scale was edited from (for Reset); only on Custom
+    ['sizeSchemeBase', 'storySizeSchemeBase'].forEach(function (bk) {
+      var b = m[bk], custom = m[bk === 'sizeSchemeBase' ? 'sizeScheme' : 'storySizeScheme'] === 'custom';
+      if (!custom || !RM.SIZE_SCHEMES[b] || b === 'custom' || b === 'none') delete m[bk];
+    });
     if (Array.isArray(m.sizeOrder)) {
       var seenSz = {};
       m.sizeOrder = m.sizeOrder.map(String).filter(function (l) {
@@ -1935,6 +1948,9 @@
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
     state.wsColors = state.wsColors && typeof state.wsColors === 'object' ? state.wsColors : {};
     state.epicIcons = state.epicIcons && typeof state.epicIcons === 'object' ? state.epicIcons : {};
+    // epics added in Setup before any item uses them
+    state.epicList = (Array.isArray(state.epicList) ? state.epicList : []).map(function (e) { return String(e || '').trim(); })
+      .filter(function (e, i, a) { return e && a.indexOf(e) === i; });
     // epic name -> Jira epic key (epics are strings on items, like epicIcons)
     var epicJira = {};
     if (state.epicJira && typeof state.epicJira === 'object') {

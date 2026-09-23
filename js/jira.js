@@ -1230,7 +1230,7 @@
       '<div class="m-hint">Kept in this app’s local storage on this computer and never written to the roadmap file, so nobody who opens the file sees it. Create a token at id.atlassian.com → Security → API tokens.' +
       (desktop ? '' : ' Jira Cloud blocks browser calls; syncing works from the desktop app.') + '</div>' +
       '<div class="p-row" style="margin-top:8px"><button id="jrTest">Test connection</button><span id="jrTestOut" class="m-hint" style="margin:0 0 0 10px"></span></div>' +
-      '<h2 style="margin-top:22px">Project (shared in the file)</h2>' +
+      '<h2 style="margin-top:22px">Project (shared in the file) <span class="su-pill jr-saved">Saved in this project</span></h2>' +
       '<div class="m-sec"><label>Site</label>' + inp('jrSite', d.site || c.site, 'your-team.atlassian.net') + '</div>' +
       '<div class="p-grid2">' +
       '<div class="m-sec"><label>Project key</label>' + inp('jrProject', d.project, 'e.g. HW') + '</div>' +

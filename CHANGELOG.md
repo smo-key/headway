@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Setup → Organization shows Phases, Workstreams and Epics side by side; each Add box takes a pasted list (one per line), epics can be added before any item uses them, and Levels & item types fold away behind Customize. An edited size scale offers Reset to its scheme, each capacity type lists the roles that supply it with + Role, and the Jira mapping notes it is saved in the project.
 - **New project setup**: New project opens a full-screen setup that walks the same sections as Setup — pick a preset first (Scrum, Advanced Scrum, Rapid Delivery or Minimal, each with a small timeline sketch), adjust anything, then review and create.
 - The first project on a computer starts with a short Welcome that asks for your name and theme.
 - Setup → Scheduling: pick the capacity type each role supplies, and a new How scheduling works card shows supply against demand. Setup → Custom columns: every column shows a delete button (disabled for built-ins).

@@ -3628,3 +3628,22 @@ body.wizard-open #docTitle { pointer-events: none; }
   .pc-grid, .wz-themes { grid-template-columns: 1fr; }
   .wz-sum-row b { width: auto; }
 }
+
+/* Setup → Organization: three lists side by side */
+.su-org { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; align-items: start; }
+.su-org-col { min-width: 0; }
+.su-org-col .su-row { gap: 6px; }
+.su-addlist { margin-top: 8px; align-items: flex-start; }
+.su-addlist textarea { flex: 1; min-width: 0; resize: vertical; min-height: 32px; font: inherit; }
+.su-fold { display: flex; align-items: center; gap: 14px; }
+.su-fold > div { flex: 1; }
+.su-fold h2 { margin: 0; }
+/* Setup → Scheduling: roles supplying each capacity type */
+.su-supplied { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-left: auto; }
+.su-rolechip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 9px; }
+.su-rolechip button { border: 0; background: transparent; box-shadow: none; padding: 0 4px; min-height: 0; color: var(--ink-3); }
+.su-rolechip button:hover { color: var(--ink); }
+.su-roleadd { font-size: 12px; padding: 2px 8px; min-height: 0; border-radius: 10px; }
+/* wizard: the step in the app's top bar */
+.wz-topstep { margin-left: 10px; font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.jr-saved { margin-left: 8px; vertical-align: 2px; }
