@@ -207,6 +207,7 @@
   var localSaveBroken = false;
   function saveLocal() {
     if (readOnly) return; // the exported copy never writes the viewer's storage
+    if (wz) return; // the new-project wizard's draft is never stored
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(state));
       localStorage.setItem(UI_KEY, JSON.stringify(uiSnapshot()));
@@ -554,6 +555,8 @@
   }
   function commit(label, mutate) {
     if (readOnly) { viewOnlyToast(); return; }
+    // the new-project wizard edits a draft: no undo, history or saving
+    if (wz) { if (mutate) mutate(state); wz.dirty = true; RM.applySizeRollup(state); renderWizard(); return; }
     var prev = JSON.stringify(state);
     undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
@@ -565,6 +568,7 @@
   }
   function replaceState(label, next) {
     if (readOnly) { viewOnlyToast(); return; }
+    if (wz) { state = next; wz.dirty = true; renderWizard(); return; }
     var prev = JSON.stringify(state);
     undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
@@ -604,7 +608,7 @@
   // the first change someone saves (autosave included) must carry an author:
   // ask for their name once, and stamp this session's anonymous entries
   function maybeAskName() {
-    if (userName() || namePromptShown) return;
+    if (wz || userName() || namePromptShown) return;
     namePromptShown = true;
     openModal(
       '<div class="modal" style="width:420px">' +
@@ -634,13 +638,13 @@
       });
   }
   function undo() {
-    if (!undoStack.length) return;
+    if (wz || !undoStack.length) return;
     redoStack.push(JSON.stringify(state));
     state = JSON.parse(undoStack.pop());
     afterChange();
   }
   function redo() {
-    if (!redoStack.length) return;
+    if (wz || !redoStack.length) return;
     undoStack.push(JSON.stringify(state));
     state = JSON.parse(redoStack.pop());
     afterChange();
@@ -658,6 +662,7 @@
 
   var autoSaveTimer = null;
   function scheduleAutoSave() {
+    if (wz) return; // never autosave while the wizard holds a draft
     // desktop only, and only once the doc lives in a real file
     if (!autoSave || !window.HeadwayDesktop || !HeadwayDesktop.currentPath()) return;
     clearTimeout(autoSaveTimer);
@@ -1525,6 +1530,7 @@
   }
 
   function render() {
+    if (wz) { renderWizard(); return; } // the app behind the wizard waits
     var sx = board.scrollLeft, sy = board.scrollTop;
     if (!RM.appEnabled(state, view)) view = 'planning'; // an app switched off under us (or in a loaded file)
     $$('#viewTabs button[data-view]').forEach(function (b) { b.hidden = !RM.appEnabled(state, b.dataset.view); });
@@ -8815,7 +8821,7 @@
       // MultipleDocuments etc. are full-colour pictograms and look out of
       // place next to the template ones, so those items carry no icon.
       return [
-        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProjectModal },
+        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: openWizard },
         { icon: 'folder-open', label: 'Open project', fn: openProject },
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
@@ -8833,7 +8839,7 @@
       return [
         { icon: 'house', label: 'Start page', fn: showStart },
         { sep: true },
-        { icon: 'file-plus-2', label: 'New project…', fn: newProjectModal },
+        { icon: 'file-plus-2', label: 'New project…', fn: openWizard },
         { icon: 'folder-open', label: 'Open project…', fn: openProject },
         { sep: true },
         { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
@@ -10141,7 +10147,7 @@
 
   // every Setup section's cards, keyed by section; the wizard shows the same
   // bodies one step at a time
-  function setupBodies() {
+  function setupBodies(mode) {
     var m = state.meta;
 
     // the size option tables stay editable (label → days); editing options
@@ -10520,7 +10526,7 @@
       jira: parts.jira
     };
   }
-  function sectionBody(key) { return setupBodies()[key] || ''; }
+  function sectionBody(key, mode) { return setupBodies(mode)[key] || ''; }
   // Setup → Team: everyone on the project, every field editable but the
   // capacity type, which comes from the role (Setup → Scheduling)
   var teamNewRoleFor = null; // member id whose Role cell is naming a new role
@@ -10565,7 +10571,7 @@
       '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>' +
       '<div class="m-hint">Allocation here is each person\u2019s default. You can change allocation and hours week by week later in the Resources panel under the timeline.</div>';
   }
-  function renderSetupHost() { renderSetup(); }
+  function renderSetupHost() { if (wz) renderWizard(); else renderSetup(); }
   // Setup → Scheduling: supply and demand, drawn on a small fixed example
   function schedExplainerHtml() {
     var SUP = [2, 2, 2, 1.2, 2, 2, 2, 2, 2, 2];
@@ -10632,6 +10638,7 @@
   }
 
   function renderSetup() {
+    if (wz) { renderWizard(); return; }
     var host = $('#setupView');
     setupTab = normSetupTab(setupTab);
     var tabBodies = setupBodies();
@@ -10700,19 +10707,167 @@
     return all.indexOf(k) !== -1 ? k : 'project';
   }
 
+  // ------------------------------------------------------------ new-project wizard
+  // Full screen under the app's top bar. While it is open the global `state`
+  // IS a draft project: the Setup section bodies and their handlers edit it
+  // unchanged, and commit() only mutates it and re-renders the wizard. The
+  // open document (with its undo, redo and saved flag) waits in wz.stash.
+  var wz = null;
+  var WZ_STEPS = SETUP_SECTIONS[0][1].slice(0, 8).map(function (t) { return t[0]; }).concat(['review']);
+  var ONBOARDED_KEY = 'headway-onboarded-v1';
+  function localStorageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function openWizard() {
+    if (wz || readOnly) return;
+    closePopover();
+    wz = { step: 'project', dirty: false, welcomed: false, stash: {
+      state: state, undo: undoStack.slice(), redo: redoStack.slice(),
+      docSaved: docSaved, sessionEdited: sessionEdited, view: view } };
+    state = blankState();
+    undoStack.length = 0; redoStack.length = 0;
+    // the first project on this machine starts with a Welcome (name + theme)
+    if (!userName() && !localStorageGet(ONBOARDED_KEY)) wz.step = 'welcome';
+    $('#setupView').innerHTML = ''; // one copy of the section controls on screen
+    document.body.classList.add('wizard-open');
+    var tb = $('#topbar');
+    document.documentElement.style.setProperty('--topbar-h', (tb.offsetHeight || 46) + 'px');
+    var x = document.createElement('button');
+    x.id = 'wzClose';
+    x.title = 'Close';
+    x.setAttribute('aria-label', 'Close');
+    x.innerHTML = '<i data-lucide="x"></i>';
+    tb.insertBefore(x, $('.win-caption', tb) || null);
+    $('#docTitle').value = 'New project';
+    $('#wizard').hidden = false;
+    renderWizard();
+  }
+  // discard: true drops the draft; false hands it back (Create)
+  function closeWizard(discard) {
+    if (!wz) return null;
+    var st = wz.stash, draft = state;
+    state = st.state;
+    undoStack.length = 0; Array.prototype.push.apply(undoStack, st.undo);
+    redoStack.length = 0; Array.prototype.push.apply(redoStack, st.redo);
+    docSaved = st.docSaved; sessionEdited = st.sessionEdited; view = st.view;
+    wz = null;
+    teamNewRoleFor = null;
+    closePopover();
+    document.body.classList.remove('wizard-open');
+    var x = $('#wzClose');
+    if (x) x.remove();
+    $('#wizard').hidden = true;
+    $('#wizard').innerHTML = '';
+    stateRev += 1;
+    validation = RM.validate(state);
+    render();
+    updateSaveBtn();
+    if (!docSaved) scheduleAutoSave(); // an autosave the wizard held back
+    return discard ? null : draft;
+  }
+  function wizardTryClose() {
+    if (!wz) return;
+    if (!wz.dirty) { closeWizard(true); return; }
+    confirmBox('Discard this new project?', 'The settings you picked are not saved anywhere yet.', 'Discard',
+      function () { closeWizard(true); }, true);
+  }
+  function wizardCreate() {
+    var draft = closeWizard(false);
+    if (!draft) return;
+    try { localStorage.setItem(ONBOARDED_KEY, '1'); } catch (e) { /* storage optional */ }
+    // flush pending edits to the currently-open file before the paths
+    // switch, so the last few seconds of work can't land in the wrong file
+    var flush = (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath())
+      ? (doSave(false, true) || Promise.resolve()) : Promise.resolve();
+    flush.then(function () { createProjectOnDisk(draft); }, function () { createProjectOnDisk(draft); });
+  }
+  function wizardGo(k) {
+    if (!wz) return;
+    wz.step = k;
+    teamNewRoleFor = null;
+    renderWizard();
+    var c = $('#wizard .wz-content');
+    if (c) c.scrollTop = 0;
+  }
+  function wizardStepLabel(k) {
+    if (k === 'review') return 'Review & create';
+    var t = SETUP_SECTIONS[0][1].filter(function (x) { return x[0] === k; })[0];
+    return t ? t[1] : k;
+  }
+  function welcomeHtml() {
+    return '<div class="wz-kicker">WELCOME TO HEADWAY</div><h1 class="wz-h1">Let’s set up your first project</h1>' +
+      '<button class="primary" data-wz="next">Continue</button>';
+  }
+  function reviewHtml() {
+    return '<h1 class="wz-h1">Review &amp; create</h1>';
+  }
+  function renderWizard() {
+    if (!wz) return;
+    var host = $('#wizard');
+    var keep = host.querySelector('.wz-content');
+    var scroll = keep ? keep.scrollTop : 0;
+    var idx = WZ_STEPS.indexOf(wz.step);
+    var hasPreset = !!state.meta.preset;
+    var need = wz.step === 'project' && !hasPreset;
+    if (wz.step === 'welcome') {
+      host.innerHTML = '<div class="wz-welcome">' + welcomeHtml() + '</div>';
+    } else {
+      var rail = WZ_STEPS.map(function (k, i) {
+        var done = i < idx;
+        return '<button class="wz-step' + (k === wz.step ? ' on' : '') + (done ? ' done' : '') + '" data-wzgo="' + k + '"' +
+          (!hasPreset && k !== 'project' ? ' disabled' : '') + '><span class="wz-num">' + (done ? '✓' : i + 1) + '</span>' +
+          esc(wizardStepLabel(k)) + '</button>';
+      }).join('');
+      var body = wz.step === 'review' ? reviewHtml() : sectionBody(wz.step, 'wizard');
+      host.innerHTML =
+        '<div class="wz-progress"><i style="width:' + Math.round((idx + 1) / WZ_STEPS.length * 100) + '%"></i></div>' +
+        '<div class="wz-layout"><nav class="wz-rail" aria-label="New project steps">' + rail + '</nav>' +
+        '<div class="wz-main"><div class="wz-content"><div class="wz-kicker">STEP ' + (idx + 1) + ' OF ' + WZ_STEPS.length + '</div>' +
+        (wz.step === 'review' ? '' : '<h1 class="wz-h1">' + esc(wizardStepLabel(wz.step)) + '</h1>') + body + '</div>' +
+        '<div class="wz-foot"><span></span><button data-wz="back"' + (idx === 0 && !wz.welcomed ? ' disabled' : '') + '>Back</button>' +
+        (idx > 0 && wz.step !== 'review' ? '<button data-wz="skip">Skip</button>' : '') +
+        '<button class="primary" data-wz="next"' + (need ? ' disabled' : '') + '>' + (wz.step === 'review' ? 'Create project' : 'Continue') + '</button></div>' +
+        '</div></div>';
+      var c = host.querySelector('.wz-content');
+      if (c && keep) c.scrollTop = scroll;
+    }
+    var nrIn = teamNewRoleFor && host.querySelector('[data-sutmnewrole]');
+    if (nrIn) nrIn.focus();
+    if (window.lucide) lucide.createIcons();
+  }
+  $('#wizard').addEventListener('click', function (e) {
+    if (!wz) return;
+    var go = e.target.closest('[data-wzgo]');
+    if (go) { if (!go.disabled) wizardGo(go.dataset.wzgo); return; }
+    var b = e.target.closest('[data-wz]');
+    if (!b || b.disabled) return;
+    var idx = WZ_STEPS.indexOf(wz.step);
+    if (b.dataset.wz === 'next' && wz.step === 'welcome') { wz.welcomed = true; wizardGo('project'); return; }
+    if (b.dataset.wz === 'next' && wz.step === 'review') { wizardCreate(); return; }
+    if (b.dataset.wz === 'next' || b.dataset.wz === 'skip') { wizardGo(WZ_STEPS[Math.min(idx + 1, WZ_STEPS.length - 1)]); return; }
+    if (b.dataset.wz === 'back') {
+      if (idx > 0) wizardGo(WZ_STEPS[idx - 1]);
+      else if (wz.welcomed) wizardGo('welcome');
+    }
+  });
+  $('#topbar').addEventListener('click', function (e) {
+    if (e.target.closest('#wzClose')) wizardTryClose();
+  });
+
+  // the Setup section handlers, shared by #setupView and the wizard
+  function bindSectionHandlers(suHost) {
   // vertical settings rail; personal controls share the modal's wiring
-  $('#setupView').addEventListener('click', function (e) {
+  suHost.addEventListener('click', function (e) {
     var tab = e.target.closest('[data-sutab]');
     if (!tab) return;
     setupTab = tab.dataset.sutab;
     saveLocal();
     renderSetup();
   });
-  wirePersonalFields($('#setupView'), function () {
-    if (view === 'setup') renderSetup();
+  wirePersonalFields(suHost, function () {
+    if (wz) renderWizard();
+    else if (view === 'setup') renderSetup();
   });
 
-  $('#setupView').addEventListener('change', function (e) {
+  suHost.addEventListener('change', function (e) {
     var rs = e.target.closest('[data-surolect]');
     if (rs) {
       var rsRole = rs.dataset.surolect, rsT = rs.value;
@@ -10939,7 +11094,7 @@
     }
   });
 
-  $('#setupView').addEventListener('click', function (e) {
+  suHost.addEventListener('click', function (e) {
     var t = e.target.closest('button');
     if (!t) return;
     if (t.id === 'suHolAddBtn') {
@@ -11031,7 +11186,7 @@
     if (t.dataset.suhticon) { typeIconMenu(t, t.dataset.suhticon); return; }
     if (t.id === 'suHierAdd') {
       commit('add type', function (s2) { RM.addItemType(s2, 'New type', 'tag', ''); });
-      requestAnimationFrame(function () { var all = $$('#setupView input[data-suhtlabel]'); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
+      requestAnimationFrame(function () { var all = $$('input[data-suhtlabel]', suHost); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
       return;
     }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }
@@ -11095,7 +11250,7 @@
   }
   (function () {
     var d = null;
-    $('#setupView').addEventListener('pointerdown', function (e) {
+    suHost.addEventListener('pointerdown', function (e) {
       var g = e.target.closest('.su-grip');
       if (!g) return;
       var row = g.closest('.su-row');
@@ -11147,6 +11302,9 @@
       });
     });
   })();
+  }
+  bindSectionHandlers($('#setupView'));
+  bindSectionHandlers($('#wizard'));
 
   // template workbook: a blank roadmap carrying ONE worked example so every
   // sheet's shape is visible (feature with size/deps columns + a story)
@@ -12080,7 +12238,7 @@
     var open = e.target.closest('[data-sp-open]');
     if (open) { guardUnsaved(function () { openRecent(open.dataset.spOpen); }); return; }
     if (e.target.closest('[data-sp-continue]')) { enterEditor(); return; }
-    if (e.target.closest('[data-sp-new]')) { guardUnsaved(newProjectModal); return; }
+    if (e.target.closest('[data-sp-new]')) { guardUnsaved(openWizard); return; }
     if (e.target.closest('[data-sp-opendlg]')) {
       guardUnsaved(function () {
         if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
@@ -12110,42 +12268,7 @@
 
   // every project starts life as a file on disk: desktop picks a location
   // first; the browser fires the .xlsx download the moment it's created
-  function newProjectModal() {
-    var desktop = !!window.HeadwayDesktop;
-    openModal(
-      '<div class="modal" style="width:440px">' +
-      '<div class="m-head"><h2>New project</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
-      '<div class="m-body">' +
-      '<div class="m-sec"><label>Project name</label>' +
-      '<input id="npName" style="width:100%" maxlength="120" placeholder="Q1 Platform Roadmap">' +
-      '<div class="m-hint">' + (desktop
-        ? 'Every project lives in an .xlsx file — you’ll pick where to save it next. Edits then auto-save to that file.'
-        : 'Every project lives in an .xlsx file — a copy downloads right away; use Save to keep it current.') +
-      '</div></div></div>' +
-      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
-      '<button id="npCreate" class="primary"><i data-lucide="file-plus-2"></i>Create project</button></div></div>',
-      function (host) {
-        $('[data-m=x]', host).onclick = closeModal;
-        $('[data-m=cancel]', host).onclick = closeModal;
-        var inp = $('#npName', host);
-        function go() {
-          var name = inp.value.trim() || 'New Roadmap';
-          var st = blankState();
-          st.meta.title = name;
-          closeModal();
-          // flush pending edits to the currently-open file before the paths
-          // switch, so the last few seconds of work can't land in the wrong file
-          var flush = (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath())
-            ? (doSave(false, true) || Promise.resolve()) : Promise.resolve();
-          flush.then(function () { createProjectOnDisk(st); },
-            function () { createProjectOnDisk(st); });
-        }
-        $('#npCreate', host).onclick = go;
-        inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go(); });
-        inp.focus();
-      });
-  }
-
+  // (the new-project wizard gathers the settings first — see openWizard)
   function adoptProject(st, savedPath) {
     replaceState('new project', st);
     selectedId = null;
@@ -12196,6 +12319,7 @@
   }
 
   function doSave(forceDialog, quiet) {
+    if (wz) return null; // the open document is stashed behind the wizard
     var btn = $('#btnSave');
     savingNow = true;
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -12297,6 +12421,10 @@
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
+      // the wizard holds a draft: a reload of the open file updates the
+      // document stashed behind it; opening another file ends the wizard
+      if (wz && reload) { wz.stash.state = r.state; wz.stash.docSaved = true; return; }
+      if (wz) closeWizard(true);
       if (reload) {
         // keep whatever selection still exists in the new document
         var keepSel = selectedId && RM.itemById(r.state, selectedId) ? selectedId : null;
@@ -12356,6 +12484,14 @@
     closeModal: closeModal,
     openDropdown: openDropdown,
     openSetup: function (tab) { setupTab = normSetupTab(tab); view = 'setup'; saveLocal(); render(); },
+    wizard: {
+      open: openWizard,
+      go: function (k) { wizardGo(k); },
+      create: wizardCreate,
+      close: closeWizard,
+      isOpen: function () { return !!wz; },
+      reloadForTest: function (st) { if (wz) { wz.stash.state = RM.normalizeState(st); wz.stash.docSaved = true; } }
+    },
     // hooks for the AI assistant (js/ai.js): reads are clones, every write
     // goes through commit() so it lands in undo + Version history (as
     // "<name> · AI")
@@ -12438,6 +12574,16 @@
     // contenteditable editors (rich description, scoping cells) count as fields too
     var inField = /INPUT|TEXTAREA|SELECT/.test(ae.tagName) ||
       ae.isContentEditable || (ae.closest && ae.closest('[contenteditable="true"]') !== null);
+    // the new-project wizard takes no app shortcuts; Escape closes it
+    if (wz) {
+      if (e.key !== 'Escape') return;
+      if (!popEl.hidden) { closePopover(); return; }
+      if (!modalHost.hidden) { closeModal(); return; }
+      if (!calPop.hidden) { closeCal(); return; }
+      if (inField) { document.activeElement.blur(); return; }
+      wizardTryClose();
+      return;
+    }
     // Esc/Delete while drawing a dependency line cancels the add
     if (drag && drag.kind === 'port' && (e.key === 'Escape' || e.key === 'Delete' || e.key === 'Backspace')) {
       e.preventDefault();

@@ -796,6 +796,45 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(JSON.stringify([state().team, state().teamTypes, state().roleCapTypes, state().meta.apps]) === teamBefore, 'the team edits undo, nine steps');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
+// ---------------------------------------------------------------- new-project wizard over a draft
+{
+  window.localStorage.setItem('headway-onboarded-v1', '1'); // past the first-run Welcome
+  const before = JSON.stringify(state());
+  const lsBefore = window.localStorage.getItem('headway-v1');
+  window.HeadwayApp.wizard.open();
+  ok(doc.body.classList.contains('wizard-open') && !doc.querySelector('#wizard').hidden, 'New project opens the full-screen wizard');
+  ok(!!doc.querySelector('#topbar .tb-mark') && !!doc.querySelector('#wzClose'), 'the app top bar stays (draggable), with a close button');
+  ok(doc.querySelectorAll('#wizard .wz-step').length === 9, 'nine numbered steps');
+  ok(doc.querySelector('#wizard [data-wz="next"]').disabled, 'Continue waits for a preset');
+  ok(doc.querySelectorAll('#wizard .wz-step[disabled]').length === 8, 'later steps wait for a preset too');
+  ok(!!doc.querySelector('#wizard #suTitle') && !doc.querySelector('#setupView #suTitle'), 'the Project section renders in the wizard, once');
+  // edits in the wizard go to the draft only
+  const ti = doc.querySelector('#wizard #suTitle');
+  ti.value = 'Draft title'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.title === 'Draft title', 'Setup handlers edit the draft');
+  ok(window.localStorage.getItem('headway-v1') === lsBefore, 'nothing from the draft is saved locally');
+  // a disk reload of the open document while the wizard is up lands in the stash, not the draft
+  const reloaded = JSON.parse(before); reloaded.meta.title = 'Changed on disk';
+  window.HeadwayApp.wizard.reloadForTest(reloaded);
+  ok(doc.body.classList.contains('wizard-open') && state().meta.title === 'Draft title', 'reload leaves the wizard and draft alone');
+  window.HeadwayApp.wizard.close(true);
+  ok(state().meta.title === 'Changed on disk', 'and the reloaded document is what comes back');
+  window.HeadwayApp.ai.commit('restore', (s) => { s.meta.title = JSON.parse(before).meta.title; });
+  const beforeB = JSON.stringify(state());
+  window.HeadwayApp.wizard.open();
+  const ti2 = doc.querySelector('#wizard #suTitle');
+  ti2.value = 'Throwaway'; ti2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wzClose'));
+  ok(!!doc.querySelector('#modalHost:not([hidden]) [data-m="ok"]'), 'closing after edits asks first (in-app confirm)');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+  ok(JSON.stringify(state()) === beforeB, 'closing after draft edits restores the open document exactly');
+  ok(!doc.body.classList.contains('wizard-open') && doc.querySelector('#wizard').hidden, 'wizard gone');
+  // Escape with no edits closes straight away
+  window.HeadwayApp.wizard.open();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(!doc.body.classList.contains('wizard-open'), 'Escape closes an untouched wizard');
+  ok(JSON.stringify(state()) === beforeB, 'and the document is untouched');
+}
 // ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
 {
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
@@ -5886,6 +5925,45 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
         'story dependencies survive an xlsx round trip (got ' + (back && back.st.deps) + ')');
       ok(!!back && back.st.num > 0 && state().items[0].stories[0].num === depNum,
         'story numbers survive an xlsx round trip');
+    });
+}).then(() => {
+  // the desktop file watcher reloading the open file while the wizard is up:
+  // the stashed document takes the reload, the draft and the wizard stay
+  window.localStorage.setItem('headway-onboarded-v1', '1');
+  const onDisk = window.RM.clone(state());
+  onDisk.meta.title = 'Reloaded under wizard';
+  window.HeadwayApp.wizard.open();
+  const draftTitle = state().meta.title;
+  return window.RMExcel.exportWorkbook(onDisk)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Reloaded under wizard.xlsx', true))
+    .then(() => {
+      ok(window.HeadwayApp.wizard.isOpen() && state().meta.title === draftTitle, 'a disk reload leaves the wizard and its draft alone');
+      window.HeadwayApp.wizard.close(true);
+      ok(state().meta.title === 'Reloaded under wizard', 'closing the wizard shows the reloaded document');
+    });
+}).then(() => {
+  // an older file (no role → type map): roles take their people's most common
+  // type, and the open says how many people moved
+  const old = window.RM.clone(state());
+  delete old.roleCapTypes;
+  old.teamTypes = ['Engineer'];
+  old.capTypes = ['Development', 'Design'];
+  old.team = [
+    { id: 'rA', name: 'A', type: 'Engineer', capType: 'Development', weekHours: {} },
+    { id: 'rB', name: 'B', type: 'Engineer', capType: 'Development', weekHours: {} },
+    { id: 'rC', name: 'C', type: 'Engineer', capType: 'Design', weekHours: {} },
+    { id: 'rD', name: 'D', type: '', capType: 'Design', weekHours: {} }
+  ];
+  [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+  return window.RMExcel.exportWorkbook(old)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Roles.xlsx'))
+    .then(() => {
+      ok(state().roleCapTypes.Engineer === 'Development' && state().team.map((m) => m.capType).join() === 'Development,Development,Development,Design',
+        'on open: the role takes its majority type; a person with no role keeps theirs');
+      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
+        'on open: a toast says how many people changed type');
     });
 }).then(() => {
   // opening a document runs auto-order only: the rows come back in start

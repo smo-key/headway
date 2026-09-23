@@ -3550,3 +3550,38 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .su-sched-wk .over { background: var(--err); }
 .su-sched-wk .sup { position: absolute; left: -2px; right: -2px; height: 2px; background: var(--ink); }
 @media (max-width: 720px) { .su-sched-keys, .su-sched-charts { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------ new-project wizard
+   full screen under the app's top bar (which stays, so the window drags) */
+body.wizard-open #main, body.wizard-open #startPage, body.wizard-open #panelPeek, body.wizard-open #leftPeek { display: none !important; }
+body.wizard-open #menus, body.wizard-open .tabs-center, body.wizard-open #optBtn, body.wizard-open .tb-right { display: none !important; }
+body.wizard-open #docTitle { pointer-events: none; }
+#wzClose { margin-left: auto; border: 0; background: transparent; box-shadow: none; padding: 6px; color: var(--ink-2); }
+#wzClose:hover { background: var(--hover); color: var(--ink); }
+#wizard { position: fixed; inset: var(--topbar-h, 46px) 0 0 0; background: var(--paper); z-index: 35; display: flex; flex-direction: column; }
+#wizard[hidden] { display: none; }
+.wz-progress { height: 3px; background: var(--well); flex: none; }
+.wz-progress i { display: block; height: 3px; background: var(--blue); transition: width .2s; }
+.wz-layout { flex: 1; display: flex; min-height: 0; }
+.wz-rail { width: 248px; flex: none; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--paper-2); display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.wz-step { display: flex; gap: 10px; align-items: center; min-height: 36px; padding: 0 10px; border: 0; background: transparent; box-shadow: none; border-radius: 8px; text-align: left; justify-content: flex-start; color: var(--ink-2); font-weight: 600; }
+.wz-step:hover:not([disabled]) { background: var(--hover); }
+.wz-step.on { background: var(--blue-soft); color: var(--blue); }
+.wz-step[disabled] { opacity: .45; cursor: default; }
+.wz-num { width: 22px; height: 22px; flex: none; border-radius: 11px; border: 1px solid var(--line-2); display: grid; place-items: center; font-size: 11px; font-variant-numeric: tabular-nums; }
+.wz-step.on .wz-num { border-color: var(--blue); }
+.wz-step.done .wz-num { background: var(--blue); border-color: var(--blue); color: #fff; }
+.wz-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.wz-content { flex: 1; overflow: auto; padding: 28px 56px 40px; }
+.wz-content > * { max-width: 860px; }
+.wz-content .su-card { margin-top: 14px; }
+.wz-content .m-hint { margin-top: 10px; }
+.wz-kicker { font-size: 11px; font-weight: 700; letter-spacing: .1em; color: var(--ink-3); }
+.wz-h1 { margin: 6px 0 4px; font-size: 22px; font-weight: 700; }
+.wz-foot { display: flex; gap: 10px; align-items: center; padding: 12px 56px; border-top: 1px solid var(--line); background: var(--surface); flex: none; }
+.wz-foot span { flex: 1; }
+.wz-welcome { margin: auto; width: min(520px, calc(100% - 32px)); padding: 40px 0; display: flex; flex-direction: column; gap: 12px; }
+@media (max-width: 760px) {
+  .wz-rail { display: none; }
+  .wz-content, .wz-foot { padding-left: 16px; padding-right: 16px; }
+}
