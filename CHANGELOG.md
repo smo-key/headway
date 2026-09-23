@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Setup → Budgeting has its own Track budget switch next to the rate card, and Setup → Team lists everyone in one editable table (name, title, role, workstreams, allocation, points, rate and cost); a person's capacity type now follows their role.
 - Setup → Sizing, priority & risk: one grid picks the size, priority and risk scheme for features and for stories; priority and risk levels show as read-only chips, size scales stay editable.
 - Setup is regrouped into Project, Sprints, Organization, Sizing, Budgeting, Team, Scheduling and Custom columns, then Views and your Personal settings (this computer only); Capacity is now Scheduling, and Jira is Jira Integration.
 - Stories rate risk on their own scheme (none, Risk or Confidence), separate from features; older files keep what they had.

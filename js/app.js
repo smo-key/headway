@@ -9521,7 +9521,7 @@
         '" style="width:var(--bu-w-type)" tabindex="0" role="button" data-bact="type">' +
         (m.type ? esc(shorten(m.type, 13)) : '—') + '</span>',
       cap: '<span class="r-ws sc-chip bu-col bu-chip' + (m.capType ? '' : ' empty') +
-        '" style="width:var(--bu-w-cap)" tabindex="0" role="button" data-bact="cap" title="Capacity type">' +
+        '" style="width:var(--bu-w-cap)" tabindex="0" role="button" data-bact="cap" title="Capacity type (from the role)">' +
         (m.capType ? esc(shorten(m.capType, 13)) : '—') + '</span>',
       ws: '<span class="r-ws sc-chip bu-col bu-chip' + (mws.length ? '' : ' empty') +
         '" style="width:var(--bu-w-ws)" tabindex="0" role="button" data-bact="ws">' +
@@ -9864,31 +9864,26 @@
         s.team.forEach(function (x) { if (x.id === roleId) x.type = ''; });
       });
     } }];
+    var rct = state.roleCapTypes || {};
     state.teamTypes.forEach(function (t) {
-      items.push({ label: esc(t), checked: m.type === t, fn: function () {
+      items.push({ label: esc(t) + (rct[t] ? ' <small>' + esc(rct[t]) + '</small>' : ''), checked: m.type === t, fn: function () {
         commit('rate card role', function (s) {
           s.team.forEach(function (x) { if (x.id === roleId) x.type = t; });
+          RM.syncMemberCapTypes(s); // the role brings its capacity type
         });
       } });
     });
     openDropdown(chip, items);
   }
+  // a person's capacity type comes from their role: with no role, pick one;
+  // with a role, the menu points to where the role's type is set
   function openMemberCapDropdown(chip, roleId) {
     var m = memberById(roleId);
     if (!m) return;
-    var items = [{ label: '<i>\u2014 general \u2014</i>', checked: !m.capType, fn: function () {
-      commit('capacity type', function (s) {
-        s.team.forEach(function (x) { if (x.id === roleId) x.capType = ''; });
-      });
-    } }];
-    RM.capTypesOf(state).forEach(function (t) {
-      items.push({ label: esc(t), checked: m.capType === t, fn: function () {
-        commit('capacity type', function (s) {
-          s.team.forEach(function (x) { if (x.id === roleId) x.capType = t; });
-        });
-      } });
-    });
-    openDropdown(chip, items);
+    if (!m.type) { openMemberTypeDropdown(chip, roleId); return; }
+    openDropdown(chip, [{ icon: 'gauge',
+      label: esc(m.capType ? m.type + ' supplies ' + m.capType : m.type + ' supplies no capacity type') + ' \u2014 change in Setup \u203a Scheduling\u2026',
+      fn: function () { setupTab = 'scheduling'; view = 'setup'; saveLocal(); render(); } }]);
   }
   function openMemberWsDropdown(chip, roleId) {
     var m = memberById(roleId);
@@ -10495,9 +10490,12 @@
       sprints: parts.sprints,
       org: parts.phases + parts.workstreams,
       est: parts.sizing,
-      budget: parts.team,
-      team: '<section class="su-card"><h2>People</h2>' +
-        '<div class="m-hint">People, their role and weekly hours live in the Resources panel under the timeline.</div></section>',
+      budget: '<section class="su-card">' +
+        '<label class="p-check"><input type="checkbox" data-subudget' + (RM.appEnabled(state, 'budget') ? ' checked' : '') + '> Track budget</label>' +
+        '<div class="m-hint">Adds the Budgeting tab: hours and cost by role, week and phase.</div></section>' +
+        (RM.appEnabled(state, 'budget') ? parts.team
+          : '<section class="su-card"><div class="m-hint">Roles are named on the Team section as you add people.</div></section>'),
+      team: '<section class="su-card">' + teamTableHtml() + '</section>',
       scheduling: parts.capacity,
       columns: parts.columns,
       views: parts.views,
@@ -10508,6 +10506,54 @@
     };
   }
   function sectionBody(key) { return setupBodies()[key] || ''; }
+  // Setup → Team: everyone on the project, every field editable but the
+  // capacity type, which comes from the role (Setup → Scheduling)
+  var teamNewRoleFor = null; // member id whose Role cell is naming a new role
+  function teamTableHtml() {
+    var cap = !!state.meta.capacityEnabled;
+    var pts = cap && state.meta.capMode === 'points';
+    var bud = RM.appEnabled(state, 'budget');
+    var wsOn = !!state.meta.workstreamsEnabled;
+    var wsList = wsOn ? allWorkstreams() : [];
+    var head = ['Name', 'Title', 'Role'].concat(cap ? ['Capacity type'] : [], wsOn ? ['Workstreams'] : [], ['Allocation'],
+      pts ? ['Points / sprint'] : [], bud ? ['Rate/h', 'Cost/h'] : [], ['']);
+    function roleOpts(cur) {
+      return '<option value="">\u2014</option>' + state.teamTypes.map(function (r) {
+        return '<option value="' + esc(r) + '"' + (r === cur ? ' selected' : '') + '>' + esc(r) + '</option>';
+      }).join('') + '<option value="__new">New role\u2026</option>';
+    }
+    var rc = state.meta.rateCard || {};
+    if (!state.team.length) {
+      return '<div class="m-hint">No one yet \u2014 add the people who work on this project.</div>' +
+        '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>';
+    }
+    return '<table class="hol-table su-team"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      state.team.map(function (m) {
+        var id = ' data-mid="' + esc(m.id) + '"';
+        var card = rc[m.type] || {};
+        var roleCell = teamNewRoleFor === m.id
+          ? '<input data-sutmnewrole' + id + ' placeholder="New role name" aria-label="New role name">'
+          : '<select data-sutm="type"' + id + ' aria-label="Role">' + roleOpts(m.type) + '</select>';
+        return '<tr' + id + '>' +
+          '<td><input data-sutm="name"' + id + ' value="' + esc(m.name) + '" placeholder="Name" aria-label="Name"></td>' +
+          '<td><input data-sutm="role"' + id + ' value="' + esc(m.role || '') + '" placeholder="Title" aria-label="Title"></td>' +
+          '<td>' + roleCell + '</td>' +
+          (cap ? '<td class="su-tm-cap" title="' + (m.type ? 'From the role \u2014 change it in Setup \u203a Scheduling' : 'Pick a role to set it') + '">' +
+            esc(m.capType || '\u2014') + '</td>' : '') +
+          (wsOn ? '<td class="su-tm-ws">' + wsList.map(function (w) {
+            var on = (m.workstreams || []).indexOf(w) !== -1;
+            return '<button class="su-wsdot' + (on ? ' on' : '') + '" data-sutmws="' + esc(w) + '"' + id + ' title="' + esc(w) + '">' + esc(shorten(w, 12)) + '</button>';
+          }).join('') + '</td>' : '') +
+          '<td class="su-tm-num"><input type="number" min="0" step="5" data-sutm="capacity"' + id + ' value="' + Math.round((m.capacity != null ? m.capacity : 1) * 100) + '" aria-label="Allocation percent"> %</td>' +
+          (pts ? '<td class="su-tm-num"><input type="number" min="0" data-sutm="points"' + id + ' value="' + (m.points == null ? '' : m.points) + '" placeholder="' + state.meta.defaultPoints + '" aria-label="Points per sprint"></td>' : '') +
+          (bud ? '<td class="su-tm-num"><input type="number" min="0" data-sutm="rate"' + id + ' value="' + (m.rate || '') + '" placeholder="' + (card.rate || '') + '" aria-label="Hourly rate"></td>' +
+                 '<td class="su-tm-num"><input type="number" min="0" data-sutm="cost"' + id + ' value="' + (m.cost || '') + '" placeholder="' + (card.cost || '') + '" aria-label="Hourly cost"></td>' : '') +
+          '<td class="hol-x"><button data-sutmdel="' + esc(m.id) + '" title="Remove person"><i data-lucide="x"></i></button></td></tr>';
+      }).join('') + '</tbody></table>' +
+      '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>' +
+      '<div class="m-hint">Allocation here is each person\u2019s default. You can change allocation and hours week by week later in the Resources panel under the timeline.</div>';
+  }
+  function renderSetupHost() { renderSetup(); }
   // Sizing, priority & risk: one select per field × level
   function schemeSelect(what, level, cur, options) {
     return '<select data-suscheme-kind="' + what + '" data-kind="' + level + '" aria-label="' + esc(lvl(level) + ' ' + what) + '">' +
@@ -10586,6 +10632,8 @@
       '<nav class="su-rail" aria-label="Settings sections">' + rail + '</nav>' +
       '<div class="su-content"><h1 class="su-page">' + esc(pageTitle) + '</h1>' + tabBodies[setupTab] + '</div>' +
       '</div>';
+    var nrIn = teamNewRoleFor && host.querySelector('[data-sutmnewrole]');
+    if (nrIn) nrIn.focus();
     if (setupTab === 'ai' && window.HeadwayAI) HeadwayAI.wireSettings($('#aiSettingsCard', host));
     if (setupTab === 'jira' && window.HeadwayJira) HeadwayJira.wireSettings($('#jiraSettingsCard', host));
     if (window.lucide) lucide.createIcons();
@@ -10633,6 +10681,37 @@
   });
 
   $('#setupView').addEventListener('change', function (e) {
+    if (e.target.matches('[data-subudget]')) {
+      var budOn = e.target.checked;
+      commit('budgeting', function (s2) { s2.meta.apps.budget = budOn; });
+      return;
+    }
+    var tf = e.target.closest('[data-sutm]');
+    if (tf) {
+      var tmId = tf.dataset.mid, tmF = tf.dataset.sutm, tmV = tf.value;
+      if (tmF === 'type' && tmV === '__new') { teamNewRoleFor = tmId; renderSetupHost(); return; }
+      commit('team', function (s2) {
+        var mm = s2.team.filter(function (x) { return x.id === tmId; })[0];
+        if (!mm) return;
+        if (tmF === 'capacity') mm.capacity = Math.max(0, (+tmV || 0) / 100);
+        else if (tmF === 'points') mm.points = tmV === '' ? null : Math.max(0, +tmV || 0);
+        else if (tmF === 'rate' || tmF === 'cost') mm[tmF] = Math.max(0, +tmV || 0);
+        else mm[tmF] = String(tmV);
+        if (tmF === 'type') RM.syncMemberCapTypes(s2);
+      });
+      return;
+    }
+    if (e.target.matches('[data-sutmnewrole]')) {
+      var nrId = e.target.dataset.mid, nrName = e.target.value.trim();
+      teamNewRoleFor = null;
+      if (!nrName) { renderSetupHost(); return; }
+      commit('add role', function (s2) {
+        if (s2.teamTypes.indexOf(nrName) === -1) s2.teamTypes.push(nrName);
+        s2.team.forEach(function (x) { if (x.id === nrId) x.type = nrName; });
+        RM.syncMemberCapTypes(s2);
+      });
+      return;
+    }
     var sk = e.target.closest('[data-suscheme-kind]');
     if (sk) {
       var skKind = sk.dataset.kind, skV = sk.value;
@@ -10833,6 +10912,31 @@
       if (hEnd < hStart) { var swp = hStart; hStart = hEnd; hEnd = swp; }
       commit('holiday add', function (s2) {
         RM.addHolidayRange(s2.meta, hName, hStart, hEnd);
+      });
+      return;
+    }
+    if (t.dataset.sutmws != null) {
+      var twId = t.dataset.mid, twWs = t.dataset.sutmws;
+      commit('team workstream', function (s2) {
+        s2.team.forEach(function (x) {
+          if (x.id !== twId) return;
+          var wl = (x.workstreams || []).slice(), wi = wl.indexOf(twWs);
+          if (wi === -1) wl.push(twWs); else wl.splice(wi, 1);
+          x.workstreams = wl;
+          x.workstream = wl[0] || '';
+        });
+      });
+      return;
+    }
+    if (t.dataset.sutmdel != null) {
+      var tdId = t.dataset.sutmdel;
+      commit('remove person', function (s2) { s2.team = s2.team.filter(function (x) { return x.id !== tdId; }); });
+      return;
+    }
+    if (t.id === 'suTmAdd') {
+      commit('add person', function (s2) {
+        s2.team.push({ id: RM.uid('t'), name: '', role: '', type: '', capType: '', workstream: '', workstreams: [],
+          capacity: 1, points: null, rate: 0, cost: 0, weekHours: {} });
       });
       return;
     }
@@ -11135,7 +11239,7 @@
         // instead (their seat and points are kept for when they get one)
         (state.meta.capacityEnabled && !m.capType
           ? '<span class="res-cap res-untyped" tabindex="0" role="button" data-runtyped="' + m.id +
-            '" title="No capacity type — supplies nothing. Click to set one">set type</span>'
+            '" title="No capacity type — supplies nothing. Click to pick a role">set type</span>'
           : '') +
         (state.meta.capacityEnabled && m.capType && state.meta.capMode !== 'points'
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +

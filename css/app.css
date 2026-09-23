@@ -3521,3 +3521,11 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .su-ladder + .su-ladder { margin-top: 10px; }
 .su-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .su-chip { font-size: 12px; background: var(--well); color: var(--ink-2); border-radius: 10px; padding: 3px 9px; }
+
+/* Setup → Team: one editable row per person */
+.su-team input, .su-team select { width: 100%; min-width: 0; }
+.su-team td { padding: 4px 6px; }
+.su-team .su-tm-num input { width: 64px; }
+.su-team .su-tm-cap { color: var(--ink-3); white-space: nowrap; }
+.su-wsdot { font-size: 11px; padding: 1px 6px; margin: 1px; border-radius: 8px; box-shadow: none; }
+.su-wsdot.on { background: var(--blue-soft); color: var(--blue); }

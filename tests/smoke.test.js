@@ -743,6 +743,53 @@ ok(doc.body.dataset.view === 'planning', 'back to planning after setup');
   nameInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 }
 ok(state().team.length === 1, 'role added via the blank add row');
+// ---------------------------------------------------------------- Setup → Budgeting switch + Team table
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  const teamBefore = JSON.stringify([state().team, state().teamTypes, state().roleCapTypes, state().meta.apps]);
+  suTab('budget');
+  const sw = doc.querySelector('#setupView [data-subudget]');
+  ok(!!sw, 'Budgeting has a Track budget switch');
+  const was = window.RM.appEnabled(state(), 'budget');
+  click(sw);
+  ok(window.RM.appEnabled(state(), 'budget') === !was, 'the switch drives the Budgeting tab');
+  if (!window.RM.appEnabled(state(), 'budget')) click(doc.querySelector('#setupView [data-subudget]'));
+  ok(window.RM.appEnabled(state(), 'budget') && !!doc.querySelector('#setupView [data-rcrate]'), 'with budgeting on the rate card shows');
+
+  suTab('team');
+  const rows = doc.querySelectorAll('#setupView .su-team tbody tr[data-mid]');
+  ok(rows.length === state().team.length, 'one row per person');
+  const m0 = state().team[0];
+  const alloc = doc.querySelector('#setupView [data-sutm="capacity"][data-mid="' + m0.id + '"]');
+  alloc.value = '50'; alloc.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].capacity === 0.5, 'allocation % edits capacity');
+  const name = doc.querySelector('#setupView [data-sutm="name"][data-mid="' + m0.id + '"]');
+  name.value = 'Renamed'; name.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].name === 'Renamed', 'name is editable');
+  ok(!doc.querySelector('#setupView [data-sutm="capType"]'), 'capacity type is not editable here');
+  ok(!/Paste/.test(doc.querySelector('#setupView .su-team').parentNode.textContent), 'no paste-from-spreadsheet');
+  // a role picked here brings its capacity type along
+  const r0 = state().teamTypes[0];
+  window.HeadwayApp.ai.commit('map role', (s) => { window.RM.setRoleCapType(s, r0, s.capTypes[0]); });
+  const roleSel = doc.querySelector('#setupView [data-sutm="type"][data-mid="' + m0.id + '"]');
+  roleSel.value = r0; roleSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].type === r0 && state().team[0].capType === state().capTypes[0], 'picking a role sets the person\'s capacity type from it');
+  // New role… swaps the select for an inline name input
+  const roleSel2 = doc.querySelector('#setupView [data-sutm="type"][data-mid="' + m0.id + '"]');
+  roleSel2.value = '__new'; roleSel2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const nr = doc.querySelector('#setupView [data-sutmnewrole][data-mid="' + m0.id + '"]');
+  ok(!!nr, 'New role… offers an inline name input');
+  nr.value = 'Wizard role'; nr.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().teamTypes.indexOf('Wizard role') !== -1 && state().team[0].type === 'Wizard role', 'the new role is added and set');
+  const n = state().team.length;
+  click(doc.querySelector('#suTmAdd'));
+  ok(state().team.length === n + 1, 'Add person');
+  click(doc.querySelector('#setupView [data-sutmdel="' + state().team[n].id + '"]'));
+  ok(state().team.length === n, 'delete person');
+  for (let i = 0; i < 9; i++) undo();
+  ok(JSON.stringify([state().team, state().teamTypes, state().roleCapTypes, state().meta.apps]) === teamBefore, 'the team edits undo, nine steps');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 ok(doc.querySelectorAll('#resGrid .rrow[data-mid]').length === 1, 'resource row rendered for the member');
 ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every week (default 40h)');
 // spreadsheet edit: click a cell, type 24, commit
@@ -4165,7 +4212,9 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   const capChip = doc.querySelector('#rows [data-mid="' + person2.id + '"] [data-bact="cap"]');
   ok(!!capChip && capChip.textContent.trim() === 'Development', 'the Budgeting / Resources rows show a Capacity type chip');
   click(capChip);
-  ok(menuBtns().some(b => /Design/.test(b.textContent)) && menuBtns()[0].textContent.indexOf('general') !== -1, 'the chip picks from the capacity types (or general)');
+  ok(state().team[1].type ? menuBtns().length === 1 && /Setup › Scheduling/.test(menuBtns()[0].textContent)
+    : menuBtns().some(b => b.textContent.indexOf(state().teamTypes[0]) !== -1),
+    'the chip is read-only: it points to the role\'s type in Setup › Scheduling (or picks a role)');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   window.__headway.selectItem(hostC.id);
@@ -4522,8 +4571,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       'per-person mode shows the × seat chip and no points column');
     // untyped people supply nothing: a "set type" prompt instead of the chips
     window.HeadwayApp.ai.commit('untyped person', (s) => {
-      s.team[0].capType = ''; s.team[0].capacity = 2; s.team[0].points = 50;
+      s.team[0].capType = ''; s.team[0].type = ''; s.team[0].capacity = 2; s.team[0].points = 50;
       if (s.team[1]) s.team[1].capType = 'Development';
+      // a role that supplies Development, for the untyped person to pick
+      s.roleCapTypes = {}; s.roleCapTypes[s.teamTypes[0]] = 'Development';
+      if (s.team[1]) s.team[1].type = s.teamTypes[0];
     });
     const utId = state().team[0].id;
     const utRow = () => doc.querySelector('#resGrid .rrow[data-mid="' + utId + '"]');
@@ -4547,7 +4599,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     if (ptsInp) ptsInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     // … and the type picker for an untyped person
     click(rowMenu(utRow(), /Capacity/));
-    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'for an untyped person Capacity… opens the type picker');
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'for an untyped person with no role Capacity… opens the role picker, showing each role\'s type');
     esc();
     undo();
     // the placeholder answers the keyboard too
@@ -4558,10 +4610,10 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'and so does Space');
     esc();
     click(utRow().querySelector('.res-untyped'));
-    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the capacity-type picker');
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the role picker');
     click(menuBtns().find((b) => /Development/.test(b.textContent)));
     ok(state().team[0].capType === 'Development' && !!utRow().querySelector('[data-rcap]') &&
-      /^2×$/.test(utRow().querySelector('[data-rcap]').textContent.trim()), 'picking a type brings back the kept × seat');
+      /^2×$/.test(utRow().querySelector('[data-rcap]').textContent.trim()), 'picking a role brings its type and the kept × seat');
     undo(); undo();
     undo();
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
