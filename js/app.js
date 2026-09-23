@@ -10339,7 +10339,8 @@
             '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
             '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
             '</div>'
-          : '<div class="m-hint">No sprints — the header shows plain weeks.</div>') +
+          : '<div class="m-hint">No sprint numbers on the timeline, and the Sprinting tab is hidden.</div>') +
+        (RM.sprintsEnabled(m) ? sprintStripHtml() : '') +
         '</section>',
       holidays:
         '<section class="su-card"><h2>Holidays</h2>' +
@@ -10507,7 +10508,9 @@
         '</section>'
     };
     return {
-      project: parts.timeline + parts.workweek + parts.holidays,
+      project: mode === 'wizard'
+        ? parts.timeline + presetCardsHtml() + (wz && wz.expandWorkWeek ? parts.workweek + parts.holidays : workWeekSummaryHtml())
+        : parts.timeline + parts.workweek + parts.holidays,
       sprints: parts.sprints,
       org: parts.phases + parts.workstreams,
       est: parts.sizing,
@@ -10572,6 +10575,59 @@
       '<div class="m-hint">Allocation here is each person\u2019s default. You can change allocation and hours week by week later in the Resources panel under the timeline.</div>';
   }
   function renderSetupHost() { if (wz) renderWizard(); else renderSetup(); }
+  // Setup → Sprints: the next six sprints from the anchor, with their dates
+  function sprintStripHtml() {
+    var m = state.meta, si = RM.sprintInfo(m), wd = RM.workDaysOf(m);
+    var out = [];
+    for (var i = 0; i < 6; i++) {
+      var wk = si.anchorWeek + i * si.wps;
+      var start = RM.weekStartDate(m, wk), end = RM.weekStartDate(m, wk + si.wps);
+      end.setUTCDate(end.getUTCDate() - 1);
+      for (var g = 0; g < 7 && wd.indexOf(end.getUTCDay()) === -1; g++) end.setUTCDate(end.getUTCDate() - 1);
+      out.push('<span class="su-spr"><b>S' + RM.sprintNumForWeek(m, wk) + '</b>' + RM.fmtShort(start) + ' – ' + RM.fmtShort(end) + '</span>');
+    }
+    return '<div class="su-sprs" aria-label="Upcoming sprints">' + out.join('') + '</div>';
+  }
+  // wizard Project step: work week and holidays fold into one line
+  function workWeekSummaryHtml() {
+    var m = state.meta;
+    var DN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var days = RM.workDaysOf(m).map(function (d) { return DN[d]; }).join(', ');
+    var nHol = (m.holidayRanges || []).length;
+    return '<section class="su-card wz-fold"><div><h2>Work week &amp; holidays</h2><div class="m-hint">' + esc(days) + ' · ' +
+      m.weekHours + ' h per week · ' + nHol + (nHol === 1 ? ' holiday' : ' holidays') + '</div></div>' +
+      '<button data-wzexpand>Edit</button></section>';
+  }
+  // wizard Project step: the required preset, each card with a tiny timeline
+  function pcBar(cls, x, w, y, tx) { return '<span class="pc-' + cls + '" style="left:' + x + '%;width:' + w + '%;top:' + y + 'px">' + esc(tx || '') + '</span>'; }
+  function pcFeat(x, w, y, tx) { return pcBar('feat', x, w, y, tx); }
+  function pcHull(x, w, y, tx) { return pcBar('hull', x, w, y, tx); }
+  function pcStory(x, w, y, tx) { return pcBar('story', x, w, y, tx); }
+  function pcRisk(x, y) { return pcBar('risk', x, 2.2, y, ''); }
+  function pcSprints() { return [0, 1, 2, 3, 4].map(function (i) { return pcBar('hdr', 1 + i * 19.6, 19, 4, 'S' + (i + 1)); }).join(''); }
+  function pcMonths() { return ['Oct', 'Nov', 'Dec', 'Jan', 'Feb'].map(function (mo, i) { return pcBar('mon', 1 + i * 19.6, 19, 4, mo); }).join(''); }
+  var PC_SKETCH = {
+    scrum: pcSprints() + pcHull(1, 44, 26, 'Checkout') + pcStory(1, 13, 46, '3') + pcStory(15, 11, 46, '5') + pcStory(27, 18, 46, '2') +
+      pcHull(40, 56, 66, 'Search') + pcStory(40, 22, 86, '8') + pcStory(63, 16, 86, '3'),
+    ascrum: pcSprints() + pcFeat(1, 44, 26, 'Checkout · L · Must') + pcRisk(42, 30) + pcStory(1, 13, 46, '3 H') + pcStory(15, 11, 46, '5 M') +
+      pcStory(27, 18, 46, '2 L') + pcFeat(40, 56, 66, 'Search · XL · Should') + pcRisk(93, 70) + pcStory(40, 22, 86, '8 M') + pcStory(63, 16, 86, '3 L'),
+    rapid: pcMonths() + pcFeat(1, 30, 26, 'Login · M') + pcFeat(32, 44, 26, 'Billing · L') + pcFeat(1, 18, 48, 'Export · S') +
+      pcFeat(20, 30, 48, 'Search · M') + pcFeat(51, 26, 48, 'Alerts · M') + pcFeat(78, 20, 70, 'Admin · S'),
+    minimal: pcMonths() + pcFeat(1, 30, 26, 'Login · M') + pcFeat(24, 44, 46, 'Billing · L') + pcFeat(8, 18, 66, 'Export · S') +
+      pcFeat(60, 36, 86, 'Search · M')
+  };
+  function presetCardsHtml() {
+    var cur = state.meta.preset;
+    return '<section class="su-card"><h2>Start from a preset <span class="req" aria-hidden="true">*</span></h2>' +
+      '<div class="m-hint">Pick how you work. It fills in the next steps, and you can change any of it on the way.</div>' +
+      '<div class="pc-grid" role="radiogroup" aria-label="Preset">' + RM.PRESETS.map(function (p) {
+        var on = cur === p.key;
+        return '<button class="pcard' + (on ? ' on' : '') + '" role="radio" aria-checked="' + on + '" data-wzpreset="' + p.key + '">' +
+          (on ? '<span class="pc-check" aria-hidden="true">✓</span>' : '') +
+          '<b>' + esc(p.name) + '</b><span class="pc-desc">' + esc(p.desc) + '</span>' +
+          '<span class="pc-sketch" aria-hidden="true">' + PC_SKETCH[p.key] + '</span></button>';
+      }).join('') + '</div>' + (cur ? '' : '<div class="m-hint req-hint">Choose a preset to continue.</div>') + '</section>';
+  }
   // Setup → Scheduling: supply and demand, drawn on a small fixed example
   function schedExplainerHtml() {
     var SUP = [2, 2, 2, 1.2, 2, 2, 2, 2, 2, 2];
@@ -10793,11 +10849,60 @@
     return t ? t[1] : k;
   }
   function welcomeHtml() {
-    return '<div class="wz-kicker">WELCOME TO HEADWAY</div><h1 class="wz-h1">Let’s set up your first project</h1>' +
-      '<button class="primary" data-wz="next">Continue</button>';
+    var cur = themePref || 'system';
+    var sw = { light: ['#F5F2EC', '#FFFFFF', '#0057B8'], dark: ['#161B21', '#242C35', '#5B9BE0'],
+      system: ['linear-gradient(90deg,#F5F2EC 50%,#161B21 50%)', 'rgba(255,255,255,.55)', '#0057B8'] };
+    return '<section class="su-card wz-hello"><div class="wz-kicker">FIRST TIME ONLY</div><h1 class="wz-h1">Welcome to Headway</h1>' +
+      '<div class="m-hint">Two things about you before the project. They’re saved on this computer, not in project files.</div>' +
+      '<label class="p-lab" for="wzName">Your name</label><input id="wzName" maxlength="60" placeholder="e.g. Sam Rivera" value="' + esc(userName()) + '">' +
+      '<div class="p-lab">Theme</div><div class="wz-themes">' + ['light', 'dark', 'system'].map(function (k) {
+        var c = sw[k];
+        return '<button class="pcard' + (cur === k ? ' on' : '') + '" data-wztheme="' + k + '" aria-pressed="' + (cur === k) + '">' +
+          (cur === k ? '<span class="pc-check" aria-hidden="true">✓</span>' : '') +
+          '<span class="wz-sw" style="background:' + c[0] + '"><i style="background:' + c[1] + '"></i><i style="background:' + c[2] + '"></i></span>' +
+          (k === 'system' ? 'Match system' : k.charAt(0).toUpperCase() + k.slice(1)) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="wz-hello-foot"><button class="primary" data-wz="next">Continue</button></div></section>';
   }
+  // the Review step: one line per section, each with a way back
+  var WZ_SUMMARY = {
+    project: function () {
+      var m = state.meta, p = RM.PRESETS.filter(function (x) { return x.key === m.preset; })[0];
+      return (m.title || 'Untitled') + ' · ' + RM.fmtShort(RM.parseISO(m.timelineStart)) +
+        (m.endDate ? ' – ' + RM.fmtShort(RM.parseISO(m.endDate)) : '') + (p ? ' · ' + p.name + ' preset' : '');
+    },
+    sprints: function () {
+      return RM.sprintsEnabled(state.meta) ? state.meta.weeksPerSprint + '-week sprints from S' + RM.sprintInfo(state.meta).firstNum : 'No sprints';
+    },
+    org: function () {
+      var n = state.phases.filter(function (p) { return !p.bucket; }).length;
+      return n + (n === 1 ? ' phase' : ' phases') + (state.meta.workstreamsEnabled ? ' · ' + allWorkstreams().length + ' workstreams' : '');
+    },
+    est: function () {
+      var m = state.meta;
+      function nm(k) { return (RM.SIZE_SCHEMES[k] || { name: 'Custom' }).name; }
+      return RM.levelLabel(state, 'feature') + ': ' + nm(m.sizeScheme) + ' · ' + RM.levelLabel(state, 'story') + ': ' + nm(m.storySizeScheme);
+    },
+    budget: function () {
+      return RM.appEnabled(state, 'budget') ? 'On · ' + state.teamTypes.length + (state.teamTypes.length === 1 ? ' role' : ' roles') + ' on the rate card' : 'Off';
+    },
+    team: function () { return state.team.length + (state.team.length === 1 ? ' person' : ' people'); },
+    scheduling: function () {
+      var m = state.meta;
+      return m.capacityEnabled ? (m.planLevel === 'story' ? 'Stories' : 'Features') + ', ' + (m.capMode === 'points' ? 'story points' : 'per person') +
+        ', ' + state.capTypes.length + ' capacity types' : 'Off';
+    },
+    columns: function () {
+      var n = allScopeCols().filter(function (c) { return !isFixedColKey(c[0]); }).length;
+      return n + (n === 1 ? ' custom column' : ' custom columns');
+    }
+  };
   function reviewHtml() {
-    return '<h1 class="wz-h1">Review &amp; create</h1>';
+    return '<h1 class="wz-h1">Review &amp; create</h1><div class="m-hint">Check the essentials. Anything can be changed later in Setup.</div>' +
+      '<section class="su-card wz-sum">' + WZ_STEPS.slice(0, 8).map(function (k, i) {
+        return '<div class="wz-sum-row"><span class="wz-num">' + (i + 1) + '</span><b>' + esc(wizardStepLabel(k)) + '</b><span class="wz-sum-v">' +
+          esc(WZ_SUMMARY[k]()) + '</span><button data-wzgo="' + k + '">Edit</button></div>';
+      }).join('') + '</section>';
   }
   function renderWizard() {
     if (!wz) return;
@@ -10837,6 +10942,15 @@
     if (!wz) return;
     var go = e.target.closest('[data-wzgo]');
     if (go) { if (!go.disabled) wizardGo(go.dataset.wzgo); return; }
+    var pc = e.target.closest('[data-wzpreset]');
+    if (pc) {
+      var pKey = pc.dataset.wzpreset;
+      commit('preset', function (s2) { RM.applyPreset(s2, pKey); });
+      return;
+    }
+    var th = e.target.closest('[data-wztheme]');
+    if (th) { setTheme(th.dataset.wztheme); renderWizard(); return; }
+    if (e.target.closest('[data-wzexpand]')) { wz.expandWorkWeek = true; renderWizard(); return; }
     var b = e.target.closest('[data-wz]');
     if (!b || b.disabled) return;
     var idx = WZ_STEPS.indexOf(wz.step);
@@ -10847,6 +10961,9 @@
       if (idx > 0) wizardGo(WZ_STEPS[idx - 1]);
       else if (wz.welcomed) wizardGo('welcome');
     }
+  });
+  $('#wizard').addEventListener('change', function (e) {
+    if (e.target.id === 'wzName') setUserName(e.target.value);
   });
   $('#topbar').addEventListener('click', function (e) {
     if (e.target.closest('#wzClose')) wizardTryClose();

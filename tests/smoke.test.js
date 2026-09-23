@@ -835,6 +835,57 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(!doc.body.classList.contains('wizard-open'), 'Escape closes an untouched wizard');
   ok(JSON.stringify(state()) === beforeB, 'and the document is untouched');
 }
+// ---------------------------------------------------------------- wizard: Welcome, presets, Project, Sprints, Review
+{
+  window.localStorage.removeItem('headway-onboarded-v1');
+  const savedName = window.localStorage.getItem('headway-user-v1');
+  const savedTheme = window.localStorage.getItem('headway-theme-v1');
+  window.localStorage.removeItem('headway-user-v1');
+  window.HeadwayApp.wizard.open();
+  ok(/Welcome to Headway/.test(doc.querySelector('#wizard').textContent), 'first project starts on Welcome');
+  const nm = doc.querySelector('#wzName'); nm.value = 'Sam'; nm.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wztheme="dark"]'));
+  ok(window.localStorage.getItem('headway-user-v1') === 'Sam', 'name saved per machine');
+  ok(window.localStorage.getItem('headway-theme-v1') === 'dark' && doc.querySelector('#wizard [data-wztheme="dark"]').classList.contains('on'),
+    'theme saved per machine and shown picked');
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  ok(!doc.querySelector('#wizard [data-wz="back"]').disabled, 'Back returns to Welcome from the Project step');
+  const cards = doc.querySelectorAll('#wizard [data-wzpreset]');
+  ok(cards.length === 4 && [...cards].map(c => c.dataset.wzpreset).join() === 'scrum,ascrum,rapid,minimal', 'four presets');
+  ok([...cards].every(c => c.querySelector('.pc-sketch') && c.querySelector('.pc-sketch').children.length > 3), 'each card has a sketch with bars');
+  ok(!doc.querySelector('#wizard .pc-check'), 'no check mark until one is picked');
+  const ti = doc.querySelector('#wizard #suTitle'); ti.value = 'Wizard project'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wzpreset="rapid"]'));
+  ok(doc.querySelector('#wizard [data-wzpreset="rapid"]').classList.contains('on') && !!doc.querySelector('#wizard [data-wzpreset="rapid"] .pc-check') &&
+     !doc.querySelector('#wizard [data-wz="next"]').disabled, 'picking a preset selects it, shows the check and enables Continue');
+  ok(state().meta.weeksPerSprint === 0 && state().meta.capacityEnabled && state().meta.title === 'Wizard project', 'the draft took the preset, and kept the name');
+  ok(doc.querySelectorAll('#wizard .wz-step[disabled]').length === 0, 'with a preset every step opens');
+  // Project in the wizard: work week and holidays fold into one summary row
+  ok(!doc.querySelector('#wizard #suWeekHours') && !!doc.querySelector('#wizard [data-wzexpand]'), 'work week and holidays fold into a summary row');
+  click(doc.querySelector('#wizard [data-wzexpand]'));
+  ok(!!doc.querySelector('#wizard #suWeekHours') && !!doc.querySelector('#wizard #suHolAddBtn'), 'Edit unfolds the full cards');
+  // Sprints: a preview strip of the next sprints, or a note when off
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  ok(/No sprint numbers on the timeline/.test(doc.querySelector('#wizard').textContent), 'sprints off: the step says what that means');
+  click(doc.querySelector('#wizard [data-suwps="3"]'));
+  ok(state().meta.weeksPerSprint === 3 && doc.querySelectorAll('#wizard .su-spr').length === 6, 'sprints on: six upcoming sprints preview');
+  click(doc.querySelector('#wizard [data-wzgo="project"]'));
+  click(doc.querySelector('#wizard [data-wzpreset="scrum"]'));
+  ok(state().meta.weeksPerSprint === 2 && state().meta.title === 'Wizard project', 'switching preset rewrites its own fields only');
+  window.HeadwayApp.wizard.go('review');
+  const rows = doc.querySelectorAll('#wizard .wz-sum [data-wzgo]');
+  ok(rows.length === 8, 'review lists the eight sections with Edit');
+  ok(!/Views/.test(doc.querySelector('#wizard .wz-sum').textContent), 'no Views on review');
+  ok(/Wizard project/.test(doc.querySelector('#wizard .wz-sum').textContent) && /Scrum preset/.test(doc.querySelector('#wizard .wz-sum').textContent),
+    'review shows the name and preset');
+  ok(doc.querySelector('#wizard [data-wz="next"]').textContent.trim() === 'Create project', 'the last step creates');
+  click(rows[1]);
+  ok(doc.querySelector('#wizard .wz-step.on').dataset.wzgo === 'sprints', 'Edit jumps back to that section');
+  window.HeadwayApp.wizard.close(true);
+  if (savedName) window.localStorage.setItem('headway-user-v1', savedName);
+  if (savedTheme) window.localStorage.setItem('headway-theme-v1', savedTheme); else window.localStorage.removeItem('headway-theme-v1');
+  window.localStorage.setItem('headway-onboarded-v1', '1');
+}
 // ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
 {
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
@@ -5943,29 +5994,6 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       ok(state().meta.title === 'Reloaded under wizard', 'closing the wizard shows the reloaded document');
     });
 }).then(() => {
-  // an older file (no role → type map): roles take their people's most common
-  // type, and the open says how many people moved
-  const old = window.RM.clone(state());
-  delete old.roleCapTypes;
-  old.teamTypes = ['Engineer'];
-  old.capTypes = ['Development', 'Design'];
-  old.team = [
-    { id: 'rA', name: 'A', type: 'Engineer', capType: 'Development', weekHours: {} },
-    { id: 'rB', name: 'B', type: 'Engineer', capType: 'Development', weekHours: {} },
-    { id: 'rC', name: 'C', type: 'Engineer', capType: 'Design', weekHours: {} },
-    { id: 'rD', name: 'D', type: '', capType: 'Design', weekHours: {} }
-  ];
-  [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
-  return window.RMExcel.exportWorkbook(old)
-    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
-    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Roles.xlsx'))
-    .then(() => {
-      ok(state().roleCapTypes.Engineer === 'Development' && state().team.map((m) => m.capType).join() === 'Development,Development,Development,Design',
-        'on open: the role takes its majority type; a person with no role keeps theirs');
-      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
-        'on open: a toast says how many people changed type');
-    });
-}).then(() => {
   // opening a document runs auto-order only: the rows come back in start
   // order, but nothing is laid out until someone clicks Auto timeline
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
@@ -6007,6 +6035,45 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       const hLen = state().history.length;
       ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) === 0, 'a second pass over a laid-out phase moves nothing');
       ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
+    });
+}).then(() => {
+  // Create: the draft becomes the open project (browser path: a download)
+  if (!window.URL.createObjectURL) window.URL.createObjectURL = () => 'blob:probe';
+  if (!window.URL.revokeObjectURL) window.URL.revokeObjectURL = () => {};
+  window.HeadwayApp.wizard.open();
+  const t = doc.querySelector('#wizard #suTitle'); t.value = 'Made by wizard'; t.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wzpreset="ascrum"]'));
+  window.HeadwayApp.wizard.go('review');
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  ok(!window.HeadwayApp.wizard.isOpen(), 'Create closes the wizard');
+  const until = (fn, ms) => new Promise((res) => { const t0 = Date.now(); (function poll() { if (fn() || Date.now() - t0 > ms) res(); else setTimeout(poll, 25); })(); });
+  return until(() => state().meta.title === 'Made by wizard', 5000).then(() => {
+    ok(state().meta.title === 'Made by wizard' && state().meta.preset === 'ascrum' && state().meta.riskScheme === 'risk' && state().meta.storyRiskScheme === 'risk',
+      'the created project is the draft, preset and all');
+    ok(window.localStorage.getItem('headway-onboarded-v1') === '1', 'after the first Create, Welcome is not shown again');
+  });
+}).then(() => {
+  // an older file (no role → type map): roles take their people's most common
+  // type, and the open says how many people moved
+  const old = window.RM.clone(state());
+  delete old.roleCapTypes;
+  old.teamTypes = ['Engineer'];
+  old.capTypes = ['Development', 'Design'];
+  old.team = [
+    { id: 'rA', name: 'A', type: 'Engineer', capType: 'Development', weekHours: {} },
+    { id: 'rB', name: 'B', type: 'Engineer', capType: 'Development', weekHours: {} },
+    { id: 'rC', name: 'C', type: 'Engineer', capType: 'Design', weekHours: {} },
+    { id: 'rD', name: 'D', type: '', capType: 'Design', weekHours: {} }
+  ];
+  [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+  return window.RMExcel.exportWorkbook(old)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Roles.xlsx'))
+    .then(() => {
+      ok(state().roleCapTypes.Engineer === 'Development' && state().team.map((m) => m.capType).join() === 'Development,Development,Development,Design',
+        'on open: the role takes its majority type; a person with no role keeps theirs');
+      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
+        'on open: a toast says how many people changed type');
     });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

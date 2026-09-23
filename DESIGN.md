@@ -55,16 +55,41 @@ rows by start day after moves/resizes.
 
 ## Views
 
-- **Apps** (Setup → Project → Apps, right after Timeline): per-document switch for the header
-  tabs — `meta.apps` `{scoping, prio, planning, sprints, budget, reports}`, all on by default,
-  Planning forced on (`RM.APPS`, `RM.appEnabled`). An app that is off has its tab hidden at
-  render, the view falls back to Planning if it was current (or restored from a file / the UI
-  snapshot), and the AI's `navigate` refuses it. Data behind a hidden app is untouched.
-- **Setup** — project configuration page (replaces the old Settings dialog): timeline start/end,
-  sprint numbering, workstreams, phases and team types (each add/edit/delete plus drag-to-reorder
-  via row grips; workstream order persists in state.wsOrder and drives every dropdown), sizing
-  rules, and holidays. No explanatory footer text — controls speak for themselves. The 2026 US holiday calendar is merged once into every
-  document (deletions stick). Edit menu → Setup and the resources "manage" button land here.
+- **Views** (Setup → Views, right under the project sections): per-document switch for the
+  header tabs — `meta.apps` `{scoping, prio, planning, budget, reports}`, on by default
+  (`RM.APPS`, `RM.appEnabled`). Planning is always on; Sprinting has no switch — it follows
+  sprints (`RM.appEnabled(state, 'sprints') === RM.sprintsEnabled(meta)`, `apps.sprints` is
+  dropped on load); Budgeting's switch lives in Setup → Budgeting. An app that is off has its tab
+  hidden at render, the view falls back to Planning if it was current (or restored from a file /
+  the UI snapshot), and the AI's `navigate` refuses it. Data behind a hidden app is untouched.
+- **Setup** — project configuration page. One rail, the same eight sections as the new-project
+  wizard, unnumbered and in order (`SETUP_SECTIONS`, keys `project, sprints, org, est, budget,
+  team, scheduling, columns`), then Views, then *Personal · this computer only* (Appearance,
+  Preferences, AI assistant, Jira Integration). Every rail item has an icon; Sprints, Budgeting
+  and Scheduling carry an on/off pill. Old keys (`timeline`, `phases`, `workstreams`, `sizing`,
+  `capacity`, `apps`) map through `normSetupTab`. Bodies come from `setupBodies(mode)` /
+  `sectionBody(key, mode)`; the handlers are bound per host by `bindSectionHandlers`, so the
+  wizard reuses them unchanged. Sizing, priority & risk is one feature × story grid of selects;
+  only size scales are editable (priority / risk levels are read-only chips); stories have their
+  own risk scheme (`meta.storyRiskScheme`: none / risk / confidence). Team is one editable table
+  (name, title, role, workstreams, allocation, points, rate, cost); a person's capacity type is
+  read-only — it comes from their role (`state.roleCapTypes`, `RM.syncMemberCapTypes`; a person
+  with no role keeps the type they had), set in Scheduling's Roles card. Every capacity type is
+  tracked. Custom columns show a delete (disabled for built-ins). Drag grips reorder lists
+  (workstream order persists in state.wsOrder and drives every dropdown). The 2026 US holiday
+  calendar is merged once into every document (deletions stick). Edit menu → Setup and the
+  resources "manage" button land here.
+- **Onboarding** — File › New project (and the start page) opens a full-screen wizard under the
+  app's own top bar (kept so the window still drags): Welcome (first project on this machine only:
+  your name + theme, flag `headway-onboarded-v1`) → the eight sections → Review & create. A preset
+  is required on the Project step (`RM.PRESETS`, `RM.applyPreset` — writes only schemes, sprint
+  length, budget and scheduling fields plus `meta.preset`, so switching presets never touches the
+  name, dates, phases, people or columns). While open, the global `state` IS a draft; the open
+  document, its undo/redo and saved flag wait in `wz.stash`. `commit` only mutates the draft and
+  re-renders the wizard; saveLocal, autosave, doSave, undo/redo, the name prompt and render() of
+  the app behind all stand down; a disk reload of the open file updates the stash. Closing with
+  edits asks first and restores the stash exactly; Create hands the draft to
+  `createProjectOnDisk`.
 - **Planning** — the timeline. Sprint header shows dates first (sprint numbers secondary).
   Drag empty lane space to pan; ⌘/ctrl-scroll zooms around the cursor.
 - **Sprinting** — sprint by sprint (`renderSprintPage`, `#sprintView`): a sidebar of sections

@@ -9,6 +9,8 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **New project setup**: New project opens a full-screen setup that walks the same sections as Setup — pick a preset first (Scrum, Advanced Scrum, Rapid Delivery or Minimal, each with a small timeline sketch), adjust anything, then review and create.
+- The first project on a computer starts with a short Welcome that asks for your name and theme.
 - Setup → Scheduling: pick the capacity type each role supplies, and a new How scheduling works card shows supply against demand. Setup → Custom columns: every column shows a delete button (disabled for built-ins).
 - Setup → Budgeting has its own Track budget switch next to the rate card, and Setup → Team lists everyone in one editable table (name, title, role, workstreams, allocation, points, rate and cost); a person's capacity type now follows their role.
 - Setup → Sizing, priority & risk: one grid picks the size, priority and risk scheme for features and for stories; priority and risk levels show as read-only chips, size scales stay editable.
