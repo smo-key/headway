@@ -306,7 +306,7 @@
       schemes: {
         featureSize: m.sizeScheme, featureSizes: m.sizeOrder, featureSizeDays: m.sizeDays,
         storySize: m.storySizeScheme, storySizes: m.storySizeOrder,
-        featurePriority: m.priorityScheme, storyPriority: m.storyPriorityScheme, risk: m.riskScheme,
+        featurePriority: m.priorityScheme, storyPriority: m.storyPriorityScheme, risk: m.riskScheme, storyRisk: m.storyRiskScheme,
         capacityEnabled: !!m.capacityEnabled, workstreamsEnabled: m.workstreamsEnabled !== false,
         capMode: m.capMode, defaultPoints: m.defaultPoints, planLevel: m.planLevel
       },
@@ -408,7 +408,7 @@
     },
     {
       name: 'update_project',
-      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/capMode ("person"|"points"), meta/defaultPoints, meta/planLevel, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira, meta/itemTypes (array of {key,label,icon,jira}), meta/hierarchy/levels/<i>/types, meta/hierarchy/anyTypeAnyLevel, epicTypes/<name>), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
+      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/storyRiskScheme (\"none\"|\"risk\"|\"confidence\"), meta/capacityEnabled, meta/capMode ("person"|"points"), meta/defaultPoints, meta/planLevel, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira, meta/itemTypes (array of {key,label,icon,jira}), meta/hierarchy/levels/<i>/types, meta/hierarchy/anyTypeAnyLevel, epicTypes/<name>), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
       parameters: {
         type: 'object',
         properties: {

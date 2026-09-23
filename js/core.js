@@ -292,6 +292,7 @@
   RM.appEnabled = function (state, key) {
     var a = state && state.meta && state.meta.apps;
     if (key === 'planning') return true;
+    if (key === 'sprints') return RM.sprintsEnabled(state && state.meta);
     if (!RM.APPS.some(function (x) { return x[0] === key; })) return true; // not an app (setup, history)
     return !a || a[key] !== false;
   };
@@ -330,26 +331,31 @@
       if (o.priority && order.indexOf(o.priority) === -1) o.priority = null;
     });
   };
-  RM.riskSchemeOf = function (state) {
-    var s = state && state.meta && state.meta.riskScheme;
+  // stories rate risk on their own scheme: a manual ladder or none (the
+  // auto scheme reads the dependency graph, which only features have)
+  RM.STORY_RISK_SCHEMES = ['none', 'risk', 'confidence'];
+  function riskKey(kind) { return kind === 'story' ? 'storyRiskScheme' : 'riskScheme'; }
+  RM.riskSchemeOf = function (state, kind) {
+    var s = state && state.meta && state.meta[riskKey(kind)];
+    if (kind === 'story') return RM.STORY_RISK_SCHEMES.indexOf(s) !== -1 ? s : 'none';
     return RM.RISK_SCHEMES[s] ? s : 'none';
   };
-  RM.riskEnabled = function (state) { return RM.riskSchemeOf(state) !== 'none'; };
-  RM.riskOrderOf = function (state) {
-    return (RM.RISK_SCHEMES[RM.riskSchemeOf(state)].order || []).slice();
+  RM.riskEnabled = function (state, kind) { return RM.riskSchemeOf(state, kind) !== 'none'; };
+  RM.riskOrderOf = function (state, kind) {
+    return (RM.RISK_SCHEMES[RM.riskSchemeOf(state, kind)].order || []).slice();
   };
-  RM.riskColLabel = function (state) {
-    return RM.RISK_SCHEMES[RM.riskSchemeOf(state)].label;
+  RM.riskColLabel = function (state, kind) {
+    return RM.RISK_SCHEMES[RM.riskSchemeOf(state, kind)].label;
   };
-  RM.setRiskScheme = function (state, key) {
+  RM.setRiskScheme = function (state, key, kind) {
     if (!RM.RISK_SCHEMES[key]) return;
-    state.meta.riskScheme = key;
+    if (kind === 'story' && RM.STORY_RISK_SCHEMES.indexOf(key) === -1) return;
+    state.meta[riskKey(kind)] = key;
     var order = RM.RISK_SCHEMES[key].order || [];
     state.items.forEach(function (it) {
-      if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
-      (it.stories || []).forEach(function (st) {
-        if (st.risk && order.indexOf(st.risk) === -1) st.risk = null;
-      });
+      if (kind === 'story') {
+        (it.stories || []).forEach(function (st) { if (st.risk && order.indexOf(st.risk) === -1) st.risk = null; });
+      } else if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
     });
   };
 
@@ -1387,7 +1393,7 @@
     }
     RM.applyWorkWeek(m);
     m.numWeeks = m.numWeeks || (m.numSprints ? m.numSprints * (m.weeksPerSprint || 2) : 48);
-    m.weeksPerSprint = [0, 1, 2, 4].indexOf(+m.weeksPerSprint) !== -1 ? +m.weeksPerSprint : 2;
+    m.weeksPerSprint = [0, 1, 2, 3, 4].indexOf(+m.weeksPerSprint) !== -1 ? +m.weeksPerSprint : 2;
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
@@ -1404,7 +1410,11 @@
     // on by default; Planning is the home view and can never go off.
     var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
     m.apps = {};
-    RM.APPS.forEach(function (a) { m.apps[a[0]] = a[0] === 'planning' ? true : apps[a[0]] !== false; });
+    RM.APPS.forEach(function (a) {
+      // Sprinting follows the sprints setting; it has no switch of its own
+      if (a[0] === 'sprints') return;
+      m.apps[a[0]] = a[0] === 'planning' ? true : apps[a[0]] !== false;
+    });
     // the saved project end date (last working day) wins over numWeeks
     if (m.endDate && /^\d{4}-\d{2}-\d{2}$/.test(m.endDate)) {
       var endWeeks = Math.floor((RM.parseISO(m.endDate) - RM.parseISO(m.timelineStart)) / (7 * 86400000)) + 1;
@@ -1653,6 +1663,10 @@
       m.riskScheme = (state.items || []).some(function (it) { return it && it.risk; })
         ? 'risk' : 'none';
     }
+    // story risk scheme — older docs rated stories on the feature scheme
+    if (RM.STORY_RISK_SCHEMES.indexOf(m.storyRiskScheme) === -1) {
+      m.storyRiskScheme = RM.STORY_RISK_SCHEMES.indexOf(m.riskScheme) !== -1 ? m.riskScheme : 'none';
+    }
     // work week: full-time hours + working days per week
     m.weekHours = isFinite(+m.weekHours) && +m.weekHours > 0 ? Math.min(80, +m.weekHours) : RM.WEEK_HOURS;
     m.daysPerWeek = isFinite(+m.daysPerWeek) && +m.daysPerWeek >= 1 && +m.daysPerWeek <= 5
@@ -1696,6 +1710,7 @@
 
     RM.normalizeTypes(state);
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
+    var storyRiskOrder = RM.RISK_SCHEMES[m.storyRiskScheme].order || RM.RISK_ORDER;
     var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
     var storyPrioOrder = RM.PRIORITY_SCHEMES[m.storyPriorityScheme].order || [];
     state.items = (state.items || []).map(function (it) {
@@ -1808,8 +1823,8 @@
             size: s.size || null,
             priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
-            // stories rate risk on the document's risk scheme, like features
-            risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
+            // stories rate risk on their own scheme
+            risk: s.risk && storyRiskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
               ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
             // capacity type: what the story drains and who can take it

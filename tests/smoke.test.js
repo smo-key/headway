@@ -243,13 +243,10 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   window.HeadwayApp.ai.setView('sprints');
   ok(doc.body.dataset.view === 'sprints', 'Sprinting still opens while on');
   openApps();
-  const spBox = doc.querySelector('#setupView [data-suapp="sprints"]');
-  spBox.checked = false; spBox.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.apps.sprints === false && doc.querySelector('#viewTabs [data-view="sprints"]').hidden, 'Sprinting switches off and its tab hides');
+  ok(doc.querySelector('#setupView [data-suapp="sprints"]').disabled, 'Sprinting has no switch: it follows sprints');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  ok(state().meta.apps.scoping === true && state().meta.apps.sprints === true && !doc.querySelector('#viewTabs [data-view="scoping"]').hidden,
-    'undo restores both apps and their tabs');
+  ok(state().meta.apps.scoping === true && !doc.querySelector('#viewTabs [data-view="scoping"]').hidden,
+    'undo restores the app and its tab');
   window.HeadwayApp.ai.setView('planning');
 }
 ok(doc.querySelectorAll('#rows .row.band').length === 6, 'six phase bands rendered');
@@ -5245,9 +5242,10 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       !hd().classList.contains('over'), 'points capacity with a non-numeric story scheme: the plain count, no "0 / Y"');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     window.HeadwayApp.ai.commit('sprints off', (s) => { s.meta.weeksPerSprint = 0; });
-    ok([...doc.querySelectorAll('#sprintView .spv-ct')].every((c) => c.textContent.indexOf('/') === -1),
-      'with sprints off no total reads X / Y');
+    ok(doc.body.dataset.view === 'planning' && doc.querySelector('#viewTabs [data-view="sprints"]').hidden,
+      'with sprints off Sprinting hides and the view falls back to Planning');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.HeadwayApp.ai.setView('sprints');
     window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
     ok(/^\d+(\.\d)? pt$/.test(hd().textContent.trim()) && !hd().classList.contains('over'),
       'per-person mode: the heading shows just the points total');

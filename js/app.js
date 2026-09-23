@@ -1326,13 +1326,13 @@
   function scopeFixedCols() {
     return SCOPE_FIXED.filter(function (c) {
       if (c[0] === 'size') return RM.sizingEnabled(state);
-      if (c[0] === 'risk') return RM.riskEnabled(state);
+      if (c[0] === 'risk') return RM.riskEnabled(state) || RM.riskEnabled(state, 'story');
       if (c[0] === 'priority') return RM.priorityEnabled(state);
       if (c[0] === 'workstream') return state.meta.workstreamsEnabled;
       return true;
     }).map(function (c) {
       if (c[0] !== 'risk') return c;
-      return [c[0], RM.riskColLabel(state), c[2], c[3]];
+      return [c[0], RM.riskColLabel(state, RM.riskEnabled(state) ? 'feature' : 'story'), c[2], c[3]];
     });
   }
   // human labels for the assessment column's one-letter values, per scheme
@@ -1364,8 +1364,8 @@
     return t === -1 ? RM.PALETTE.neutral : RM.PRIORITY_RAMP[t];
   }
 
-  function riskValueLabel(v) {
-    var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
+  function riskValueLabel(v, kind) {
+    var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state, kind)] || {};
     return mp[v] || v || '';
   }
   // profile avatar: deterministic color + initials. Name, free-text role, and
@@ -2016,11 +2016,11 @@
       })));
   }
   function storyRiskMenu(anchor, itemId, stId) {
-    if (RM.riskSchemeOf(state) === 'auto') return; // computed for features only
+    if (!RM.riskEnabled(state, 'story')) return;
     var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).risk;
     openDropdown(anchor, [{ label: '<i>None</i>', checked: !cur, fn: function () { setStoryRisk(itemId, stId, null); } }]
-      .concat(RM.riskOrderOf(state).map(function (rv) {
-        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv)), checked: cur === rv,
+      .concat(RM.riskOrderOf(state, 'story').map(function (rv) {
+        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv, 'story')), checked: cur === rv,
           fn: function () { setStoryRisk(itemId, stId, rv); } };
       })));
   }
@@ -2072,10 +2072,9 @@
         (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
     }
     if (key === 'risk') {
-      if (!RM.riskEnabled(state)) return '';
-      if (RM.riskSchemeOf(state) === 'auto') return '<span class="r-risk rk-none" title="Dependency risk is computed per feature"></span>';
+      if (!RM.riskEnabled(state, 'story')) return '';
       return '<span class="r-risk rk-none' + (st.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-risk" title="' +
-        esc(RM.riskColLabel(state) + (st.risk ? '\nNow: ' + riskValueLabel(st.risk) : '')) + '">' +
+        esc(RM.riskColLabel(state, 'story') + (st.risk ? '\nNow: ' + riskValueLabel(st.risk, 'story') : '')) + '">' +
         (st.risk ? levelGlyph(st.risk) : blank) + '</span>';
     }
     if (key === 'dur') {
@@ -2353,19 +2352,19 @@
     var out = [];
     if (RM.priorityEnabled(state, 'story')) out.push('priority');
     if (RM.sizingEnabled(state, 'story')) out.push('size');
-    if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
+    if (RM.riskEnabled(state, 'story')) out.push('risk');
     return out;
   }
   function prStoryColLabel(v) {
     if (v === '') return 'Unset';
     if (prioStoryCol === 'priority') return priorityValueLabel(v, 'story');
-    if (prioStoryCol === 'risk') return riskValueLabel(v);
+    if (prioStoryCol === 'risk') return riskValueLabel(v, 'story');
     return v;
   }
   // [{ key, name }] — the field's ladder in scheme order, then Unset
   function prStoryColumns() {
     var vals = prioStoryCol === 'priority' ? RM.priorityOrderOf(state, 'story')
-      : prioStoryCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state, 'story');
+      : prioStoryCol === 'risk' ? RM.riskOrderOf(state, 'story') : RM.sizeOrderOf(state, 'story');
     return vals.map(function (v) { return { key: v, name: prStoryColLabel(v) }; }).concat(prioHideUnset ? [] : [{ key: '', name: 'Unset' }]);
   }
   // the story's value for the column field; anything the ladder does not
@@ -3908,6 +3907,7 @@
     // the feature's risk chip — same markup in the Scoping grid and the
     // Planning row: computed under the auto scheme, picked otherwise
     function riskChipHtml() {
+      if (!RM.riskEnabled(state)) return ''; // the column is up for story risk only
       var sch = RM.riskSchemeOf(state);
       if (sch === 'auto') {
         var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
@@ -4229,7 +4229,7 @@
                   return '<div class="sc-cell sc-fix" data-col="' + key + '" style="width:' + w + 'px">' + inner + '</div>';
                 }
                 if (key === 'size' && RM.sizingEnabled(state, 'story')) return stFix(storyChipHtml('size', st, 'data-act', ''));
-                if (key === 'risk' && RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') return stFix(storyChipHtml('risk', st, 'data-act', ''));
+                if (key === 'risk' && RM.riskEnabled(state, 'story')) return stFix(storyChipHtml('risk', st, 'data-act', ''));
                 if (key === 'assignees') {
                   return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                     (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
@@ -4934,12 +4934,12 @@
               ' title="' + esc(priorityValueLabel(pv, 'story')) + '">' + (stPriLevels ? levelGlyph(pv) : pv) + '</button>';
           })).join('') + '</div>'
       : '';
-    var stRiskBtns = RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto'
-      ? '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state)) + '</label><div class="seg">' +
+    var stRiskBtns = RM.riskEnabled(state, 'story')
+      ? '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state, 'story')) + '</label><div class="seg">' +
         ['<button data-stf="risk" data-v=""' + (!st.risk ? ' class="on"' : '') + ' title="Not set">None</button>']
-          .concat(RM.riskOrderOf(state).map(function (rv) {
+          .concat(RM.riskOrderOf(state, 'story').map(function (rv) {
             return '<button data-stf="risk" data-v="' + rv + '"' + (st.risk === rv ? ' class="on"' : '') +
-              ' title="' + esc(riskValueLabel(rv)) + '">' + levelGlyph(rv) + '</button>';
+              ' title="' + esc(riskValueLabel(rv, 'story')) + '">' + levelGlyph(rv) + '</button>';
           })).join('') + '</div>'
       : '';
     var estimate = stSizeBtns + stPriBtns + stRiskBtns;
@@ -9296,7 +9296,7 @@
       if (plHidden(k)) return false;
       if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
       if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
-      if (k === 'risk') return RM.riskEnabled(state);
+      if (k === 'risk') return RM.riskEnabled(state) || RM.riskEnabled(state, 'story');
       if (k === 'cap') return !!state.meta.capacityEnabled;
       if (k === 'mult') return !!state.meta.capacityEnabled && state.meta.capMode !== 'points';
       if (k === 'ws') return !!state.meta.workstreamsEnabled;
@@ -10504,7 +10504,7 @@
         '<section class="su-card"><h2>Apps</h2>' +
         '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning an app off hides its tab; its data stays in the document.</div>' +
         RM.APPS.map(function (a) {
-          var fixed = a[0] === 'planning';
+          var fixed = a[0] === 'planning' || a[0] === 'sprints'; // Sprinting follows sprints
           return '<label class="p-check su-app' + (fixed ? ' fixed' : '') + '" title="' + esc(a[3]) + '">' +
             '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + (fixed ? ' disabled' : '') + '> ' +
             '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span></label>';

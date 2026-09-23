@@ -799,6 +799,32 @@ RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: 
   capTypes: ['A', 'B'], teamTypes: ['R'], team: [{ name: 'x', type: 'R', capType: 'A' }, { name: 'y', type: 'R', capType: 'A' }, { name: 'z', type: 'R', capType: 'B' }] });
 eq(RM.lastCapTypeChanges, 1, 'normalize reports how many people changed type');
 
+// ------------------------------------------------------------- story risk scheme
+section('story risk scheme');
+function riskSt(meta, stories) {
+  return RM.normalizeState({ meta: Object.assign({ timelineStart: '2026-07-27', numWeeks: 8 }, meta),
+    phases: [{ id: 'p1' }], items: [{ num: 1, feature: 'f', risk: 'H', stories: stories }] });
+}
+var sOld = riskSt({ riskScheme: 'risk' }, [{ title: 's', risk: 'M' }]);
+eq([sOld.meta.storyRiskScheme, sOld.items[0].stories[0].risk], ['risk', 'M'], 'old file: stories keep the feature scheme');
+eq(riskSt({ riskScheme: 'auto' }, [{ title: 's' }]).meta.storyRiskScheme, 'none', 'auto never applies to stories');
+var sConf = riskSt({ riskScheme: 'risk', storyRiskScheme: 'confidence' }, [{ title: 's', risk: 'H' }]);
+eq(RM.riskOrderOf(sConf, 'story'), ['H', 'M', 'L'], 'story ladder follows the story scheme');
+eq(RM.riskOrderOf(sConf), ['L', 'M', 'H'], 'feature ladder unchanged');
+eq(riskSt({ riskScheme: 'none', storyRiskScheme: 'auto' }, []).meta.storyRiskScheme, 'none', 'auto is rejected for stories');
+RM.setRiskScheme(sConf, 'none', 'story');
+eq([sConf.items[0].stories[0].risk, sConf.items[0].risk], [null, 'H'], 'turning story risk off clears stories only');
+RM.setRiskScheme(sConf, 'confidence');
+eq(sConf.items[0].risk, 'H', 'feature scheme change keeps a value that exists on the new ladder');
+
+section('sprints app');
+var sp = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, weeksPerSprint: 3, apps: { sprints: false } },
+  phases: [{ id: 'p1' }], items: [] });
+eq(sp.meta.weeksPerSprint, 3, '3-week sprints are allowed');
+ok(RM.appEnabled(sp, 'sprints') && !('sprints' in sp.meta.apps), 'Sprinting follows sprints on, apps.sprints is dropped');
+sp.meta.weeksPerSprint = 0;
+ok(!RM.appEnabled(sp, 'sprints'), 'sprints off hides Sprinting');
+
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
 // total calendar helpers
@@ -1844,7 +1870,7 @@ function finish() {
 section('apps switch');
 {
   var ap = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [], items: [] });
-  ok(RM.APPS.every(function (a) { return ap.meta.apps[a[0]] === true; }), 'a fresh document has every app on');
+  ok(RM.APPS.every(function (a) { return a[0] === 'sprints' ? RM.appEnabled(ap, 'sprints') : ap.meta.apps[a[0]] === true; }), 'a fresh document has every app on (Sprinting via sprints on)');
   var ap2 = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8, apps: { scoping: false, planning: false, bogus: false } }, phases: [], items: [] });
   eq([ap2.meta.apps.scoping, ap2.meta.apps.planning, ap2.meta.apps.prio, 'bogus' in ap2.meta.apps], [false, true, true, false],
     'off flags stick, Planning is forced on, unknown keys drop');
