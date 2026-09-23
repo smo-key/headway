@@ -753,6 +753,52 @@ eq(RM.itemByNum(RM.placeUnit(sPhM, sPhM.items[1].id, null, { today: 0 }).state, 
 eq(RM.todayDay(META, new Date(Date.UTC(2026, 6, 20))), 0, 'today before the timeline clamps to 0');
 eq(RM.todayDay(META, new Date(Date.UTC(2026, 7, 4))), 6, 'today maps to its working-day index');
 
+// ------------------------------------------------------------- role capacity types
+section('role capacity types');
+var sR = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, capacityEnabled: true, capRowTypes: ['Design'] },
+  phases: [{ id: 'p1' }], items: [],
+  capTypes: ['Development', 'Design'],
+  teamTypes: ['Engineer', 'Designer', 'PM'],
+  team: [
+    { name: 'A', type: 'Engineer', capType: 'Development' },
+    { name: 'B', type: 'Engineer', capType: 'Development' },
+    { name: 'C', type: 'Engineer', capType: 'Design' },
+    { name: 'D', type: 'Designer', capType: 'Design' },
+    { name: 'E', type: '', capType: 'Design' },
+    { name: 'F', type: 'PM', capType: '' }
+  ]
+});
+eq(sR.roleCapTypes, { Engineer: 'Development', Designer: 'Design' }, 'majority type per role; roles with no typed people map to nothing');
+eq(sR.team.map(function (m) { return m.capType; }), ['Development', 'Development', 'Development', 'Design', 'Design', ''],
+  'people take their role\'s type; a person with no role keeps theirs');
+ok(!('capRowTypes' in sR.meta), 'capRowTypes is dropped');
+var sTie = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p1' }], items: [],
+  capTypes: ['Development', 'Design'], teamTypes: ['Eng'],
+  team: [{ name: 'A', type: 'Eng', capType: 'Design' }, { name: 'B', type: 'Eng', capType: 'Development' }] });
+eq(sTie.roleCapTypes, { Eng: 'Development' }, 'a tie takes the first type in capTypes');
+var sKeep = RM.normalizeState(RM.clone(sR));
+eq(sKeep.roleCapTypes, sR.roleCapTypes, 'an existing map is kept on reload, not re-derived');
+RM.setRoleCapType(sR, 'PM', 'Design');
+eq(sR.team[5].capType, 'Design', 'setting a role\'s type updates its people');
+eq(RM.capTypeRoles(sR, 'Design'), ['Designer', 'PM'], 'roles supplying a type, in teamTypes order');
+RM.renameCapType(sR, 'Design', 'UX');
+eq([sR.roleCapTypes.Designer, sR.team[3].capType], ['UX', 'UX'], 'renaming a type follows into the map');
+RM.renameRole(sR, 'Designer', 'Product designer');
+eq(sR.roleCapTypes['Product designer'], 'UX', 'renaming a role moves its mapping');
+RM.removeCapType(sR, 'UX');
+ok(!('Product designer' in sR.roleCapTypes) && sR.team[3].capType === '', 'removing a type clears its roles and people');
+RM.removeRole(sR, 'Engineer');
+ok(!('Engineer' in sR.roleCapTypes), 'removing a role drops its mapping');
+var sNoRole = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p1' }], items: [],
+  capTypes: ['Design'], teamTypes: ['X'], team: [{ name: 'E', type: '', capType: 'Design' }] });
+RM.setRoleCapType(sNoRole, 'X', 'Design'); RM.renameRole(sNoRole, 'X', 'Y');
+eq(sNoRole.team[0].capType, 'Design', 'no-role person keeps an old type through role edits');
+eq(RM.lastCapTypeChanges, 0, 'nothing to report for a clean file');
+RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p1' }], items: [],
+  capTypes: ['A', 'B'], teamTypes: ['R'], team: [{ name: 'x', type: 'R', capType: 'A' }, { name: 'y', type: 'R', capType: 'A' }, { name: 'z', type: 'R', capType: 'B' }] });
+eq(RM.lastCapTypeChanges, 1, 'normalize reports how many people changed type');
+
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
 // total calendar helpers

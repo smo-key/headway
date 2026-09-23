@@ -12122,6 +12122,7 @@
   // dialogs and the field being edited all stay exactly where they were
   function loadWorkbookBuffer(buf, name, reload) {
     return RMExcel.importWorkbook(buf).then(function (r) {
+      var capTypeChanges = RM.lastCapTypeChanges; // from the import's normalize
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
@@ -12147,6 +12148,10 @@
       // template layout is worth a note
       if (r.source !== 'tool') {
         toast('Parsed “' + name + '” from the template layout');
+      }
+      // people now take their role's capacity type: say so when that moved anyone
+      if (capTypeChanges > 0) {
+        toast(capTypeChanges + (capTypeChanges === 1 ? ' person now takes' : ' people now take') + ' the capacity type of their role \u2014 check Setup \u203a Scheduling');
       }
     });
   }

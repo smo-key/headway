@@ -383,6 +383,28 @@
   RM.memberPoints = function (state, m) {
     return m.points != null ? m.points : (state.meta || state).defaultPoints;
   };
+  // people take their role's capacity type; a person with no role keeps
+  // whatever type they already had. Returns how many people changed.
+  RM.syncMemberCapTypes = function (state) {
+    var map = state.roleCapTypes || {}, n = 0;
+    state.team.forEach(function (m) {
+      if (!m.type) return;
+      var t = map[m.type] || '';
+      if (m.capType !== t) { m.capType = t; n++; }
+    });
+    return n;
+  };
+  RM.setRoleCapType = function (state, role, capType) {
+    state.roleCapTypes = state.roleCapTypes || {};
+    if (capType && state.capTypes.indexOf(capType) !== -1) state.roleCapTypes[role] = capType;
+    else delete state.roleCapTypes[role];
+    RM.syncMemberCapTypes(state);
+  };
+  RM.capTypeRoles = function (state, capType) {
+    var map = state.roleCapTypes || {};
+    return state.teamTypes.filter(function (r) { return map[r] === capType; });
+  };
+  RM.lastCapTypeChanges = 0;
   RM.renameCapType = function (state, oldName, newName) {
     newName = String(newName || '').trim();
     if (!newName || newName === oldName) return false;
@@ -390,6 +412,9 @@
     var i = state.capTypes.indexOf(oldName);
     if (i === -1) return false;
     state.capTypes[i] = newName;
+    Object.keys(state.roleCapTypes || {}).forEach(function (r) {
+      if (state.roleCapTypes[r] === oldName) state.roleCapTypes[r] = newName;
+    });
     state.team.forEach(function (m) { if (m.capType === oldName) m.capType = newName; });
     state.items.forEach(function (it) {
       if (it.capType === oldName) it.capType = newName;
@@ -401,6 +426,9 @@
     var i = state.capTypes.indexOf(name);
     if (i === -1) return false;
     state.capTypes.splice(i, 1);
+    Object.keys(state.roleCapTypes || {}).forEach(function (r) {
+      if (state.roleCapTypes[r] === name) delete state.roleCapTypes[r];
+    });
     state.team.forEach(function (m) { if (m.capType === name) m.capType = ''; });
     state.items.forEach(function (it) {
       if (it.capType === name) it.capType = '';
@@ -2013,6 +2041,27 @@
     state.items.forEach(function (it) {
       if (it.capType && state.capTypes.indexOf(it.capType) === -1) state.capTypes.push(it.capType);
     });
+    // Each role supplies at most one capacity type; people inherit it.
+    // Old files have no map: each role takes the type most of its people
+    // carried (ties: first in capTypes). An existing map is kept.
+    var rct = state.roleCapTypes && typeof state.roleCapTypes === 'object' ? state.roleCapTypes : null;
+    if (!rct) {
+      rct = {};
+      state.teamTypes.forEach(function (role) {
+        var counts = {};
+        state.team.forEach(function (mbr) {
+          if (mbr.type === role && mbr.capType) counts[mbr.capType] = (counts[mbr.capType] || 0) + 1;
+        });
+        var best = '', bestN = 0;
+        state.capTypes.forEach(function (t) { if ((counts[t] || 0) > bestN) { best = t; bestN = counts[t]; } });
+        if (best) rct[role] = best;
+      });
+    }
+    state.roleCapTypes = {};
+    Object.keys(rct).forEach(function (role) {
+      if (state.teamTypes.indexOf(role) !== -1 && state.capTypes.indexOf(rct[role]) !== -1) state.roleCapTypes[role] = rct[role];
+    });
+    RM.lastCapTypeChanges = RM.syncMemberCapTypes(state);
     // A feature always plans as SOME capacity type: a blank one (every
     // document written before capacity types existed) takes the first type.
     // Milestones carry no demand, so they stay untyped.
@@ -3645,6 +3694,10 @@
       state.meta.rateCard[newName] = state.meta.rateCard[oldName];
       delete state.meta.rateCard[oldName];
     }
+    if (state.roleCapTypes && oldName in state.roleCapTypes) {
+      state.roleCapTypes[newName] = state.roleCapTypes[oldName];
+      delete state.roleCapTypes[oldName];
+    }
     return true;
   };
 
@@ -3657,6 +3710,7 @@
     state.team.forEach(function (m) { if (m.type === name) m.type = ''; });
     state.items.forEach(function (it) { if (it.teamType === name) it.teamType = ''; });
     if (state.meta.rateCard) delete state.meta.rateCard[name];
+    if (state.roleCapTypes) delete state.roleCapTypes[name];
     return true;
   };
 

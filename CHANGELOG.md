@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Scheduling: each role now supplies one capacity type and its people take it; older files pick each role's most common type on open and say how many people moved.
 - Sprinting: each sprint's total sits at the right edge of its side entry and heading as a larger number; with story-points capacity on (sprints on, numeric story sizes) it reads planned / available points (e.g. `18 / 20`), in red when the sprint is over — never red while a filter hides some of its stories.
 - Sprinting: clicking a sprint in the side list lands on the sprint heading; it used to end up hidden under the sticky filter bar.
 - Resources shows either the × seat multiplier (per-person demand) or points per sprint (story-points demand), never both; in story-points mode a person's points are scaled by their hours only. A seat of 0 still means "supplies nothing" in both modes. The row menu's Capacity… opens whichever of the two the row shows.
