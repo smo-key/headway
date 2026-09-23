@@ -56,6 +56,7 @@
   var view = 'planning';     // planning (timeline) | scoping (spreadsheet)
   var depsMode = 'on';       // on: selected item's explicit deps + violations + critical path | none
   var showCrit = true;       // orange critical-path highlight (bars + arrows)
+  var showRange = true;      // hatched low→high estimate bands on the bars (range mode only)
   var showCap = true;        // weekly capacity row in the planning header
   var repCollapsed = true;   // bottom Reports drawer starts tucked away
   var leftWBudget = 806;     // frozen left-pane width, budgeting view
@@ -91,6 +92,48 @@
   var drag = null;           // active drag descriptor
   var lastExport = null;
   var critCache = null;      // RM.criticalPath result, refreshed in render()
+  var renderCount = 0;       // debug handle: how many full renders ran (tests assert "one render")
+
+  // ---- shared-bundle (folder) document — pure merge rules in js/bundle.js,
+  // filesystem in js/desktop.js; this file wires the two into the editor
+  var docKind = 'xlsx';      // 'xlsx' (single file) | 'bundle' (folder of per-entity shards)
+  var bundleDir = null;      // absolute path of the open <Title>.headway folder
+  var activePlanId = null;   // sub-bundle this machine is viewing (per machine, never shared)
+  var planList = [];         // headway.json plans, tombstones included
+  var lastCanon = {};        // 'kind/id' → canonical entity string as of the last disk read/write
+  var lastEnv = {};          // 'kind/id' → envelope on disk (baseRev for the flush, merge base for reads)
+  var bundleFlushTimer = null;
+  var flushing = false;
+  var flushQueued = false;   // an afterChange landed while a flush was in flight → one re-flush is chained
+  var flushChain = Promise.resolve(); // every flush in order; flushBundle() resolves after the LAST one
+  var closing = null;        // closeBundleSession in progress (flush → reset → leave folder)
+  var flushGen = 0;          // bumps per afterChange; a flush reports "synced" only if nothing changed since
+  var localAt = {};          // 'kind/id' → {field: iso}: when THIS machine last changed each unsynced field
+  var localVal = {};         // 'kind/id' → {field: canonical}: the value that stamp belongs to
+  var planGone = false;      // the active plan was tombstoned and no live plan is left: never flush into it
+  var pendingHistory = [];   // history not yet on disk: {append: line} | {rewrite: true}
+  var ownLines = [];         // this user's history/<userId>.jsonl — the one file we alone write
+  var historyCache = null;   // {userId: [lines]} read from history/
+  var historyLoad = null;    // promise: ownLines reconciled with disk (history writes wait on it)
+  var historyMemo = null;    // merged, plan-filtered view; dropped on any change
+  var resumeInfo = null;     // {bundleDir, activePlanId} from the ui snapshot, consumed by resumeBundle()
+  var planDocCache = {};     // planId → assembled state for the Compare overlay
+  var planLoading = {};      // planId → true while its readPlan is in flight
+  var deferredExternal = []; // peer envelopes held back while a drag touches their entity
+  var peers = {};            // userId → presence object as read (own id / stale / other plans filtered at derive time)
+  var peerByItem = {};       // itemId → [{id, name}] live peers on that row (derived from peers)
+  var peerSig = '';          // canonical string of peerByItem: chips are patched only when it changes
+  var presenceOn = false;    // heartbeat armed (bundle mode, desktop only)
+  var presenceTimer = null;  // next heartbeat (self-rearming timeout: the test harness caps timeouts, not intervals)
+  var presenceThrottle = null; // pending selection-change write
+  var presenceLastAt = 0;    // Date.now() of the last presence write
+  var presenceSig = '';      // editingIds() as of the last write
+  var presenceWrite = Promise.resolve(); // in-flight write; stop waits on it so a remove cannot lose the race
+  var nudgedAt = {};         // itemId → Date.now() of the last "also editing" toast
+  var PRESENCE_MS = 30000;          // heartbeat period
+  var PRESENCE_THROTTLE_MS = 2000;  // min gap between selection-driven writes
+  var PRESENCE_TTL_MS = 90000;      // a peer heartbeat older than this is stale
+  var PRESENCE_NUDGE_MS = 60000;    // "X is also editing #n" at most once per item per minute
 
   var $ = function (sel, el) { return (el || document).querySelector(sel); };
   var $$ = function (sel, el) { return Array.prototype.slice.call((el || document).querySelectorAll(sel)); };
@@ -118,12 +161,31 @@
   }
   function isScheduled(it) { return it.startDay != null && it.durDays != null; }
 
+  // Low / High estimate fields (range mode). attr = 'f' for the item panel, 'stf' for a story
+  function estRangeHtml(x, attr) {
+    if (!RM.rangeEnabled(state)) return '';
+    var u = RM.estUnitShort(state);
+    var v = function (n) { return n != null ? n : ''; };
+    return '<div class="p-grid2" style="margin-top:8px">' +
+      '<div><label class="p-lab">Estimate low (' + esc(u) + ')</label>' +
+      '<input type="number" data-' + attr + '="estLow" min="0" step="0.25" value="' + v(x.estLow) + '" placeholder="–" style="width:100%"></div>' +
+      '<div><label class="p-lab">Estimate high (' + esc(u) + ')</label>' +
+      '<input type="number" data-' + attr + '="estHigh" min="0" step="0.25" value="' + v(x.estHigh) + '" placeholder="–" style="width:100%"></div>' +
+      '</div>';
+  }
+
   // ------------------------------------------------------------ persistence
   // one place defines "the UI prefs" — written to localStorage on every
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, showRange: showRange, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
+  }
+  // the snapshot an .xlsx carries: a workbook must never re-link a folder
+  function exportUiSnapshot() {
+    var ui = uiSnapshot();
+    delete ui.docKind; delete ui.bundleDir; delete ui.activePlanId;
+    return ui;
   }
   var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority'], ['type', 'Item type']];
   var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority' | 'type'
@@ -172,6 +234,7 @@
     scopeColW = ui.scopeColW && typeof ui.scopeColW === 'object' ? ui.scopeColW : {};
     autoOrder = ui.autoOrder !== false; // default true
     showCrit = ui.showCrit !== false;   // default true
+    showRange = ui.showRange !== false; // default true
     showCap = ui.showCap !== false;     // default true
     resPanelH = ui.resPanelH > 40 ? ui.resPanelH : 150;
     panelSec = ui.panelSec && typeof ui.panelSec === 'object' ? ui.panelSec : {};
@@ -202,6 +265,10 @@
       expanded = ui.expanded;
       uiExpandedLoaded = true;
     }
+    // a folder session is re-linked by resumeBundle() (desktop only), never
+    // adopted straight from a snapshot
+    resumeInfo = ui.docKind === 'bundle' && ui.bundleDir
+      ? { bundleDir: ui.bundleDir, activePlanId: ui.activePlanId || null } : null;
   }
 
   var localSaveBroken = false;
@@ -241,15 +308,46 @@
   // every commit also lands in the document's version history (state.history,
   // persisted with the doc): who made the change, what it was, and when.
   // Rapid same-kind edits by the same person coalesce into one entry.
-  var USER_KEY = 'headway-user-v1';
-  var HISTORY_COALESCE_MS = 5 * 60 * 1000;
+  var USER_KEY = 'headway-user-v1';   // legacy: the display name alone (still written)
+  var USER_KEY2 = 'headway-user-v2';  // {name, id} — id minted once, never changes
   var sessionStart = Date.now(); // for stamping this session's anonymous edits
   var namePromptShown = false;
-  function userName() {
-    try { return (localStorage.getItem(USER_KEY) || '').trim(); } catch (e) { return ''; }
+  var memUser = null; // storage-less fallback: the identity lives for this session only
+  function readUser() {
+    var u = null;
+    try { u = JSON.parse(localStorage.getItem(USER_KEY2) || 'null'); } catch (e) { u = null; }
+    if (u && typeof u === 'object') return u;
+    if (memUser) return memUser;
+    var legacy = '';
+    try { legacy = (localStorage.getItem(USER_KEY) || '').trim(); } catch (e) { /* storage optional */ }
+    return { name: legacy };
   }
+  function writeUser(u) {
+    memUser = u;
+    try { localStorage.setItem(USER_KEY2, JSON.stringify(u)); } catch (e) { /* storage optional */ }
+  }
+  function userName() { return String(readUser().name || '').trim(); }
   function setUserName(v) {
-    try { localStorage.setItem(USER_KEY, String(v || '').trim()); } catch (e) { /* storage optional */ }
+    v = String(v || '').trim();
+    var u = readUser();
+    u.name = v;
+    writeUser(u);
+    try { localStorage.setItem(USER_KEY, v); } catch (e) { /* storage optional */ }
+  }
+  function slugOf(s) {
+    return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'anon';
+  }
+  function rand5() {
+    var s = '';
+    while (s.length < 5) s += Math.random().toString(36).slice(2);
+    return s.slice(0, 5);
+  }
+  // per-machine identity for history + presence files (one id serves both);
+  // minted on first use, so a renamed person keeps their files
+  function userId() {
+    var u = readUser();
+    if (!u.id) { u.id = slugOf(u.name) + '-' + rand5(); writeUser(u); }
+    return u.id;
   }
   // ---- semantic diff between two document states, for Version History.
   // Ops are [category, field label, old value, new value]; categories map to
@@ -275,6 +373,11 @@
       var m = {};
       (list || []).forEach(function (x) { if (x && x.id) m[x.id] = x; });
       return m;
+    }
+    // deps hold item ids; history shows them as #num from whichever snapshot has the item
+    function depLabel(id) {
+      var d = RM.itemById(b, id) || RM.itemById(a, id);
+      return d ? '#' + d.num : '#?';
     }
     function names(st, ids) {
       return (ids || []).map(function (id) {
@@ -315,8 +418,8 @@
       push('scope', lbl + ' — ' + RM.riskColLabel(b), p.risk, it.risk);
       push('scope', lbl + ' — Priority', p.priority, it.priority);
       push('scope', lbl + ' — Role', p.teamType, it.teamType);
-      push('scope', lbl + ' — Depends on', (p.deps || []).map(function (n) { return '#' + n; }).join(', '),
-        (it.deps || []).map(function (n) { return '#' + n; }).join(', '));
+      push('scope', lbl + ' — Depends on', (p.deps || []).map(depLabel).join(', '),
+        (it.deps || []).map(depLabel).join(', '));
       (b.meta.scopeCols || []).forEach(function (c) {
         push('scope', lbl + ' — ' + RM.scopeColLabel(c), txt(RM.scopeValue(p, c.key)), txt(RM.scopeValue(it, c.key)));
       });
@@ -433,37 +536,12 @@
     ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard'; });
     return { ops: ops, tl: tl };
   }
-  // merge coalesced ops: same field keeps its FIRST old and LAST new value
-  function mergeOps(base, add) {
-    var out = base.slice();
-    var at = {};
-    out.forEach(function (op, i) { at[op[0] + '' + op[1]] = i; });
-    add.forEach(function (op) {
-      var k = op[0] + '' + op[1];
-      if (at[k] != null) out[at[k]] = [op[0], op[1], out[at[k]][2], op[3]];
-      else { at[k] = out.length; out.push(op); }
-    });
-    return out.filter(function (op) { return op[2] !== op[3]; });
-  }
-  // coalesced schedule moves keep each item's FIRST before and LAST after
-  function mergeTl(base, add) {
-    var out = base.slice();
-    var by = {};
-    out.forEach(function (t, i) { by[t.id] = i; });
-    add.forEach(function (t) {
-      if (by[t.id] != null) {
-        var b = out[by[t.id]];
-        out[by[t.id]] = { id: t.id, n: t.n, f: t.f, ms: t.ms, s0: b.s0, d0: b.d0, s1: t.s1, d1: t.d1 };
-      } else { by[t.id] = out.length; out.push(t); }
-    });
-    return out.filter(function (t) { return !(t.s0 === t.s1 && t.d0 === t.d1); });
-  }
+  // coalescing helpers (mergeOps / mergeTl / HISTORY_COALESCE_MS) live in core
   var aiActor = false; // true while the AI assistant applies an edit (history attribution)
   function recordHistory(label, prevJson) {
     if (!label) return;
     var u = userName();
     if (aiActor) u = (u || 'Unknown user') + ' · AI';
-    var h = state.history = Array.isArray(state.history) ? state.history : [];
     var ops = [], tl = [];
     if (prevJson) {
       try {
@@ -474,15 +552,17 @@
     }
     // the history array itself always differs between snapshots — never diff it
     ops = ops.filter(function (op) { return op[1].indexOf('history') === -1; });
-    var last = h[h.length - 1];
     var now = Date.now();
-    if (last && last.label === label && last.u === u && now - last.t < HISTORY_COALESCE_MS) {
+    if (docKind === 'bundle') { recordBundleHistory(label, u, now, ops, tl); return; }
+    var h = state.history = Array.isArray(state.history) ? state.history : [];
+    var last = h[h.length - 1];
+    if (last && last.label === label && last.u === u && now - last.t < RM.HISTORY_COALESCE_MS) {
       last.t = now;
       last.n = (last.n || 1) + 1;
-      var merged = mergeOps(last.d || [], ops);
+      var merged = RM.mergeOps(last.d || [], ops);
       last.x = (last.x || 0) + Math.max(0, merged.length - RM.HISTORY_OPS_MAX);
       last.d = merged.slice(0, RM.HISTORY_OPS_MAX);
-      var mtl = mergeTl(last.tl || [], tl).slice(0, 60);
+      var mtl = RM.mergeTl(last.tl || [], tl).slice(0, 60);
       if (mtl.length) last.tl = mtl; else delete last.tl;
       return;
     }
@@ -492,6 +572,36 @@
     if (tl.length) en.tl = tl.slice(0, 60);
     h.push(en);
     if (h.length > RM.HISTORY_MAX) h.splice(0, h.length - RM.HISTORY_MAX);
+  }
+  // bundle mode: history never enters state — each commit is a line in OUR
+  // history/<userId>.jsonl, written at the next flush. Coalescing rewrites our
+  // own tail line: one writer per file, so no merge and no conflict.
+  function recordBundleHistory(label, u, now, ops, tl) {
+    var last = ownLines[ownLines.length - 1];
+    // same label, same user, same PLAN (our file spans every plan we edit)
+    if (last && last.label === label && last.u === u && last.planId === String(activePlanId) &&
+      now - last.t < RM.HISTORY_COALESCE_MS) {
+      last.t = now;
+      last.n = (last.n || 1) + 1;
+      var merged = RM.mergeOps(last.d || [], ops);
+      var x = (last.x || 0) + Math.max(0, merged.length - RM.HISTORY_OPS_MAX);
+      if (x) last.x = x; else delete last.x;
+      var d = merged.slice(0, RM.HISTORY_OPS_MAX);
+      if (d.length) last.d = d; else delete last.d;
+      var mtl = RM.mergeTl(last.tl || [], tl).slice(0, 60);
+      if (mtl.length) last.tl = mtl; else delete last.tl;
+      pendingHistory.push({ rewrite: true });
+    } else {
+      var en = { t: now, u: u, label: label, n: 1 };
+      if (ops.length > RM.HISTORY_OPS_MAX) en.x = ops.length - RM.HISTORY_OPS_MAX;
+      en.d = ops.slice(0, RM.HISTORY_OPS_MAX);
+      if (tl.length) en.tl = tl.slice(0, 60);
+      var line = RMBundle.historyLine(en, userId(), activePlanId);
+      if (!line) return;
+      ownLines.push(line);
+      pendingHistory.push({ append: line });
+    }
+    historyMemo = null;
   }
   // bumped whenever `state` changes (commit, replaceState, undo/redo, open):
   // the cheap key the Auto timeline dry runs are memoized on
@@ -538,7 +648,8 @@
     var r = autoPhaseDryRun(phaseId);
     if (!r.changed) { toast('Nothing to move'); return 0; }
     commit('auto timeline', function (s) {
-      s.items = r.state.items;
+      // the scheduler re-sorted its copy by start; the document keeps key order
+      s.items = RM.sortByOrder(r.state.items);
       s.meta = r.state.meta;
     });
     var sz = r.sized.length;
@@ -593,17 +704,8 @@
     docSaved = true;
     sessionEdited = false;
     stateRev += 1;
-    // auto-order applies on open: the rows follow the timeline
-    var prevJson = JSON.stringify(state);
-    if (autoOrder) RM.sortItemsByStart(state);
-    if (JSON.stringify(state) !== prevJson) {
-      undoStack.length = 0; redoStack.length = 0;
-      recordHistory('auto', prevJson);
-      docSaved = false;
-      sessionEdited = true;
-      // the open left the document unsaved — never silently
-      toast('Rows auto-ordered');
-    }
+    // opening is not an edit: with auto-order on the rows RENDER in start
+    // order (RM.viewItems), the document's order keys stay as saved
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -628,9 +730,17 @@
           var v = inp.value.trim();
           if (!v) return;
           setUserName(v);
-          (state.history || []).forEach(function (en) {
-            if (!en.u && en.t >= sessionStart) en.u = v;
-          });
+          if (docKind === 'bundle') {
+            // our own file's anonymous lines from this session take the name
+            ownLines.forEach(function (l) { if (!l.u && l.t >= sessionStart) l.u = v; });
+            pendingHistory.push({ rewrite: true });
+            historyMemo = null;
+            scheduleBundleFlush();
+          } else {
+            (state.history || []).forEach(function (en) {
+              if (!en.u && en.t >= sessionStart) en.u = v;
+            });
+          }
           closeModal();
           saveLocal();
           render();
@@ -654,13 +764,18 @@
   }
   function afterChange() {
     docSaved = false;
+    // a freshly-inserted row is held in place only until it has a start date
+    state.items.forEach(function (it) { if (it.holdPos && it.startDay != null) delete it.holdPos; });
     sessionEdited = true;
     stateRev += 1;
     RM.applySizeRollup(state); // the rollup scheme's feature sizes follow their stories
     validation = RM.validate(state);
     saveLocal();
     render();
-    scheduleAutoSave();
+    flushGen++;
+    noteLocalStamps(new Date().toISOString()); // bundle: the commit time is the field's LWW stamp
+    scheduleAutoSave();     // xlsx: inert in bundle mode (currentPath is null there)
+    scheduleBundleFlush();  // bundle: inert for xlsx
   }
 
   var autoSaveTimer = null;
@@ -671,6 +786,961 @@
     autoSaveTimer = setTimeout(function () {
       if (!docSaved && !savingNow) doSave(false, true);
     }, 1500);
+  }
+
+  // ------------------------------------------------------------ shared bundle
+  // ---- write path. afterChange → debounce → flushBundle: diff the live
+  // document against what disk had (lastCanon), wrap each changed entity into
+  // an envelope stamped against its previous envelope (only the fields that
+  // changed get a new timestamp), tombstone deletes, hand the batch to the
+  // desktop shell (read-merge-write per shard), then write our history lines.
+  function scheduleBundleFlush() {
+    if (docKind !== 'bundle' || planGone) return;
+    clearTimeout(bundleFlushTimer);
+    bundleFlushTimer = setTimeout(function () { flushBundle(); }, 1500);
+  }
+  // Resolves once every flush this call implies has settled: the one in
+  // flight AND the re-flush it queues (an edit landed meanwhile). Callers
+  // that swap the document (switch plan, open xlsx, close) await this, so a
+  // pending edit is never flushed against the wrong folder or dropped.
+  function flushBundle() {
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir) return flushChain;
+    clearTimeout(bundleFlushTimer);
+    if (flushing) {
+      if (!flushQueued) {
+        flushQueued = true;
+        flushChain = flushChain.then(function () { flushQueued = false; return runFlush(); });
+      }
+      return flushChain;
+    }
+    flushChain = runFlush();
+    return flushChain;
+  }
+  // Wrap an entity against its disk baseline; the fields this machine changed
+  // carry the time they were changed here (localAt), not the flush time, so a
+  // value edited offline at 10:00 loses to a peer's 10:05 edit as LWW intends.
+  function wrapLocal(kind, ent, prev, uid, nowIso) {
+    var env = kind === 'meta' ? RMBundle.wrapMeta(ent, prev, uid, nowIso) : RMBundle.wrap(ent, prev, uid, nowIso);
+    var la = localAt[kind + '/' + (kind === 'meta' ? 'meta' : ent.id)];
+    if (!la) return env;
+    var latest = '';
+    Object.keys(env.fieldsAt).forEach(function (f) {
+      if (env.fieldsAt[f] === nowIso && la[f]) env.fieldsAt[f] = la[f];
+      if (env.fieldsAt[f] > latest) latest = env.fieldsAt[f];
+    });
+    // the envelope is as new as its newest field, so a tombstone made after
+    // our last real edit still wins
+    if (latest && latest < env.updatedAt) env.updatedAt = latest;
+    return env;
+  }
+  function stampKeyValue(k, ent) {
+    if (k.indexOf('stories.') === 0) {
+      var sid = k.slice(8), list = (ent && ent.stories) || [];
+      for (var i = 0; i < list.length; i++) if (String(list[i].id) === sid) return RMBundle.canonicalize(list[i]);
+      return '';
+    }
+    if (/^deps[+-]/.test(k)) return 'deps'; // presence of the key IS the change
+    return RMBundle.canonicalize(ent ? ent[k] : undefined);
+  }
+  var SENTINEL = '\uFFFF'; // a "now" no real ISO stamp can equal
+  // after every local change: stamp each field that differs from the disk
+  // baseline with the time it was (last) changed here; forget fields that
+  // no longer differ (undone, written, or taken by a peer)
+  function noteLocalStamps(nowIso) {
+    if (docKind !== 'bundle') return;
+    var diff = RMBundle.diffEntities(lastCanon, state), live = {};
+    diff.changed.forEach(function (ch) {
+      var key = ch.kind + '/' + ch.id, prev = lastEnv[key] || null;
+      var ent = ch.kind === 'meta' ? RMBundle.metaEntity(state) : ch.entity;
+      var probe = RMBundle.wrap(ent, prev, '', SENTINEL); // a field stamped with the sentinel differs from the baseline
+      var la = localAt[key] || (localAt[key] = {}), lv = localVal[key] || (localVal[key] = {});
+      var keep = {};
+      Object.keys(probe.fieldsAt).forEach(function (f) {
+        if (probe.fieldsAt[f] !== SENTINEL) return;
+        keep[f] = true;
+        var v = stampKeyValue(f, ent);
+        if (!(f in lv) || lv[f] !== v) { la[f] = nowIso; lv[f] = v; }
+      });
+      Object.keys(la).forEach(function (f) { if (!keep[f]) { delete la[f]; delete lv[f]; } });
+      live[key] = true;
+    });
+    Object.keys(localAt).forEach(function (key) { if (!live[key]) { delete localAt[key]; delete localVal[key]; } });
+  }
+  // the stamps we just wrote are on disk: a later edit of the field starts fresh
+  function clearLocalStamps(key, env) {
+    var la = localAt[key], lv = localVal[key];
+    if (!la) return;
+    Object.keys(env.fieldsAt || {}).forEach(function (f) {
+      if (la[f] === env.fieldsAt[f]) { delete la[f]; if (lv) delete lv[f]; }
+    });
+  }
+  function runFlush() {
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir || planGone) return Promise.resolve();
+    // captured at START: this flush lands in this folder/plan even if the
+    // document is swapped before it completes
+    var dir = bundleDir, pid = activePlanId, uid = userId(), gen = flushGen;
+    var now = new Date().toISOString();
+    // the diff is taken synchronously: whatever the document changes into
+    // while the write is in flight is the queued flush's business
+    var diff = RMBundle.diffEntities(lastCanon, state);
+    var changes = [], prevOf = {};
+    diff.changed.forEach(function (ch) {
+      var key = ch.kind + '/' + ch.id, prev = lastEnv[key] || null;
+      var ent = ch.kind === 'meta' ? state : ch.entity;
+      prevOf[key] = prev;
+      changes.push({ kind: ch.kind, id: ch.id, env: wrapLocal(ch.kind, ent, prev, uid, now), baseRev: prev ? (+prev.rev || 0) : 0 });
+    });
+    diff.deleted.forEach(function (d) {
+      var key = d.kind + '/' + d.id, prev = lastEnv[key] || null;
+      prevOf[key] = prev;
+      changes.push({ kind: d.kind, id: d.id, env: RMBundle.tombstone(prev || d.id, uid, now), baseRev: prev ? (+prev.rev || 0) : 0 });
+    });
+    var hist = pendingHistory;
+    pendingHistory = [];
+    if (!changes.length && !hist.length) {
+      if (gen === flushGen) { docSaved = true; updateSaveBtn(); }
+      return Promise.resolve();
+    }
+    var sent = {};
+    changes.forEach(function (c) { sent[c.kind + '/' + c.id] = c.env; });
+    nudgePeers(changes); // advisory toast; the write proceeds regardless
+    flushing = true;
+    updateSaveBtn();
+    var again = false;
+    var shards = changes.length
+      ? HeadwayDesktop.flushShards(dir, pid, changes)
+      : Promise.resolve({ written: [], merged: [] });
+    return shards.then(function (res) {
+      if (bundleDir === dir && activePlanId === pid) {
+        var mergedIds = {}, fold = [];
+        (res.merged || []).forEach(function (id) { mergedIds[id] = true; });
+        (res.written || []).forEach(function (w) {
+          var key = w.kind + '/' + w.id;
+          // a peer had moved this shard since we read it: disk now holds the
+          // merge — fold that back in (same path as an incoming peer change);
+          // the peer's delta is what differs from the envelope WE sent
+          if (mergedIds[w.id]) { fold.push({ kind: w.kind, id: w.id, env: w.env, base: sent[key] }); return; }
+          // a peer envelope applied mid-flight replaced the baseline: keep
+          // theirs — our entity still differs from it, so the follow-up flush
+          // re-sends our fields merged on top of their rev
+          if ((lastEnv[key] || null) !== prevOf[key]) { again = true; return; }
+          lastEnv[key] = w.env;
+          var ent = RMBundle.unwrap(w.env);
+          if (ent) lastCanon[key] = RMBundle.canonicalize(ent); else delete lastCanon[key];
+          clearLocalStamps(key, w.env);
+        });
+        if (fold.length) applyEnvelopes(fold, { merged: true });
+      }
+      return writeHistory(dir, uid, hist);
+    }).then(function () {
+      if (bundleDir === dir && gen === flushGen && !again) docSaved = true;
+    }, function (err) {
+      // keep everything dirty so the Sync button (or the next edit) retries
+      pendingHistory = hist.concat(pendingHistory);
+      docSaved = false;
+      toast('Sync failed: ' + (err && err.message || err), 'err');
+    }).then(function () {
+      flushing = false;
+      updateSaveBtn();
+      if (again && !flushQueued) return runFlush(); // inside this promise: awaiting callers see it land
+    });
+  }
+  // ops: [{append: line} | {rewrite: true}]; a rewrite replaces our whole
+  // file with ownLines, so it subsumes any appends in the same batch. Waits
+  // for the open's history read and reads ownLines only THEN — the read
+  // reassigns ownLines to disk-lines + session-lines, and a rewrite from a
+  // pre-read reference would drop the file's past.
+  function writeHistory(dir, uid, ops) {
+    if (!ops.length) return Promise.resolve();
+    var load = historyLoad;
+    return (load || Promise.resolve()).then(function () {
+      if (bundleDir !== dir || historyLoad !== load) return; // the document changed under us (cannot happen: swaps await the flush)
+      var lines = ownLines;
+      var rewrite = ops.some(function (o) { return o.rewrite; });
+      var p = rewrite
+        ? HeadwayDesktop.rewriteHistory(dir, uid, lines)
+        : ops.reduce(function (c, o) {
+          return c.then(function () { return HeadwayDesktop.appendHistory(dir, uid, o.append); });
+        }, Promise.resolve());
+      return p.then(function () {
+        if (historyCache && bundleDir === dir) { historyCache[uid] = lines.slice(); historyMemo = null; }
+      });
+    });
+  }
+
+  // ---- read path. Envelopes from disk (a peer's write, or the merged result
+  // of our own read-merge-write) fold into the live document with the
+  // activateOption mechanics — swap, validate, saveLocal, ONE render — and
+  // none of commit's: no undo push, no history line, no name prompt.
+  function entityOf(doc, kind, id) {
+    if (kind === 'meta') return RMBundle.metaEntity(doc);
+    var list = doc[kind] || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+  // replace / insert / remove one entity by id (meta = the META_KEYS)
+  function putEntity(doc, kind, id, ent) {
+    if (kind === 'meta') {
+      if (ent) RMBundle.META_KEYS.forEach(function (k) { if (ent[k] !== undefined) doc[k] = RM.clone(ent[k]); });
+      return;
+    }
+    var list = Array.isArray(doc[kind]) ? doc[kind] : [];
+    var at = -1;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) { at = i; break; }
+    if (!ent) { if (at !== -1) list.splice(at, 1); doc[kind] = list; return; }
+    if (at === -1) list.push(ent); else list[at] = ent;
+    doc[kind] = RM.sortByOrder(list);
+  }
+  function dragTouches(id) {
+    if (!drag) return false;
+    if (drag.itemId === id || drag.mid === id || drag.phaseId === id || drag.pid === id) return true;
+    // a group move drags every selected bar along with the one under the pointer
+    return !!drag.group && drag.group.some(function (g) { return g.id === id; });
+  }
+  // opts.merged: env already IS the disk truth (from flushShards) — skip the
+  // merge with our base
+  function applyEnvelopes(list, opts) {
+    if (docKind !== 'bundle' || !list || !list.length) return;
+    var apply = [], patched = [];
+    list.forEach(function (x) {
+      // an entity mid-drag is applied at pointer-up, never under the pointer
+      if (dragTouches(x.id)) deferredExternal.push(x); else apply.push(x);
+    });
+    if (!apply.length) return;
+    var now = new Date().toISOString(), uid = userId();
+    var next = RM.clone(state);
+    apply.forEach(function (x) {
+      var key = x.kind + '/' + x.id;
+      var disk = (opts && opts.merged) ? x.env : RMBundle.mergeEntity(lastEnv[key] || null, x.env);
+      var cur = entityOf(next, x.kind, x.id);
+      // my unsaved edits on OTHER fields survive: stamp what I changed against
+      // the old base (at the time I changed it — localAt), then let the newer
+      // stamp win per field. A tombstone takes the row regardless — an
+      // unsaved edit does not resurrect it.
+      var local = disk;
+      if (cur && !disk.deleted) {
+        local = RMBundle.mergeEntity(wrapLocal(x.kind, cur, lastEnv[key] || null, uid, now), disk);
+      }
+      // the peer's delta: what disk now has that the baseline (or, for our
+      // own merged write, the envelope we sent) did not
+      var delta = envDelta(x.base || lastEnv[key] || null, disk);
+      lastEnv[key] = disk;
+      var truth = RMBundle.unwrap(disk);
+      if (truth) lastCanon[key] = RMBundle.canonicalize(truth);
+      else if (x.kind !== 'meta') delete lastCanon[key];
+      putEntity(next, x.kind, x.id, RMBundle.unwrap(local));
+      patched.push({ kind: x.kind, id: x.id, entity: truth, delta: delta });
+    });
+    if (typeof RM.dedupeNums === 'function') RM.dedupeNums(next); // two people minted the same #num
+    if (selectedId && !RM.itemById(next, selectedId)) selectedId = null;
+    if (multiSel) { // a peer deleted a selected row: the selection shrinks
+      multiSel = multiSel.filter(function (id) { return !!RM.itemById(next, id); });
+      if (multiSel.length < 2) multiSel = null;
+    }
+    state = next;
+    validation = RM.validate(state);
+    noteLocalStamps(now); // fields the peer took no longer differ from the baseline
+    rebaseSnapshots(patched);
+    saveLocal();
+    render();
+  }
+  // Which fields changed between two envelopes of one entity: {fields:{k:
+  // true}, stories:{sid: true}, deps:{id: true}}, or null when the change is
+  // the whole entity (created, tombstoned, no baseline).
+  function envDelta(prev, next) {
+    if (!prev || prev.deleted || !next || next.deleted) return null;
+    var pf = prev.fields || {}, nf = next.fields || {};
+    var d = { fields: {}, stories: {}, deps: {} }, keys = {};
+    Object.keys(pf).concat(Object.keys(nf)).forEach(function (k) { keys[k] = true; });
+    Object.keys(keys).forEach(function (k) {
+      if (k === 'stories') {
+        var was = {}, now = {}, sids = {};
+        (pf.stories || []).forEach(function (s) { if (s && s.id != null) was[String(s.id)] = s; });
+        (nf.stories || []).forEach(function (s) { if (s && s.id != null) now[String(s.id)] = s; });
+        Object.keys(was).concat(Object.keys(now)).forEach(function (s) { sids[s] = true; });
+        Object.keys(sids).forEach(function (sid) {
+          if (RMBundle.canonicalize(was[sid]) !== RMBundle.canonicalize(now[sid])) d.stories[sid] = true;
+        });
+        return;
+      }
+      if (k === 'deps') {
+        var had = pf.deps || [], have = nf.deps || [];
+        had.concat(have).forEach(function (id) {
+          if ((had.indexOf(id) === -1) !== (have.indexOf(id) === -1)) d.deps[id] = true;
+        });
+        return;
+      }
+      if (RMBundle.canonicalize(pf[k]) !== RMBundle.canonicalize(nf[k])) d.fields[k] = true;
+    });
+    return d;
+  }
+  // patch ONLY the peer's changed fields of `truth` into the snapshot's copy
+  // of the entity (which keeps this machine's earlier edits undoable)
+  function patchFields(snap, p) {
+    var ent = entityOf(snap, p.kind, p.id);
+    if (!ent) { putEntity(snap, p.kind, p.id, RM.clone(p.truth)); return; } // new to that snapshot
+    var truth = p.truth, d = p.delta;
+    Object.keys(d.fields).forEach(function (k) {
+      if (truth[k] === undefined) delete ent[k]; else ent[k] = RM.clone(truth[k]);
+    });
+    var sids = Object.keys(d.stories);
+    if (sids.length) {
+      var list = Array.isArray(ent.stories) ? ent.stories : [];
+      sids.forEach(function (sid) {
+        var src = (truth.stories || []).filter(function (s) { return s && String(s.id) === sid; })[0];
+        var at = -1;
+        for (var i = 0; i < list.length; i++) if (list[i] && String(list[i].id) === sid) { at = i; break; }
+        if (!src) { if (at !== -1) list.splice(at, 1); }
+        else if (at === -1) list.push(RM.clone(src));
+        else list[at] = RM.clone(src);
+      });
+      ent.stories = RM.sortByOrder(list);
+    }
+    var depIds = Object.keys(d.deps);
+    if (depIds.length) {
+      var deps = Array.isArray(ent.deps) ? ent.deps.slice() : [];
+      depIds.forEach(function (id) {
+        var on = (truth.deps || []).indexOf(id) !== -1, at = deps.indexOf(id);
+        if (on && at === -1) deps.push(id);
+        if (!on && at !== -1) deps.splice(at, 1);
+      });
+      ent.deps = deps;
+    }
+    if (p.kind === 'meta') putEntity(snap, 'meta', 'meta', ent); // copies the META_KEYS back
+  }
+  // Undo/redo are whole-document snapshots: without this, undo after a peer
+  // change would revert the peer's entity too and the next flush would write
+  // that reversion back. Patching the peer's changed fields into every
+  // snapshot means undo only ever reverts what this person changed — and
+  // only those fields, so earlier (already flushed) local edits to the same
+  // entity stay undoable.
+  function rebaseSnapshots(patched) {
+    if (!patched.length || (!undoStack.length && !redoStack.length)) return;
+    function fix(json) {
+      var snap;
+      try { snap = JSON.parse(json); } catch (e) { return json; }
+      patched.forEach(function (p) {
+        if (!p.entity || !p.delta) putEntity(snap, p.kind, p.id, p.entity ? RM.clone(p.entity) : null);
+        else patchFields(snap, { kind: p.kind, id: p.id, truth: p.entity, delta: p.delta });
+      });
+      return JSON.stringify(snap);
+    }
+    for (var i = 0; i < undoStack.length; i++) undoStack[i] = fix(undoStack[i]);
+    for (var j = 0; j < redoStack.length; j++) redoStack[j] = fix(redoStack[j]);
+  }
+  function applyExternalEntities(list) { applyEnvelopes(list); }
+  // envelopes held back during a drag land once every drag-end handler ran —
+  // pointer-up, a cancelled pointer, or an Escape that ended the drag
+  function drainDeferred() {
+    if (!deferredExternal.length) return;
+    setTimeout(function () {
+      if (drag || !deferredExternal.length) return;
+      var held = deferredExternal;
+      deferredExternal = [];
+      applyEnvelopes(held);
+    }, 0);
+  }
+  window.addEventListener('pointerup', drainDeferred);
+  window.addEventListener('pointercancel', drainDeferred);
+  // a drag start does not render: check after every pointerdown handler ran
+  window.addEventListener('pointerdown', function () {
+    if (!presenceOn) return;
+    setTimeout(function () { if (drag && drag.itemId) presenceTouch(); }, 0);
+  });
+
+  // ---- session. adoptBundle takes an openBundle result and makes it the
+  // document; closeBundleSession flushes and forgets the folder.
+  function adoptBundle(res, opts) {
+    opts = opts || {};
+    var dir = HeadwayDesktop.bundleDir();
+    clearTimeout(autoSaveTimer);
+    clearTimeout(bundleFlushTimer);
+    docKind = 'bundle';
+    bundleDir = dir;
+    activePlanId = res.planId;
+    planList = RMBundle.mergePlanList([], res.plans || []);
+    lastCanon = {}; lastEnv = {};
+    RMBundle.KINDS.forEach(function (kind) {
+      ((res.envs && res.envs[kind]) || []).forEach(function (env) { lastEnv[kind + '/' + env.id] = env; });
+    });
+    if (res.metaEnv) lastEnv['meta/meta'] = res.metaEnv;
+    // the baseline is the normalized document: a normalization delta rides
+    // along with the entity's next edit instead of a burst of writes on open
+    RMBundle.KINDS.forEach(function (kind) {
+      (res.doc[kind] || []).forEach(function (ent) { lastCanon[kind + '/' + ent.id] = RMBundle.canonicalize(ent); });
+    });
+    lastCanon['meta/meta'] = RMBundle.canonicalize(RMBundle.metaEntity(res.doc));
+    pendingHistory = []; flushing = false; flushQueued = false; flushGen++;
+    localAt = {}; localVal = {}; planGone = false;
+    ownLines = []; historyCache = null; historyMemo = null;
+    planDocCache = {}; planLoading = {}; deferredExternal = []; peers = {};
+    compareOptId = opts.compareId || null;
+    cmpCache = null;
+    resumeInfo = null;
+    var uid = userId();
+    HeadwayDesktop.setUserId(uid);
+    historyLoad = HeadwayDesktop.readHistory(dir).then(function (all) {
+      if (bundleDir !== dir) return;
+      historyCache = all || {};
+      ownLines = (historyCache[uid] || []).concat(ownLines); // lines recorded meanwhile stay
+      historyMemo = null;
+      if (view === 'history' && !document.body.classList.contains('start')) render();
+    }, function () { if (bundleDir === dir && !historyCache) historyCache = {}; });
+    // undo cannot cross documents (see activateOption)
+    undoStack.length = 0;
+    redoStack.length = 0;
+    selectedId = null;
+    multiSel = null;
+    state = res.doc;
+    docSaved = true;
+    validation = RM.validate(state);
+    saveLocal();
+    startPresence(); // first heartbeat now (selection already cleared), then every PRESENCE_MS
+    noteRecent(dir, 'bundle'); // now that the live title is this document's
+    if (opts.stayOnStart) render(); else enterEditor();
+    var cur = planEntry(activePlanId);
+    var live = livePlans();
+    if (cur && cur.deleted) {
+      if (live.length) {
+        toast('“' + cur.name + '” was deleted — switched to “' + live[0].name + '”');
+        switchPlan(live[0].id);
+        return;
+      }
+      planGone = true; // nothing to switch to: read-only until a live plan appears
+      toast('This shared plan was deleted by someone else — your edits here are not synced', 'err');
+    }
+    if (res.warnings && res.warnings.length) {
+      toast(res.warnings.length + ' file(s) in the shared folder could not be read — see the console', 'err');
+      if (window.console && console.warn) console.warn('shared folder warnings', res.warnings);
+    }
+  }
+  // pending writes of whatever is open land before the document changes
+  function settleCurrentDoc() {
+    if (docKind === 'bundle') return flushBundle().catch(function () { /* toasted already */ });
+    if (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath()) {
+      return (doSave(false, true) || Promise.resolve()).catch(function () { /* toasted already */ });
+    }
+    return Promise.resolve();
+  }
+  function openBundleDoc(dir, planId) {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.openBundle) return Promise.resolve(null);
+    return settleCurrentDoc().then(function () {
+      return HeadwayDesktop.openBundle(dir, planId || undefined);
+    }).then(function (res) {
+      adoptBundle(res);
+      return res;
+    }, function (err) {
+      toast('Could not open the shared roadmap: ' + (err && err.message || err), 'err');
+      throw err;
+    });
+  }
+  // desktop.js calls this once it has loaded: re-link the folder the ui
+  // snapshot names (a reload mid-session); the start page stays if showing
+  function resumeBundle() {
+    var info = resumeInfo;
+    resumeInfo = null;
+    if (!info || !window.HeadwayDesktop || !HeadwayDesktop.openBundle) return Promise.resolve(null);
+    var onStart = document.body.classList.contains('start');
+    return HeadwayDesktop.openBundle(info.bundleDir, info.activePlanId || undefined).then(function (res) {
+      adoptBundle(res, { stayOnStart: onStart });
+      return res;
+    }, function (err) {
+      toast('Could not reopen the shared roadmap: ' + (err && err.message || err), 'err');
+      return null;
+    });
+  }
+  // flush (in flight + queued) → forget the folder → leave it on the desktop
+  // side. The reset waits for the flush: a queued re-flush must still see the
+  // bundle document, and the desktop's leave must run BEFORE whatever opens
+  // next sets up its own watcher (or it would tear that watcher down).
+  function closeBundleSession() {
+    if (docKind !== 'bundle') return closing || Promise.resolve();
+    if (closing) return closing;
+    clearTimeout(bundleFlushTimer);
+    closing = flushBundle().catch(function () { /* toasted already */ }).then(function () {
+      return stopPresence(bundleDir, userId()); // heartbeat off + our file gone before the session forgets the folder
+    }).then(function () {
+      docKind = 'xlsx'; bundleDir = null; activePlanId = null; planList = [];
+      lastCanon = {}; lastEnv = {}; pendingHistory = []; ownLines = [];
+      localAt = {}; localVal = {}; planGone = false;
+      historyCache = null; historyMemo = null; historyLoad = null;
+      planDocCache = {}; planLoading = {}; deferredExternal = []; peers = {};
+      compareOptId = null; cmpCache = null; resumeInfo = null;
+      return window.HeadwayDesktop && HeadwayDesktop.closeBundle ? HeadwayDesktop.closeBundle() : null;
+    }).catch(function () { /* best effort */ }).then(function () { closing = null; });
+    return closing;
+  }
+  // the window is closing: land pending writes, drop our presence file
+  function beforeClose() {
+    clearTimeout(bundleFlushTimer);
+    if (docKind === 'bundle') return closeBundleSession();
+    clearTimeout(autoSaveTimer);
+    if (window.HeadwayDesktop && autoSave && !docSaved && HeadwayDesktop.currentPath()) {
+      return (doSave(false, true) || Promise.resolve()).catch(function () { /* nothing more to do */ });
+    }
+    return Promise.resolve();
+  }
+  // every selected row (the whole multi-selection) plus whatever is being dragged
+  function editingIds() {
+    var out = [];
+    selIds().concat([drag && drag.itemId]).forEach(function (id) { if (id && out.indexOf(id) === -1) out.push(id); });
+    return out;
+  }
+  function presenceChanged(uid, obj) {
+    if (obj) peers[uid] = obj; else delete peers[uid];
+    rebuildPeers();
+  }
+
+  // ---- presence (advisory). presence/<userId>.json is a heartbeat — a plain
+  // file write, never a commit, never a history line, never dirties the doc.
+  // Locks are not enforced: over eventual sync the race window is the sync
+  // latency, so rows show who else is here and a flush nudges, nothing more.
+  function presenceReady() {
+    return presenceOn && docKind === 'bundle' && !!bundleDir && !!window.HeadwayDesktop &&
+      typeof HeadwayDesktop.writePresence === 'function';
+  }
+  function sendPresence() {
+    if (!presenceReady()) return Promise.resolve();
+    var dir = bundleDir, ids = editingIds();
+    presenceSig = ids.join(',');
+    presenceLastAt = Date.now();
+    presenceWrite = HeadwayDesktop.writePresence(dir, userId(), {
+      name: userName() || 'Someone', planId: activePlanId, editing: ids, ts: Date.now()
+    }).catch(function () { /* advisory: a failed heartbeat is retried on the next tick */ });
+    return presenceWrite;
+  }
+  // selection or drag changed: write soon, at most every PRESENCE_THROTTLE_MS
+  function presenceTouch() {
+    if (!presenceReady() || editingIds().join(',') === presenceSig) return;
+    var wait = PRESENCE_THROTTLE_MS - (Date.now() - presenceLastAt);
+    if (wait <= 0) { sendPresence(); return; }
+    if (presenceThrottle) return;
+    presenceThrottle = setTimeout(function () {
+      presenceThrottle = null;
+      if (presenceReady() && editingIds().join(',') !== presenceSig) sendPresence();
+    }, wait);
+  }
+  // one tick: our heartbeat, then a full re-read of presence/ — a peer whose
+  // machine died never sends a removal, so the folder, not the event stream,
+  // is the truth; re-armed only after both land (no overlapping ticks)
+  function presenceTick() {
+    presenceTimer = null;
+    if (!presenceReady()) return;
+    var dir = bundleDir;
+    sendPresence().then(function () {
+      if (!presenceReady() || bundleDir !== dir || typeof HeadwayDesktop.readPresence !== 'function') return;
+      return HeadwayDesktop.readPresence(dir).then(function (all) {
+        if (!presenceReady() || bundleDir !== dir || !all) return;
+        var mine = userId(), next = {};
+        Object.keys(all).forEach(function (k) { if (k !== mine) next[k] = all[k]; });
+        peers = next;
+        rebuildPeers();
+      }, function () { /* advisory */ });
+    }).then(function () {
+      if (presenceReady() && bundleDir === dir && !presenceTimer) presenceTimer = setTimeout(presenceTick, PRESENCE_MS);
+    });
+  }
+  function startPresence() {
+    stopPresenceTimers();
+    peers = {}; peerByItem = {}; peerSig = ''; nudgedAt = {};
+    presenceSig = ''; presenceLastAt = 0;
+    if (!window.HeadwayDesktop || typeof HeadwayDesktop.writePresence !== 'function') return;
+    presenceOn = true;
+    presenceTick();
+  }
+  function stopPresenceTimers() {
+    presenceOn = false;
+    clearTimeout(presenceTimer); presenceTimer = null;
+    clearTimeout(presenceThrottle); presenceThrottle = null;
+  }
+  // stop the heartbeat and drop our file; the desktop's closeBundle removes
+  // it too, but this runs BEFORE the session resets, after any write in flight
+  function stopPresence(dir, uid) {
+    stopPresenceTimers();
+    peers = {}; peerByItem = {}; peerSig = ''; nudgedAt = {};
+    presenceSig = '';
+    if (!dir || !window.HeadwayDesktop || typeof HeadwayDesktop.removePresence !== 'function') return Promise.resolve();
+    return presenceWrite.then(function () {
+      return HeadwayDesktop.removePresence(dir, uid);
+    }).catch(function () { /* best effort */ });
+  }
+  // peers → peerByItem: this plan, not us, heartbeat within the TTL
+  function rebuildPeers() {
+    var mine = readUser().id || null, now = Date.now(), by = {};
+    if (docKind !== 'bundle' || !activePlanId) peers = {}; // web build / no session: nothing to show
+    Object.keys(peers).sort().forEach(function (uid) {
+      var p = peers[uid];
+      if (!p || typeof p !== 'object' || uid === mine) return;
+      if (p.planId !== activePlanId) return;
+      var ts = +p.ts || 0;
+      if (!ts || now - ts > PRESENCE_TTL_MS) return;
+      var name = String(p.name || '').trim() || 'Someone';
+      (Array.isArray(p.editing) ? p.editing : []).forEach(function (id) {
+        if (!id) return;
+        (by[id] || (by[id] = [])).push({ id: uid, name: name });
+      });
+    });
+    peerByItem = by;
+    var sig = JSON.stringify(by);
+    if (sig !== peerSig) { peerSig = sig; renderPresence(); }
+  }
+  // initials chips for the peers on one row (the .avatar.sm look, ringed);
+  // at most three bubbles — the last becomes +N when more are here
+  function presenceChips(itemId) {
+    var list = peerByItem[itemId] || [];
+    if (!list.length) return '';
+    var max = 3, shown = list.length > max ? max - 1 : list.length, out = '';
+    list.slice(0, shown).forEach(function (p) {
+      out += '<span class="avatar sm presence" title="' + esc(p.name + ' is here') + '" style="background:' +
+        RM.avatarColor(p.name) + '">' + esc(RM.initialsOf(p.name)) + '</span>';
+    });
+    if (list.length > shown) {
+      var rest = list.slice(shown).map(function (p) { return p.name; });
+      out += '<span class="avatar sm more presence" title="' + esc(rest.join(', ') + ' are here') + '">+' + rest.length + '</span>';
+    }
+    return out;
+  }
+  function presenceSlot(itemId) { return '<span class="r-presence">' + presenceChips(itemId) + '</span>'; }
+  // patch the chips in place — a peer moving between rows is not a document
+  // change and must not cost a full render (or disturb an edit in progress)
+  function renderPresence() {
+    $$('.row.item[data-id] .r-presence', rowsEl).forEach(function (slot) {
+      var row = slot.closest('.row');
+      var html = presenceChips(row ? row.dataset.id : '');
+      if (slot.innerHTML !== html) slot.innerHTML = html;
+    });
+  }
+  // a flush touches an item a peer is on: say so, once per item per minute.
+  // Advisory — the write goes ahead regardless (the merge is deterministic)
+  function nudgePeers(changes) {
+    var now = Date.now();
+    changes.forEach(function (c) {
+      if (c.kind !== 'items') return;
+      if (c.env && c.env.deleted) return; // a row I deleted is not one I am "also editing"
+      var who = peerByItem[c.id];
+      if (!who || !who.length) return;
+      if (now - (nudgedAt[c.id] || 0) < PRESENCE_NUDGE_MS) return;
+      nudgedAt[c.id] = now;
+      var it = RM.itemById(state, c.id);
+      var num = it ? it.num : (c.env && c.env.fields && c.env.fields.num);
+      var names = who.map(function (p) { return p.name; });
+      toast(names.join(', ') + (names.length > 1 ? ' are' : ' is') + ' also editing' + (num != null ? ' #' + num : ' this item'));
+    });
+  }
+
+  // ---- history view: every user's file merged, this plan's lines
+  function historyView() {
+    if (historyMemo) return historyMemo;
+    var uid = userId(), lists = [], cache = historyCache || {}, pid = activePlanId;
+    Object.keys(cache).forEach(function (k) { if (k !== uid) lists.push(cache[k]); });
+    lists.push(ownLines); // ours is freshest in memory
+    historyMemo = RMBundle.mergeHistory(lists, RM.HISTORY_MAX * 8)
+      .filter(function (l) { return l.planId === pid; })
+      .slice(-RM.HISTORY_MAX);
+    return historyMemo;
+  }
+  // history events are not applied live; the view re-reads when it opens
+  function refreshHistory() {
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir) return Promise.resolve();
+    var dir = bundleDir, uid = userId();
+    return (historyLoad || Promise.resolve()).then(function () {
+      return HeadwayDesktop.readHistory(dir);
+    }).then(function (all) {
+      if (bundleDir !== dir) return;
+      historyCache = all || {};
+      historyCache[uid] = ownLines.slice();
+      historyMemo = null;
+      if (view === 'history') render();
+    }).catch(function () { /* the cached view stands */ });
+  }
+
+  // ---- plans (the Options feature over sub-bundles). Which plan I view is
+  // mine; the list lives in headway.json and merges by id.
+  function livePlans() { return planList.filter(function (p) { return p && p.id && !p.deleted; }); }
+  function planEntry(id) { return planList.filter(function (p) { return p && p.id === id; })[0] || null; }
+  function planName(id) {
+    var p = planEntry(id);
+    return (p && p.name) || 'Default';
+  }
+  function plansChanged(hw) {
+    if (docKind !== 'bundle' || !hw || !Array.isArray(hw.plans)) return;
+    planList = RMBundle.mergePlanList(planList, hw.plans);
+    var cur = planEntry(activePlanId);
+    if (cur && cur.deleted) {
+      var live = livePlans();
+      if (live.length) {
+        toast('“' + cur.name + '” was deleted by someone else — switched to “' + live[0].name + '”');
+        switchPlan(live[0].id);
+        return;
+      }
+      if (!planGone) {
+        // nothing to switch to: say so and stop writing into a deleted plan
+        planGone = true;
+        clearTimeout(bundleFlushTimer);
+        toast('This shared plan was deleted by someone else — your edits here are not synced', 'err');
+        updateSaveBtn();
+      }
+    }
+    if (compareOptId && !cmpEntry()) compareOptId = null;
+    syncOptBtn();
+    syncCmpPill();
+  }
+  // a shard of a plan we are NOT viewing changed: the Compare copy is stale
+  function planShardChanged(planId) {
+    delete planDocCache[planId];
+    if (compareOptId === planId) render();
+  }
+  function loadPlanDoc(id) {
+    if (planLoading[id] || !window.HeadwayDesktop || !bundleDir) return;
+    var dir = bundleDir;
+    planLoading[id] = true;
+    HeadwayDesktop.readPlan(dir, id).then(function (plan) {
+      delete planLoading[id];
+      if (bundleDir !== dir) return;
+      planDocCache[id] = RMBundle.assembleState(plan.meta, plan.envs);
+      if (compareOptId === id) render();
+    }, function () { delete planLoading[id]; });
+  }
+  // a local swap: pending edits land first, then the other sub-bundle loads;
+  // nothing shared is written
+  function switchPlan(id) {
+    if (!window.HeadwayDesktop || !bundleDir || id === activePlanId) return Promise.resolve();
+    var dir = bundleDir, prevId = activePlanId;
+    return flushBundle().catch(function () { /* toasted */ }).then(function () {
+      return HeadwayDesktop.openBundle(dir, id);
+    }).then(function (res) {
+      // comparing with the plan being activated: flip the overlay to the one we leave
+      var cmp = compareOptId === id ? prevId : compareOptId;
+      adoptBundle(res, { compareId: cmp });
+      toast('Switched to “' + planName(id) + '”');
+    }, function (err) {
+      toast('Could not switch plan: ' + (err && err.message || err), 'err');
+    });
+  }
+  function createPlan() {
+    promptName('New plan', 'Plan name', 'Starts as a copy of “' + esc(planName(activePlanId)) +
+      '” — edits stay in the new plan until you switch back.', '', function (nm) {
+      var dir = bundleDir, uid = userId(), now = new Date().toISOString(), newId = RM.uid('plan');
+      var doc = RM.clone(state);
+      var envs = RMBundle.wrapState(doc, {}, uid, now);
+      var changes = [{ kind: 'meta', id: 'meta', env: RMBundle.wrapMeta(doc, null, uid, now), baseRev: 0 }];
+      RMBundle.KINDS.forEach(function (kind) {
+        envs[kind].forEach(function (env) { changes.push({ kind: kind, id: env.id, env: env, baseRev: 0 }); });
+      });
+      flushBundle().catch(function () { /* toasted */ }).then(function () {
+        return HeadwayDesktop.flushShards(dir, newId, changes); // new files only — nothing to conflict with
+      }).then(function () {
+        return HeadwayDesktop.writeHeadway(dir, { plans: [RMBundle.newPlanEntry(newId, nm, now)] });
+      }).then(function (hw) {
+        if (bundleDir !== dir) return;
+        planList = RMBundle.mergePlanList(planList, hw.plans);
+        return switchPlan(newId);
+      }).catch(function (err) {
+        toast('Could not create the plan: ' + (err && err.message || err), 'err');
+      });
+    });
+  }
+  function writePlanEntry(entry, okMsg) {
+    var dir = bundleDir;
+    return HeadwayDesktop.writeHeadway(dir, { plans: [entry] }).then(function (hw) {
+      if (bundleDir !== dir) return;
+      planList = RMBundle.mergePlanList(planList, hw.plans);
+      if (okMsg) toast(okMsg);
+      render();
+    }, function (err) {
+      toast('Could not update the plan list: ' + (err && err.message || err), 'err');
+    });
+  }
+  function renamePlan(id, curName) {
+    promptName('Rename plan', 'Plan name', null, curName, function (nm) {
+      var p = RM.clone(planEntry(id) || RMBundle.newPlanEntry(id, curName, new Date().toISOString()));
+      p.name = nm;
+      p.updatedAt = new Date().toISOString();
+      writePlanEntry(p, null);
+    });
+  }
+  // a tombstone in the plan list; the files stay (collected later)
+  function deletePlan(id, name) {
+    confirmBox('Delete plan',
+      'This removes “' + esc(name) + '” for everyone sharing this roadmap. ' +
+      (id === activePlanId ? 'You will land on the next open plan.' : 'The current plan is kept.'),
+      'Delete plan', function () {
+        if (compareOptId === id) compareOptId = null;
+        var p = RM.clone(planEntry(id) || RMBundle.newPlanEntry(id, name, new Date().toISOString()));
+        p.deleted = true;
+        p.updatedAt = new Date().toISOString();
+        var wasActive = id === activePlanId;
+        writePlanEntry(p, 'Deleted “' + name + '”').then(function () {
+          var live = livePlans();
+          if (wasActive && live.length) switchPlan(live[0].id);
+        });
+      }, true);
+  }
+  function openPlanMenu() {
+    var live = livePlans();
+    var hasOthers = live.length > 1;
+    function planRow(p, isCur) {
+      return {
+        icon: isCur ? 'check' : 'git-branch', checked: isCur, label: esc(p.name),
+        fn: isCur ? function () {} : function () { switchPlan(p.id); },
+        actions: [
+          isCur ? null : { icon: 'eye', title: 'Compare', on: compareOptId === p.id,
+            fn: function () { toggleCompare(p.id); } },
+          { icon: 'pencil', title: 'Rename', fn: function () { renamePlan(p.id, p.name); } },
+          hasOthers ? { icon: 'trash-2', title: 'Delete',
+            fn: function () { deletePlan(p.id, p.name); } } : null
+        ].filter(Boolean)
+      };
+    }
+    var cur = planEntry(activePlanId) || { id: activePlanId, name: 'Default' };
+    var items = [planRow(cur, true)];
+    live.forEach(function (p) { if (p.id !== activePlanId) items.push(planRow(p, false)); });
+    items.push({ sep: true });
+    items.push({ icon: 'copy-plus', label: 'New plan', fn: createPlan });
+    openDropdown($('#optBtn'), items, { minW: 300 });
+  }
+
+  // ---- File menu actions (desktop only — the browser build hides them)
+  function safeFolderName(s) {
+    return String(s || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap';
+  }
+  function createSharedFolder(st, title, doneMsg) {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.pickFolder) return Promise.resolve(null);
+    return settleCurrentDoc().then(function () {
+      return HeadwayDesktop.pickFolder();
+    }).then(function (parent) {
+      if (!parent) return null;
+      var dir = String(parent).replace(/[\\/]+$/, '') + '/' + safeFolderName(title) + '.headway';
+      var exists = HeadwayDesktop.pathExists ? HeadwayDesktop.pathExists(dir) : Promise.resolve(false);
+      return exists.then(function (there) {
+        if (there) {
+          // never write into an existing bundle: it would silently merge two roadmaps
+          toast('A shared folder “' + safeFolderName(title) + '.headway” already exists there — pick another folder or rename the roadmap', 'err');
+          return null;
+        }
+        var contents = RMBundle.migrateFromState(st, userId(), new Date().toISOString());
+        return HeadwayDesktop.createBundle(dir, contents).then(function () {
+          return openBundleDoc(dir);
+        }).then(function (res) {
+          if (res && doneMsg) toast(doneMsg + ' “' + safeFolderName(title) + '.headway”');
+          return res;
+        });
+      });
+    }).catch(function (err) {
+      toast('Could not create the shared folder: ' + (err && err.message || err), 'err');
+      return null;
+    });
+  }
+  function newSharedRoadmap() {
+    promptName('New shared roadmap', 'Roadmap name',
+      'Creates a “name.headway” folder inside the folder you pick next. Put it somewhere synced (OneDrive, SharePoint, Dropbox) and others can open the same roadmap.',
+      '', function (nm) {
+        var st = blankState();
+        st.meta.title = nm;
+        createSharedFolder(st, nm, 'Created shared roadmap');
+      });
+  }
+  // the open .xlsx becomes a folder (the workbook itself is left untouched)
+  function convertToShared() {
+    if (docKind === 'bundle') return;
+    var st = RM.clone(state);
+    createSharedFolder(st, st.meta.title, 'Converted to shared roadmap');
+  }
+  function openSharedRoadmap() {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.openBundleDialog) return;
+    settleCurrentDoc().then(function () {
+      return HeadwayDesktop.openBundleDialog();
+    }).then(function (res) {
+      if (res) adoptBundle(res);
+    }, function (err) {
+      toast('Could not open the shared roadmap: ' + (err && err.message || err), 'err');
+    });
+  }
+  // bundle mode: File → Import from Excel… merges a workbook INTO the open
+  // shared roadmap. Add-only — RM.planImport never overwrites a value — and
+  // previewed first; the apply runs through commit, so it is one undoable
+  // step with one history line, flushed like any other edit. The workbook is
+  // read once and never adopted: currentPath and the bundle session stand.
+  function countOf(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  function importFromExcel() {
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !HeadwayDesktop.pickWorkbook) return;
+    HeadwayDesktop.pickWorkbook().then(function (pick) {
+      if (!pick) return null;
+      return RMExcel.importWorkbook(pick.buffer).then(function (r) {
+        var incoming = RM.normalizeState(r.state);
+        importPreview(pick.name, RM.planImport(state, incoming), r.source);
+      });
+    }).catch(function (err) {
+      toast('Could not import: ' + (err && err.message || err), 'err');
+    });
+  }
+  function importPreview(name, plan, source) {
+    var s = plan.summary;
+    var leftAlone = countOf(s.conflicts, 'difference', 'differences') + ' left alone (the shared roadmap wins)';
+    var note = source === 'template'
+      ? '<div class="m-hint">Not a Headway workbook — read from the template layout.</div>' : '';
+    var body;
+    if (s.empty) {
+      body = '<p style="margin:0">Nothing new to import' + (s.conflicts ? ' — ' + esc(leftAlone) : '') + '.</p>' + note;
+    } else {
+      var counts = [
+        countOf(s.items, 'new feature', 'new features'),
+        countOf(s.stories, 'new story', 'new stories'),
+        countOf(s.fills, 'field filled in', 'fields filled in'),
+        countOf(s.team, 'team member', 'team members'),
+        countOf(s.phases, 'phase', 'phases'),
+        leftAlone
+      ];
+      var titles = plan.items.add.slice(0, 8).map(function (it) { return '<li>' + esc(it.feature || '(untitled)') + '</li>'; });
+      if (plan.items.add.length > 8) titles.push('<li>…and ' + (plan.items.add.length - 8) + ' more</li>');
+      body = '<ul style="margin:0 0 10px;padding-left:18px">' + counts.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>' +
+        (titles.length ? '<div class="m-sec"><label>New features</label><ul style="margin:4px 0 0;padding-left:18px">' + titles.join('') + '</ul></div>' : '') +
+        note;
+    }
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>Import from “' + esc(name) + '”</h2></div>' +
+      '<div class="m-body"><div style="font-size:13px;color:var(--ink-2);line-height:1.5">' + body + '</div></div>' +
+      '<div class="m-foot">' + (s.empty
+        ? '<button data-m="cancel" class="primary">Close</button>'
+        : '<button data-m="cancel">Cancel</button><button data-m="ok" class="primary">Import</button>') +
+      '</div></div>',
+      function (host) {
+        $('[data-m=cancel]', host).onclick = closeModal;
+        var okBtn = $('[data-m=ok]', host);
+        if (!okBtn) return;
+        okBtn.onclick = function () {
+          closeModal();
+          var res = null;
+          commit('import from Excel', function (st) { res = RM.applyImport(st, plan); });
+          toast('Imported ' + countOf(res.added.items, 'feature', 'features') + ', ' +
+            countOf(res.added.stories, 'story', 'stories') + ', ' + countOf(res.filled, 'field', 'fields') + ' filled in');
+        };
+      });
+  }
+  // bundle mode's Save: a standalone workbook, always via the dialog, never
+  // adopted as the document's path
+  function exportXlsx() {
+    var vs = RMBundle.exportableState(viewState());
+    var name = saveFileName();
+    return RMExcel.exportWorkbook(vs, exportUiSnapshot()).then(function (blob) {
+      if (window.HeadwayDesktop && HeadwayDesktop.exportBlob) {
+        return HeadwayDesktop.exportBlob(blob, name, 'xlsx', 'Excel workbook').then(function (p) {
+          if (!p) return;
+          lastExport = new Date().toTimeString().slice(0, 5);
+          saveLocal();
+          toast('Exported ' + HeadwayDesktop.basename(p));
+        });
+      }
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      toast('Exported ' + name);
+    }).catch(function (err) {
+      toast('Export failed: ' + (err && err.message || err), 'err');
+    });
   }
 
   // ownOnly: judge the feature by its own fields, not its stories' titles
@@ -1071,13 +2141,39 @@
   });
 
   // ------------------------------------------------------------ geometry
+  // Rows as the user sees them: by start day inside each phase while
+  // auto-order is on, else by order key. Always a NEW array — the document's
+  // items array (and its order keys) only change when the user reorders.
+  function viewItemsOf(st) { return RM.viewItems(st, { autoOrder: autoOrder }); }
+  function inPhase(list, phaseId) {
+    return list.filter(function (it) { return it.phaseId === phaseId; });
+  }
+  // the document with its items in view order — for the exporters, which lay
+  // rows out from the array (a shallow copy; nothing is written back)
+  function viewState() {
+    var out = {};
+    Object.keys(state).forEach(function (k) { out[k] = state[k]; });
+    out.items = viewItemsOf(state);
+    return out;
+  }
+  // an order key for a row about to be spliced in at index at: between the
+  // nearest KEYED neighbours, so keyless rows in between (added this session,
+  // keyed on the next load) cannot pull the key out of sequence
+  function orderAt(list, at) {
+    var prev = null, next = null, i;
+    for (i = at - 1; i >= 0 && prev == null; i--) if (list[i].order) prev = list[i].order;
+    for (i = at; i < list.length && next == null; i++) if (list[i].order) next = list[i].order;
+    if (prev != null && next != null && next <= prev) return RM.orderAfterAll(list);
+    return RM.orderBetween(prev, next);
+  }
   function visibleSequence() {
     // ordered visible rows: bands and items (stories excluded)
     var seq = [];
+    var vitems = viewItemsOf(state);
     state.phases.forEach(function (p) {
       seq.push({ kind: 'band', phaseId: p.id });
       if (!p.collapsed) {
-        RM.itemsInPhase(state, p.id).filter(matchesFilter).forEach(function (it) {
+        inPhase(vitems, p.id).filter(matchesFilter).forEach(function (it) {
           seq.push({ kind: 'item', id: it.id, phaseId: p.id });
         });
       }
@@ -1140,13 +2236,20 @@
   var cmpCache = null;     // per-render {id, name, doc, byId} for the overlay
   function cmpEntry() {
     if (!compareOptId) return null;
+    if (docKind === 'bundle') {
+      var p = planEntry(compareOptId);
+      return p && !p.deleted && p.id !== activePlanId ? { id: p.id, name: p.name } : null;
+    }
     return (state.options || []).filter(function (o) { return o.id === compareOptId; })[0] || null;
   }
   function getCmp() {
     var en = cmpEntry();
     if (!en) return null;
     if (!cmpCache || cmpCache.id !== en.id) {
-      var doc = RM.normalizeState(en.doc);
+      // a bundle's other plan is read from disk (cached until its shards change)
+      var raw = docKind === 'bundle' ? planDocCache[en.id] : en.doc;
+      if (!raw) { loadPlanDoc(en.id); return null; }
+      var doc = RM.normalizeState(raw);
       var byId = {};
       doc.items.forEach(function (x) { byId[x.id] = x; });
       cmpCache = { id: en.id, name: en.name, doc: doc, byId: byId };
@@ -1183,10 +2286,11 @@
     render();
     toast('Switched to “' + entry.name + '”');
   }
-  function promptOptName(title, hint, initial, onOk) {
+  function promptOptName(title, hint, initial, onOk) { promptName(title, 'Option name', hint, initial, onOk); }
+  function promptName(title, label, hint, initial, onOk) {
     openModal(
       '<div class="modal" style="width:420px"><div class="m-head"><h2>' + esc(title) + '</h2></div>' +
-      '<div class="m-body"><div class="m-sec"><label>Option name</label>' +
+      '<div class="m-body"><div class="m-sec"><label>' + esc(label) + '</label>' +
       '<input id="optNameIn" style="width:100%" placeholder="e.g. Aggressive scope" value="' + esc(initial || '') + '">' +
       (hint ? '<div class="m-hint">' + hint + '</div>' : '') + '</div></div>' +
       '<div class="m-foot"><button data-m="cancel">Cancel</button><button id="optNameOk" class="primary">Save</button></div></div>',
@@ -1251,11 +2355,14 @@
   function syncOptBtn() {
     var b = $('#optBtn');
     if (!b) return;
-    var n = (state.options || []).length;
-    b.innerHTML = '<i data-lucide="git-branch"></i><span>' + esc(state.optName) + '</span>' +
+    var bundle = docKind === 'bundle';
+    var name = bundle ? planName(activePlanId) : state.optName;
+    var n = bundle ? Math.max(0, livePlans().length - 1) : (state.options || []).length;
+    var word = bundle ? 'Plan' : 'Option';
+    b.innerHTML = '<i data-lucide="git-branch"></i><span>' + esc(name) + '</span>' +
       (compareOptId ? '<span class="opt-cmp-dot" title="Comparing"></span>' : '') +
       '<i data-lucide="chevron-down" class="dm-caret"></i>';
-    b.title = 'Option: ' + state.optName;
+    b.title = word + ': ' + name + (n ? ' — ' + (n + 1) + ' open ' + word.toLowerCase() + 's' : ' — click to add alternate plan versions');
     if (window.lucide) lucide.createIcons();
   }
   function syncCmpPill() {
@@ -1278,17 +2385,18 @@
       '” — dashed bars</span><button data-cmpx title="Stop comparing"><i data-lucide="x"></i></button>';
     if (window.lucide) lucide.createIcons();
   }
-  $('#optBtn').addEventListener('click', function () {
-    var hasOthers = (state.options || []).length > 0;
-    function toggleCompare(id) {
-      compareOptId = compareOptId === id ? null : id;
-      // comparing is a timeline overlay — jump there if elsewhere
-      if (compareOptId && view !== 'planning') {
-        view = 'planning';
-        saveLocal();
-      }
-      render();
+  function toggleCompare(id) {
+    compareOptId = compareOptId === id ? null : id;
+    // comparing is a timeline overlay — jump there if elsewhere
+    if (compareOptId && view !== 'planning') {
+      view = 'planning';
+      saveLocal();
     }
+    render();
+  }
+  $('#optBtn').addEventListener('click', function () {
+    if (docKind === 'bundle') { openPlanMenu(); return; }
+    var hasOthers = (state.options || []).length > 0;
     // one row per option: the active one leads with a check instead of the
     // branch icon; every row carries its own Compare / Rename / Delete
     function optionRow(id, name, isCur) {
@@ -1532,6 +2640,8 @@
   }
 
   function render() {
+    renderCount++;
+    presenceTouch(); // every selection change renders; the write itself is throttled
     var sx = board.scrollLeft, sy = board.scrollTop;
     if (!RM.appEnabled(state, view)) view = 'planning'; // an app switched off under us (or in a loaded file)
     $$('#viewTabs button[data-view]').forEach(function (b) { b.hidden = !RM.appEnabled(state, b.dataset.view); });
@@ -1874,7 +2984,7 @@
   function itemsOverlappingSprint(num) {
     var meta = state.meta;
     var r = RM.sprintRange(meta, num);
-    return state.items.filter(function (it) {
+    return viewItemsOf(state).filter(function (it) { // board rows in on-screen order
       return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
     });
   }
@@ -1884,7 +2994,7 @@
     var inIds = {};
     items.forEach(function (it) { inIds[it.id] = true; });
     var out = [];
-    state.items.forEach(function (it) {
+    viewItemsOf(state).forEach(function (it) {
       if (!matchesFilter(it)) return;
       (it.stories || []).forEach(function (st) {
         var own = st.startDay != null && st.durDays != null;
@@ -2540,8 +3650,9 @@
       lanes = lanes.filter(function (ln) {
         return state.items.some(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
       });
+      var vitemsPr = viewItemsOf(state); // cards in on-screen (planning) order
       rows = lanes.map(function (ln) {
-        var laneItems = state.items.filter(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
+        var laneItems = vitemsPr.filter(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
         var laneAttr = ' data-prlane="' + esc(ln.key) + '"';
         return '<div class="pr-lanecell">' +
           (ln.dot ? '<span class="dd-dot" style="background:#' + ln.dot + '"></span>' : '') +
@@ -2945,15 +4056,11 @@
     if (!toId || !t || (t.phaseId === toId && (lane == null || prLaneKey(t) === lane))) { render(); return; }
     commit('move card', function (s) {
       var x = RM.itemById(s, d.id);
-      s.items = s.items.filter(function (y) { return y.id !== d.id; });
-      x.phaseId = toId;
       if (lane != null) {
         if (group === 'ws') x.workstream = lane;
         else x.epic = lane;
       }
-      var lastIdx = -1;
-      s.items.forEach(function (y, i2) { if (y.phaseId === toId) lastIdx = i2; });
-      s.items.splice(lastIdx + 1, 0, x);
+      RM.placeItem(s, d.id, toId, null); // end of the target phase: one order key changes
     });
   }
 
@@ -3045,8 +4152,9 @@
     var capXY = sprCapXY();
     var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
     var secs = nums.map(function (n) {
+      var vitemsSp = viewItemsOf(state); // rows in on-screen (planning) order
       var items = n == null
-        ? state.items.filter(function (it) { return it.startDay == null && sprMatches(it); })
+        ? vitemsSp.filter(function (it) { return it.startDay == null && sprMatches(it); })
         : itemsInSprint(n).filter(sprMatches);
       var inIds = {};
       items.forEach(function (it) { inIds[it.id] = true; });
@@ -3054,7 +4162,7 @@
       // the sprint's stories: what story level lists, and what points totals add
       var ptFeats = sprLevel === 'story' || pointsOn || capXY ? [] : null;
       if (ptFeats) {
-        state.items.forEach(function (it) {
+        vitemsSp.forEach(function (it) {
           if (!sprMatches(it)) return;
           var sts = sprStoriesOf(it, n, !!inIds[it.id]);
           if (sts.length) ptFeats.push({ it: it, stories: sts });
@@ -3506,7 +4614,6 @@
     commit(moved ? 'move to sprint' : 'reorder', function (s) {
       if (moved) RM.moveItemToSprint(s, d.id, num, t.beforeId);
       else RM.reorderItem(s, d.id, t.beforeId);
-      if (moved && autoOrder) RM.sortItemsByStart(s);
     });
   }
 
@@ -3956,19 +5063,32 @@
       var workW = Math.max(6, it.durDays * dayPx());
       var riskW = (it.riskDays || 0) * dayPx();
       var width = workW + riskW;
+      var rsp = showRange && RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null) ? RM.rangeSpans(state, it) : null;
+      var rangeHtml = '', rangeTail = 0;
+      if (rsp && rsp.highEnd > rsp.lowEnd) {
+        // the uncertain stretch (low finish -> high finish) rides OVER the bar as
+        // a hatched band; whatever runs past the planned end spills into the row
+        var rX = (rsp.lowEnd - it.startDay) * dayPx();
+        var rW = Math.max(3, (rsp.highEnd - rsp.lowEnd) * dayPx());
+        rangeTail = Math.max(0, rX + rW - width);
+        rangeHtml = '<div class="bar-range" data-range="' + it.id + '" style="left:' + (left + rX) + 'px;width:' + rW + 'px;--bar-c:' + color + '"' +
+          ' title="' + esc('Estimate ' + rsp.low + '–' + rsp.high + ' working days · planned ' + rsp.planned) + '"></div>';
+      }
       var hcTag = '';
       // label rides inside the bar when it fits (~6.3px/char at 10.5px bold);
       // otherwise it sits just right of the bar in ink
       var labelW = it.feature.length * 6.3 + 16 + (hcTag ? 30 : 0) + (it.done ? 16 : 0);
-      var label = '<span class="b-label' + (labelW <= width ? '' : ' out') + '">' + doneCk + esc(it.feature) + '</span>';
+      var label = '<span class="b-label' + (labelW <= width ? '' : ' out') + '"' +
+        (labelW > width && rangeTail ? ' style="margin-left:' + rangeTail + 'px"' : '') + '>' + doneCk + esc(it.feature) + '</span>';
       var dates = RM.fmtShort(RM.dayToDate(meta, it.startDay)) + ' → ' +
         RM.fmtShort(RM.spanEndDate(meta, it.startDay, RM.itemSpan(it)));
       var tip = it.feature + '  ·  ' + dates + (it.size ? '  ·  ' + it.size : '') +
+        (rsp ? '  ·  est ' + rsp.low + '–' + rsp.high + ' d' : '') +
         (it.risk ? '  ·  risk ' + it.risk : '') +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
-      laneInner =
+      laneInner = rangeHtml +
         '<div class="bar' + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
@@ -4165,6 +5285,7 @@
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
       })()) +
       warnBadge(it) +
+      presenceSlot(it.id) +
       '</div>' +
       '<div class="row-lane">' + laneInner + dlHtml + '</div>' +
       '</div>');
@@ -4301,9 +5422,10 @@
   function renderRows() {
     var html = [];
     var cyclic = RM.cycleMembers(state);
+    var vitems = viewItemsOf(state);
     state.phases.forEach(function (p) {
-      var items = RM.itemsInPhase(state, p.id).filter(matchesFilter);
-      var bandLane = p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
+      var items = inPhase(vitems, p.id).filter(matchesFilter);
+      var bandLane =p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
       html.push(
         '<div class="row band" data-kind="band" data-phase="' + p.id + '">' +
         '<div class="row-left">' +
@@ -4455,7 +5577,7 @@
       var viol = it.startDay != null && it.startDay < RM.itemEnd(dep) && !dep.done;
       var related = selectedId && (selectedId === dep.id || selectedId === it.id);
       var crit = showCrit && critCache && critCache.edges[dep.id + '>' + it.id];
-      var explicit = it.deps.indexOf(dep.num) !== -1;
+      var explicit = it.deps.indexOf(dep.id) !== -1;
       var edgeSel = selectedEdge && selectedEdge.fromId === dep.id && selectedEdge.toId === it.id;
       // arrows ON: every specifically-defined dependency renders (selected
       // item's in blue, critical path orange, violations dashed amber)
@@ -4526,7 +5648,7 @@
     if (!from || !to) { requestAnimationFrame(renderArrows); return true; }
     commit('remove dep', function (s) {
       var t = RM.itemById(s, to.id);
-      t.deps = t.deps.filter(function (n) { return n !== from.num; });
+      t.deps = t.deps.filter(function (id) { return id !== from.id; });
     });
     toast('Removed: #' + to.num + ' no longer depends on #' + from.num);
     return true;
@@ -4733,6 +5855,7 @@
         '<button data-f="snap">Snap earliest</button>' +
         '</div>';
     }
+    scheduleInfo += estRangeHtml(it, 'f');
     // hard deadline rides with every schedule variant
     scheduleInfo += '<div style="margin-top:8px"><label class="p-lab">Deadline' +
       (RM.pastDeadline(meta, it) ? ' <span class="p-dl-late">— runs past it</span>' : '') + '</label>' +
@@ -4753,11 +5876,11 @@
         '<div class="seg">' + riskBtns + '</div>';
     }
 
-    var depChips = it.deps.map(function (n) {
-      var d = RM.itemByNum(state, n);
-      if (!d) return '<span class="dep-chip unknown" title="No item #' + n + '"><i>#' + n + '</i> missing<button class="x" data-deprm="' + n + '"><i data-lucide="x"></i></button></span>';
-      return '<span class="dep-chip" data-depgo="' + d.id + '" title="' + esc(d.feature) + '"><i>#' + n + '</i> ' +
-        esc(shorten(d.feature, 26)) + '<button class="x" data-deprm="' + n + '"><i data-lucide="x"></i></button></span>';
+    var depChips = it.deps.map(function (id) {
+      var d = RM.itemById(state, id);
+      if (!d) return '<span class="dep-chip unknown" title="Depends on a deleted item"><i>#?</i> missing<button class="x" data-deprm="' + esc(id) + '"><i data-lucide="x"></i></button></span>';
+      return '<span class="dep-chip" data-depgo="' + d.id + '" title="' + esc(d.feature) + '"><i>#' + d.num + '</i> ' +
+        esc(shorten(d.feature, 26)) + '<button class="x" data-deprm="' + esc(id) + '"><i data-lucide="x"></i></button></span>';
     }).join('');
     var depTextChips = (it.depsText || []).map(function (t, i) {
       return '<span class="dep-chip text" title="Free-text dependency">' + esc(shorten(t, 30)) +
@@ -4766,7 +5889,7 @@
 
     // items that list THIS one as a dependency
     var dependentChips = state.items
-      .filter(function (o) { return o.deps.indexOf(it.num) !== -1; })
+      .filter(function (o) { return o.deps.indexOf(it.id) !== -1; })
       .map(function (o) {
         return '<span class="dep-chip" data-depgo="' + o.id + '" title="' + esc(o.feature) + '"><i>#' + o.num + '</i> ' +
           esc(shorten(o.feature || '(untitled)', 26)) +
@@ -4932,6 +6055,7 @@
     } else {
       timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
     }
+    timeline += estRangeHtml(st, 'stf');
     // estimate: the story's own size / priority / risk scales (Setup → Sizing)
     var stSizeBtns = RM.sizingEnabled(state, 'story')
       ? '<label class="p-lab">Size</label><div class="seg">' +
@@ -5588,15 +6712,15 @@
       commit('remove dependent', function (s) {
         var d2 = RM.itemById(s, depId);
         var me = RM.itemById(s, it.id);
-        if (d2 && me) d2.deps = d2.deps.filter(function (n) { return n !== me.num; });
+        if (d2 && me) d2.deps = d2.deps.filter(function (id) { return id !== me.id; });
       });
       return;
     }
     if (dep) {
-      var n = parseInt(dep.dataset.deprm, 10);
+      var rmId = dep.dataset.deprm;
       commit('remove dep', function (s) {
         var t = RM.itemById(s, it.id);
-        t.deps = t.deps.filter(function (x) { return x !== n; });
+        t.deps = t.deps.filter(function (x) { return x !== rmId; });
       });
       return;
     }
@@ -5719,7 +6843,6 @@
       }
       var r = RM.placeUnit(state, it.id, null, snapOpts());
       if (r.changed) {
-        if (autoOrder) RM.sortItemsByStart(r.state);
         replaceState('snap', r.state);
         toast('Snapped #' + it.num + ' to its earliest open slot' + (r.note ? ' — ' + r.note : ''));
       } else {
@@ -5848,6 +6971,17 @@
         });
         return;
       }
+      if (stf === 'estLow' || stf === 'estHigh') {
+        var sEst = RM.estDays(sval);
+        commit('story estimate range', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+          if (!st2) return;
+          st2[stf] = sEst; RM.fixEstRange(st2);
+          var sbd = RM.basisDays(s, st2);
+          if (sbd != null && sbd > 0 && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, sbd);
+        });
+        return;
+      }
       if (stf === 'durWeeks') {
         var swv = Math.max(0.2, parseFloat(sval) || 1);
         commit('story duration', function (s) {
@@ -5934,7 +7068,18 @@
         var nd2 = Math.max(0, day2);
         if (t.startDay != null) RM.shiftStories(t, nd2 - t.startDay);
         t.startDay = nd2;
-        if (autoOrder) RM.sortItemsByStart(s);
+      });
+      return;
+    }
+    if (f === 'estLow' || f === 'estHigh') {
+      var estV = RM.estDays(val);
+      commit('estimate range', function (s) {
+        var t = RM.itemById(s, it.id);
+        if (!t) return;
+        t[f] = estV; RM.fixEstRange(t);
+        // the planned bar follows the project's basis (Setup → Sizing → Estimates)
+        var bd = t.milestone ? null : RM.basisDays(s, t);
+        if (bd != null && bd > 0) t.durDays = t.startDay != null ? RM.stretchSpan(s.meta, t.startDay, bd) : bd;
       });
       return;
     }
@@ -6040,13 +7185,13 @@
   });
 
   // dependency search-by-name combobox
-  function addDep(itemId, num) {
-    var target = RM.itemByNum(state, num);
+  function addDep(itemId, depId) {
+    var target = RM.itemById(state, depId);
     var it = RM.itemById(state, itemId);
     if (!target || !it || target.id === it.id) return;
-    if (it.deps.indexOf(num) !== -1) { toast('#' + it.num + ' already depends on #' + num); return; }
-    commit('add dep', function (s) { RM.itemById(s, itemId).deps.push(num); });
-    toast('#' + it.num + ' now depends on #' + num);
+    if (it.deps.indexOf(depId) !== -1) { toast('#' + it.num + ' already depends on #' + target.num); return; }
+    commit('add dep', function (s) { RM.itemById(s, itemId).deps.push(depId); });
+    toast('#' + it.num + ' now depends on #' + target.num);
   }
   // story → story dependency search: '#n' / 'n' resolves a number, anything
   // else matches the story title or its feature's title
@@ -6103,12 +7248,12 @@
     var sug = e.target.parentElement.querySelector('.dep-sug');
     if (!q) { sug.hidden = true; sug.innerHTML = ''; return; }
     var hits = state.items.filter(function (o) {
-      if (o.id === it.id || it.deps.indexOf(o.num) !== -1) return false;
+      if (o.id === it.id || it.deps.indexOf(o.id) !== -1) return false;
       return (o.feature || '').toLowerCase().indexOf(q) !== -1 ||
         (o.epic || '').toLowerCase().indexOf(q) !== -1;
     }).slice(0, 8);
     sug.innerHTML = hits.map(function (o) {
-      return '<button data-addep="' + o.num + '"><i>#' + o.num + '</i> ' + esc(shorten(o.feature || '(untitled)', 44)) +
+      return '<button data-addep="' + o.id + '"><i>#' + o.num + '</i> ' + esc(shorten(o.feature || '(untitled)', 44)) +
         (o.epic ? ' <em>' + esc(o.epic) + '</em>' : '') + '</button>';
     }).join('') || '<div class="dep-sug-none">No match — Enter keeps it as a text note</div>';
     if (!hits.length) {
@@ -6128,7 +7273,7 @@
     if (!add && !addTxt) return;
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
-    if (add) { addDep(it.id, parseInt(add.dataset.addep, 10)); return; }
+    if (add) { addDep(it.id, add.dataset.addep); return; }
     var inp = $('#panel [data-f=depsearch]');
     var tv = inp ? inp.value.trim() : '';
     if (tv) commit('add text dep', function (s) { RM.itemById(s, it.id).depsText.push(tv); });
@@ -6812,13 +7957,10 @@
             checked: sel.every(function (t) { return t.phaseId === p.id; }),
             fn: function () {
               commit('move phase', function (s) {
-                // the group lands at the end of the target phase, in its own order
-                var moving = s.items.filter(function (x) { return ids.indexOf(x.id) !== -1; });
-                s.items = s.items.filter(function (x) { return ids.indexOf(x.id) === -1; });
-                moving.forEach(function (t) { t.phaseId = p.id; });
-                var lastIdx = -1;
-                s.items.forEach(function (x, i2) { if (x.phaseId === p.id) lastIdx = i2; });
-                s.items.splice.apply(s.items, [lastIdx + 1, 0].concat(moving));
+                // the group lands at the end of the target phase, in its own
+                // (on-screen) order — one order key per moved row
+                viewItemsOf(s).filter(function (t) { return ids.indexOf(t.id) !== -1; })
+                  .forEach(function (t) { RM.placeItem(s, t.id, p.id, null); });
               });
             } };
         }));
@@ -6887,14 +8029,7 @@
     var it = RM.itemById(state, itemId);
     return state.phases.map(function (p) {
       return { label: esc(p.name) + (p.bucket ? ' <small>(backlog)</small>' : ''), checked: p.id === it.phaseId, fn: function () {
-        commit('move phase', function (s) {
-          var t = RM.itemById(s, itemId);
-          t.phaseId = p.id;
-          s.items = s.items.filter(function (x) { return x.id !== t.id; });
-          var lastIdx = -1;
-          s.items.forEach(function (x, i2) { if (x.phaseId === p.id) lastIdx = i2; });
-          s.items.splice(lastIdx + 1, 0, t);
-        });
+        commit('move phase', function (s) { RM.placeItem(s, itemId, p.id, null); }); // end of that phase
       } };
     });
   }
@@ -7020,8 +8155,17 @@
       it.id = newId;
       it.num = RM.nextNum(s);
       it.holdPos = true;
-      var idx = s.items.indexOf(RM.itemById(s, itemId));
-      s.items.splice(idx + offset, 0, it);
+      // the held row shows at its array slot inside the phase, so aim that
+      // slot at the anchor's ON-SCREEN position: the new key lands right
+      // above/below the anchor row however the phase is currently sorted.
+      // This leans on RM.sortItemsByStart splicing a holdPos row back in at
+      // its array index — change that and this insert lands in the wrong
+      // place under auto-order without any test failing.
+      var a2 = RM.itemById(s, itemId);
+      var vi = inPhase(viewItemsOf(s), a2.phaseId).indexOf(a2);
+      var before = inPhase(s.items, a2.phaseId)[vi + offset];
+      s.items.push(it);
+      RM.placeItem(s, newId, a2.phaseId, before ? before.id : null);
     });
     var row = rowsEl.querySelector('.row[data-id="' + newId + '"]');
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
@@ -7042,14 +8186,18 @@
       copy.feature = t.feature + ' (copy)';
       // fresh ids and numbers for the copied stories; dependencies among them
       // follow the copy, links to stories outside it keep pointing there
-      var next = copy.num + 1, numMap = {};
+      var nextNum = copy.num + 1, numMap = {};
       copy.stories.forEach(function (st) {
         st.id = RM.uid('s');
-        if (st.num != null) numMap[st.num] = next;
-        st.num = next++;
+        if (st.num != null) numMap[st.num] = nextNum;
+        st.num = nextNum++;
       });
       RM.remapStoryDeps(copy.stories, numMap);
-      s.items.splice(s.items.indexOf(t) + 1, 0, copy);
+      // right after the original: before the original's next key neighbour
+      var peers = inPhase(s.items, t.phaseId);
+      var next = peers[peers.indexOf(t) + 1];
+      s.items.push(copy);
+      RM.placeItem(s, copy.id, t.phaseId, next ? next.id : null);
       selectedId = copy.id;
     });
   }
@@ -7127,7 +8275,7 @@
       var r = RM.placeUnit(state, itemId, storyId || null, snapOpts());
       // a partial placement still lands what it could — keep it, and say why
       if (r.changed) {
-        if (autoOrder) RM.sortItemsByStart(r.state); // commit never re-sorts on its own
+        r.state.items = RM.sortByOrder(r.state.items); // array order = order keys here
         replaceState('place', r.state);
         toast('Placed at the earliest slot' + (r.note ? ' — ' + r.note : ''));
         return;
@@ -7230,7 +8378,6 @@
       t2.durDays = t2.milestone ? 0
         : (t2.durDays != null ? t2.durDays
           : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || RM.sprintDays(s2.meta)));
-      if (autoOrder) RM.sortItemsByStart(s2);
     });
     select(itemId);
   }
@@ -7716,6 +8863,7 @@
     $('#tempLink').setAttribute('hidden', '');
     $$('.bar.link-target,.st-bar.link-target').forEach(function (el) { el.classList.remove('link-target'); });
     dragConsumedClick = true;
+    drainDeferred(); // an Escape ended the drag: peer envelopes held for it land now
   }
   function portDragMove(e) {
     if (drag.story) { storyPortDragMove(e); return; }
@@ -7795,11 +8943,11 @@
     // out-port: target depends on source; in-port: source depends on target
     var depOn = d.port === 'out' ? src : tgt;
     var dependent = d.port === 'out' ? tgt : src;
-    if (dependent.deps.indexOf(depOn.num) !== -1) {
+    if (dependent.deps.indexOf(depOn.id) !== -1) {
       toast('#' + dependent.num + ' already depends on #' + depOn.num);
       return;
     }
-    commit('link', function (s) { RM.itemById(s, dependent.id).deps.push(depOn.num); });
+    commit('link', function (s) { RM.itemById(s, dependent.id).deps.push(depOn.id); });
     toast('#' + dependent.num + ' now depends on #' + depOn.num);
   }
   function storyPortDragEnd(d) {
@@ -8175,6 +9323,20 @@
     else if (d.kind === 'brow') browEnd(d);
     else if (d.kind === 'pan') requestAnimationFrame(renderArrows);
   });
+  // the browser took the pointer away (touch scroll, window blur mid-drag):
+  // the drag is over with nothing applied
+  window.addEventListener('pointercancel', function () {
+    if (!drag) return;
+    var d = drag; drag = null;
+    document.body.classList.remove('dragging-x');
+    document.body.classList.remove('panning');
+    dragTip.hidden = true;
+    if (d.indicator) d.indicator.remove();
+    if (d.vIndicator) d.vIndicator.remove();
+    if (d.preview) d.preview.remove();
+    if (d.kind === 'port') { $('#tempLink').setAttribute('hidden', ''); }
+    dragConsumedClick = !!d.moved;
+  });
 
   function daysFromDx(dx) { return Math.round(dx / dayPx()); }
   // touched items align to the snap grid. Features and stories each have a
@@ -8293,7 +9455,6 @@
         });
       }
       if (vr) applyDrop(s, d.itemId, vr);
-      if (autoOrder) RM.sortItemsByStart(s);
     });
     if (rippleMoved) toast('Moved ' + rippleMoved + ' chained item(s) along');
   }
@@ -8380,7 +9541,6 @@
       t.startDay = d.day;
       t.durDays = t.milestone ? 0 : d.dur;
       t.riskDays = RM.stretchSpan(s.meta, t.startDay + t.durDays, RM.riskEffortDays(s, t));
-      if (autoOrder) RM.sortItemsByStart(s);
     });
   }
 
@@ -8473,12 +9633,13 @@
       if (!st) return;
       from.stories = from.stories.filter(function (x) { return x.id !== d.stId; });
       var to = RM.itemById(s, toItemId);
-      if (!to || to.milestone) { from.stories.push(st); return; }
+      if (!to || to.milestone) { st.order = RM.orderAfterAll(from.stories); from.stories.push(st); return; }
       var at = to.stories.length;
       if (beforeStId) {
         var bi = to.stories.map(function (x) { return x.id; }).indexOf(beforeStId);
         if (bi !== -1) at = bi;
       }
+      st.order = orderAt(to.stories, at); // the key follows the row
       to.stories.splice(at, 0, st);
       // the selection follows the moved story to its new feature
       if (selStory === d.stId) selectedId = toItemId;
@@ -8528,21 +9689,10 @@
   function applyDrop(s, itemId, r) {
     var t = RM.itemById(s, itemId);
     if (!t) return;
-    s.items = s.items.filter(function (x) { return x.id !== t.id; });
-    t.phaseId = r.phaseId;
     if (groupEpic && r.epicTo !== undefined) t.epic = r.epicTo || '';
     if (groupWs && r.wsTo !== undefined) t.workstream = r.wsTo || '';
-    var insertAt = s.items.length;
-    if (r.beforeItemId) {
-      insertAt = s.items.indexOf(RM.itemById(s, r.beforeItemId));
-    } else {
-      // end of phase: after last item with phaseId (or global end)
-      var lastIdx = -1;
-      s.items.forEach(function (x, i2) { if (x.phaseId === r.phaseId) lastIdx = i2; });
-      insertAt = lastIdx + 1;
-      if (lastIdx === -1) insertAt = s.items.length;
-    }
-    s.items.splice(insertAt, 0, t);
+    // one order key changes (the array mirrors the move); null = end of phase
+    RM.placeItem(s, itemId, r.phaseId, r.beforeItemId || null);
   }
 
   // ------------------------------------------------------------ topbar: title, tabs, menus
@@ -8575,7 +9725,7 @@
     if (titleMeasure) {
       var cs = getComputedStyle(t);
       titleMeasure.font = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
-      w = Math.ceil(titleMeasure.measureText(t.value || '').width) + 18;
+      w = Math.min(260, Math.ceil(titleMeasure.measureText(t.value || '').width) + 18); // capped: the header must leave room for tabs and toolbar
     } else {
       w = (t.value || '').length * 8 + 18; // headless fallback (no canvas 2d)
     }
@@ -8628,6 +9778,7 @@
     if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
     saveLocal();
     render();
+    if (view === 'history') refreshHistory(); // shared history: other people's files may have grown
     if (view === 'planning') requestAnimationFrame(goToday);
   }
   $('#viewTabs').addEventListener('click', switchView);
@@ -8703,7 +9854,7 @@
   function renderHistoryPage() {
     var host = $('#historyView');
     if (!host) return;
-    var h = state.history || [];
+    var h = docKind === 'bundle' ? historyView() : (state.history || []);
     if (vhSel == null || !h[vhSel]) vhSel = h.length ? h.length - 1 : null;
     vhPick = vhPick.filter(function (i) { return h[i]; });
     var listRows = [];
@@ -8730,8 +9881,8 @@
     if (vhPick.length === 2) {
       var lo = Math.min(vhPick[0], vhPick[1]), hi = Math.max(vhPick[0], vhPick[1]);
       for (var k = lo + 1; k <= hi; k++) {
-        ops = mergeOps(ops, h[k].d || []);
-        tlSel = mergeTl(tlSel, h[k].tl || []);
+        ops = RM.mergeOps(ops, h[k].d || []);
+        tlSel = RM.mergeTl(tlSel, h[k].tl || []);
         overflow += h[k].x || 0;
         if (!h[k].d) noDetail = 'Some of the compared changes predate change tracking — their details aren’t included.';
       }
@@ -8852,6 +10003,20 @@
       if (autoSave) scheduleAutoSave();
       toast('Auto save ' + (autoSave ? 'on — writes to the open file' : 'off'));
     }
+    // shared folders are desktop-only; in a bundle Save becomes an export
+    // and the single-file items (Save as, Auto save, Convert) step aside
+    var desk = !!window.HeadwayDesktop;
+    var bundle = docKind === 'bundle';
+    var shared = [
+      desk ? { icon: 'folder-plus', nativeIcon: 'Add', label: 'New shared roadmap…', fn: newSharedRoadmap } : null,
+      desk ? { icon: 'folder-open', label: 'Open shared roadmap…', fn: openSharedRoadmap } : null,
+      desk && !bundle ? { icon: 'folder-sync', label: 'Convert to shared folder…', fn: convertToShared } : null
+    ];
+    var saveItem = bundle
+      ? { icon: 'file-spreadsheet', label: 'Export .xlsx…', fn: exportXlsx }
+      : { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } };
+    // a workbook merged INTO the open shared roadmap (add-only)
+    var importItem = desk && bundle ? { icon: 'file-input', label: 'Import from Excel…', fn: importFromExcel } : null;
     if (name === 'macApp') {
       // macOS: file actions live in the app-name menu (desktop.js appends the
       // standard Hide/Quit block after these). nativeIcon must name a macOS
@@ -8861,17 +10026,19 @@
       return [
         { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProjectModal },
         { icon: 'folder-open', label: 'Open project', fn: openProject },
+        shared[0], shared[1], shared[2],
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
-        { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
-        { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
-        { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
+        saveItem,
+        importItem,
+        bundle ? null : { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
+        bundle ? null : { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
         { sep: true },
         { icon: 'share', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } },
         { sep: true },
         { icon: 'circle-help', label: 'Help', fn: helpModal }
-      ];
+      ].filter(Boolean);
     }
     if (name === 'file') {
       return [
@@ -8879,12 +10046,15 @@
         { sep: true },
         { icon: 'file-plus-2', label: 'New project…', fn: newProjectModal },
         { icon: 'folder-open', label: 'Open project…', fn: openProject },
+        desk ? { sep: true } : null,
+        shared[0], shared[1], shared[2],
         { sep: true },
-        { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } },
-        window.HeadwayDesktop
+        saveItem,
+        importItem,
+        desk && !bundle
           ? { icon: 'save', label: 'Save as…', fn: function () { window.HeadwayApp.save(true); } }
           : null,
-        window.HeadwayDesktop
+        desk && !bundle
           ? { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave }
           : null,
         { sep: true },
@@ -8945,6 +10115,11 @@
         saveLocal(); render();
         toast('Critical path highlight ' + (showCrit ? 'on' : 'off'));
       } },
+      RM.rangeEnabled(state) ? { icon: 'chart-gantt', label: 'Estimate ranges', checked: showRange, fn: function () {
+        showRange = !showRange;
+        saveLocal(); render();
+        toast('Estimate ranges ' + (showRange ? 'shown' : 'hidden'));
+      } } : null,
       state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity rows', checked: showCap, fn: function () {
         showCap = !showCap;
         saveLocal(); render();
@@ -8974,10 +10149,14 @@
         setDetailMode('feature');
       } },
       { icon: 'arrow-down-narrow-wide', label: 'Auto-order rows by start', checked: autoOrder, fn: function () {
+        // a view preference: rows re-sort on screen, the document is untouched
         autoOrder = !autoOrder;
         saveLocal();
-        if (autoOrder) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
-        else render(); // the Auto timeline buttons' dry runs follow auto-order
+        // auto-order is a VIEW sort here (RM.viewItems over the order keys):
+        // toggling it never touches the document. Upstream re-sorts the items
+        // array on toggle; in the bundle model the array order is the order
+        // keys, so that would be a no-op that still dirtied the file.
+        render();
         toast('Auto-order ' + (autoOrder ? 'on — rows follow the timeline' : 'off'));
       } },
       state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline: the \u26a1 button on a phase band', disabled: true, fn: function () {} } : null,
@@ -9096,15 +10275,19 @@
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
-      var lastIdx = -1;
+      // the row lands right after the group's last row in the phase (after
+      // the phase's last row when the group is empty): one order key, keyed
+      // before the row that followed the group
       var inGroup = function (x) {
         return x.phaseId === phaseId &&
           (!group || group.epic == null || (x.epic || '') === group.epic) &&
           (!group || group.workstream == null || (x.workstream || '') === group.workstream);
       };
-      s.items.forEach(function (x, i2) { if (inGroup(x)) lastIdx = i2; });
-      if (lastIdx === -1) s.items.forEach(function (x, i2) { if (x.phaseId === phaseId) lastIdx = i2; });
-      s.items.splice(lastIdx === -1 ? s.items.length : lastIdx + 1, 0, it);
+      var peers = inPhase(RM.sortByOrder(s.items.slice()), phaseId), lastIdx = -1;
+      peers.forEach(function (x, i2) { if (inGroup(x)) lastIdx = i2; });
+      var before = lastIdx === -1 ? null : peers[lastIdx + 1] || null;
+      s.items.push(it);
+      RM.placeItem(s, newId, phaseId, before ? before.id : null);
       s.phases.forEach(function (p) { if (p.id === phaseId) p.collapsed = false; });
       selectedId = newId;
     });
@@ -9220,11 +10403,12 @@
   }
   function movePhase(phaseId, dir) {
     commit('move phase', function (s) {
-      var i = -1;
-      s.phases.forEach(function (p, k) { if (p.id === phaseId) i = k; });
+      var i = RM.phaseIndex(s, phaseId);
       var j = i + dir;
       if (i < 0 || j < 0 || j >= s.phases.length) return;
-      var tmp = s.phases[i]; s.phases[i] = s.phases[j]; s.phases[j] = tmp;
+      // swap with the neighbour = land before it (up) or before the one past it (down)
+      var before = dir < 0 ? s.phases[j] : s.phases[j + 1];
+      RM.movePhaseTo(s, phaseId, before ? before.id : null);
     });
   }
 
@@ -9234,7 +10418,7 @@
   $('#btnJira').addEventListener('click', function (e) { if (window.HeadwayJira) HeadwayJira.statusMenu(e.currentTarget); });
   function validationModal() {
     var groups = { error: [], warn: [], info: [] };
-    state.items.forEach(function (it) {
+    viewItemsOf(state).forEach(function (it) { // issues listed in row order
       (validation.byItem[it.id] || []).forEach(function (v) {
         groups[v.level === 'error' ? 'error' : v.level].push({ it: it, v: v });
       });
@@ -10530,6 +11714,35 @@
         '<section class="su-card"><h2>' + esc(lvl('feature') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
         '</section>' + sizingCards +
+        (function () {
+          var rangeOn = RM.rangeEnabled(state);
+          var unit = RM.estUnit(state);
+          var pick = function (attr, key, on, title, hint) {
+            return '<button class="su-scheme' + (on ? ' on' : '') + '" data-' + attr + '="' + key + '">' +
+              '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+              '<span class="su-scheme-main"><b>' + esc(title) + '</b><span>' + esc(hint) + '</span></span></button>';
+          };
+          return '<section class="su-card"><h2>Estimates</h2>' +
+            '<div class="su-schemes">' +
+            pick('suest', 'single', !rangeOn, 'Single estimate', 'One planned duration per row — the default') +
+            pick('suest', 'range', rangeOn, 'Range estimate', 'Low and high per feature and story; bars show the min/max span') +
+            '</div>' +
+            (rangeOn
+              ? '<div class="su-schemes" style="margin-top:8px">' +
+                RM.ESTIMATE_UNIT_ORDER.map(function (k) {
+                  var def = RM.ESTIMATE_UNITS[k];
+                  return pick('suestunit', k, unit === k, def.name, k === 'days' ? 'Working days — set a rate below if a sheet day is not a full working day (4-day weeks = 1.25)' : 'Converted to working days at the rate below');
+                }).join('') + '</div>' +
+                '<div class="p-row" style="margin-top:8px"><label class="p-lab">Working days per ' + esc(def1(unit)) + '</label>' +
+                '<input type="number" id="suEstDaysPerUnit" min="0.01" step="0.05" value="' + m.daysPerUnit + '" style="width:90px"></div>' +
+                '<div class="p-row" style="margin-top:8px"><span class="p-lab">Planned bar follows</span>' +
+                '<div class="seg"><button data-suestbasis="high" class="' + (m.estimateBasis !== 'low' ? 'on' : '') + '">High</button>' +
+                '<button data-suestbasis="low" class="' + (m.estimateBasis === 'low' ? 'on' : '') + '">Low</button></div></div>'
+              : '') +
+            '<div class="m-hint">Range mode adds Low / High fields to the panel and hatches the low→high stretch of each bar (spilling past the bar when the high end runs longer). The planned duration is what schedules; it follows the basis when a range is entered.</div>' +
+            '</section>';
+          function def1(k) { return k === 'points' ? 'point' : k === 'hours' ? 'hour' : 'day'; }
+        })() +
         '<section class="su-card"><h2>' + esc(lvl('story') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + storySchemeRows + '</div>' +
         '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
@@ -10797,6 +12010,12 @@
       commit('sprint number', function (s2) { s2.meta.sprintAnchorNum = n; });
       return;
     }
+    if (t.id === 'suEstDaysPerUnit') {
+      var dpu = parseFloat(t.value);
+      if (!isFinite(dpu) || dpu <= 0) { render(); return; }
+      commit('estimate rate', function (s2) { s2.meta.daysPerUnit = dpu; });
+      return;
+    }
     if (t.dataset.susz) {
       var sz = t.dataset.susz, szKeys = RM.sizeKeys(t.dataset.kind || 'feature');
       var cur = (state.meta[szKeys.days] || {})[sz];
@@ -10829,6 +12048,25 @@
     if (holrm != null) {
       var holIdx = parseInt(holrm, 10);
       commit('holiday rm', function (s2) { RM.removeHolidayRange(s2.meta, holIdx); });
+      return;
+    }
+    if (t.dataset.suest) {
+      var estMode = t.dataset.suest;
+      if (estMode === state.meta.estimateMode) return;
+      commit('estimate mode', function (s2) { s2.meta.estimateMode = estMode; });
+      toast(estMode === 'range' ? 'Range estimates on — Low / High fields in the panel' : 'Single estimates');
+      return;
+    }
+    if (t.dataset.suestunit) {
+      var estUnit = t.dataset.suestunit;
+      if (estUnit === state.meta.estimateUnit) return;
+      commit('estimate unit', function (s2) { s2.meta.estimateUnit = estUnit; s2.meta.daysPerUnit = RM.ESTIMATE_UNITS[estUnit].daysPerUnit; });
+      return;
+    }
+    if (t.dataset.suestbasis) {
+      var estBasis = t.dataset.suestbasis;
+      if (estBasis === state.meta.estimateBasis) return;
+      commit('estimate basis', function (s2) { s2.meta.estimateBasis = estBasis; });
       return;
     }
     if (t.dataset.suscheme) {
@@ -11015,9 +12253,7 @@
         } else if (dd.kind === 'scol') {
           s2.meta.scopeColOrder = moveKeyBefore(s2.meta.scopeColOrder, dd.key, dd.before);
         } else if (dd.kind === 'phase') {
-          var ids = s2.phases.map(function (p2) { return p2.id; });
-          var order = moveKeyBefore(ids, dd.key, dd.before);
-          s2.phases.sort(function (a, b) { return order.indexOf(a.id) - order.indexOf(b.id); });
+          RM.movePhaseTo(s2, dd.key, dd.before == null ? null : dd.before); // null = last
         }
       });
     });
@@ -11661,6 +12897,7 @@
       s.team = s.team.filter(function (x) { return x.id !== d.mid; });
       var at = d.before ? s.team.map(function (x) { return x.id; }).indexOf(d.before) : s.team.length;
       if (at < 0) at = s.team.length;
+      m.order = orderAt(s.team, at); // the key follows the row
       s.team.splice(at, 0, m);
     });
   }
@@ -11697,6 +12934,7 @@
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
+      (RM.rangeEnabled(state) ? chk('range', 'Estimate ranges (low→high bands)', showRange) : '') +
       chk('cap', 'Capacity rows', showCap) +
       chk('autoOrder', 'Auto-order rows by start', autoOrder) +
       '</div>' +
@@ -11731,11 +12969,9 @@
       var on = e.target.checked;
       if (key === 'deps') depsMode = on ? 'on' : 'none';
       else if (key === 'crit') showCrit = on;
+      else if (key === 'range') showRange = on;
       else if (key === 'cap') showCap = on;
-      else if (key === 'autoOrder') {
-        autoOrder = on;
-        if (on) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
-      }
+      else if (key === 'autoOrder') autoOrder = on; // view-only; render() below re-sorts
       else if (key === 'groupWs') groupWs = on;
       else if (key === 'groupEpic') groupEpic = on;
       else if (key === 'autoSave') { autoSave = on; if (on) scheduleAutoSave(); }
@@ -11778,11 +13014,12 @@
   function saveRecents(list) {
     try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch (e) { /* storage optional */ }
   }
-  // upsert a path at the top of the recents; title comes from the live doc
-  function noteRecent(path) {
+  // upsert a path at the top of the recents; title comes from the live doc.
+  // kind: 'bundle' (a .headway folder) | 'xlsx' (default — legacy entries too)
+  function noteRecent(path, kind) {
     if (!path) return;
     var list = loadRecents().filter(function (r) { return r.path !== path; });
-    list.unshift({ path: path, title: (state && state.meta.title) || '', at: Date.now() });
+    list.unshift({ path: path, title: (state && state.meta.title) || '', at: Date.now(), kind: kind === 'bundle' ? 'bundle' : 'xlsx' });
     saveRecents(list);
     if (document.body.classList.contains('start')) renderStartPage();
   }
@@ -11822,9 +13059,10 @@
     try { hasLocal = !!localStorage.getItem(LS_KEY); } catch (e) { /* storage optional */ }
     var recents = desktop ? loadRecents() : [];
     var rows = recents.map(function (r) {
-      var base = String(r.path).replace(/^.*[\\/]/, '');
-      return '<div class="sp-row" role="button" tabindex="0" data-sp-open="' + esc(r.path) + '">' +
-        '<span class="sp-ico"><i data-lucide="file-spreadsheet"></i></span>' +
+      var base = String(r.path).replace(/^.*[\\/]/, '').replace(/\.headway$/i, '');
+      var isBundle = r.kind === 'bundle';
+      return '<div class="sp-row" role="button" tabindex="0" data-sp-open="' + esc(r.path) + '" data-sp-kind="' + (isBundle ? 'bundle' : 'xlsx') + '">' +
+        '<span class="sp-ico"><i data-lucide="' + (isBundle ? 'folder-open' : 'file-spreadsheet') + '"></i></span>' +
         '<span class="sp-rmain"><span class="sp-rtitle">' + esc(r.title || base) + '</span>' +
         '<span class="sp-rpath">' + esc(r.path) + '</span></span>' +
         '<span class="sp-rtime">' + esc(relTime(r.at)) + '</span>' +
@@ -11851,14 +13089,54 @@
       '<div class="sp-actions">' +
       '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
       '<button class="sp-big" data-sp-opendlg><i data-lucide="folder-open"></i>Open…</button>' +
+      (desktop ? '<button class="sp-big" data-sp-openbundle title="Open a .headway folder shared through OneDrive, SharePoint or Dropbox"><i data-lucide="folder-open"></i>Open shared roadmap…</button>' : '') +
       '</div>' +
       '<div class="sp-recent-hd">Recent</div>' +
       '<div class="sp-recents">' +
       ((continueCard + rows) || '<div class="sp-empty">Nothing yet — projects you create or open appear here.</div>') +
       '</div>' +
+      guideHtml() +
       (appVersion() ? '<div class="sp-version"><button class="sp-verbtn" data-sp-notes title="What\u2019s new in this version">Headway ' + esc(appVersion()) + '</button></div>' : '') +
       '</div>';
     if (window.lucide) lucide.createIcons();
+  }
+
+  // ---- start page "How to use" area (js/guide.js). Collapsed by default on a
+  // machine that has opened a project before, open on a fresh one; the last
+  // tab and the open state stick per machine.
+  var GUIDE_KEY = 'headway-guide-v1';
+  function guidePrefs() {
+    var p = null;
+    try { p = JSON.parse(localStorage.getItem(GUIDE_KEY) || 'null'); } catch (e) { p = null; }
+    if (!p || typeof p !== 'object') {
+      var seen = false;
+      try { seen = !!localStorage.getItem(LS_KEY) || (loadRecents() || []).length > 0; } catch (e2) { seen = false; }
+      p = { open: !seen, tab: 'start' };
+    }
+    return p;
+  }
+  function saveGuidePrefs(p) { try { localStorage.setItem(GUIDE_KEY, JSON.stringify(p)); } catch (e) { /* storage optional */ } }
+  function guideHtml() {
+    if (!window.HeadwayGuide) return '';
+    var p = guidePrefs();
+    return HeadwayGuide.html(p.tab, !!p.open);
+  }
+  function guideClick(e) {
+    var tog = e.target.closest('[data-hg-toggle]'), tab = e.target.closest('[data-hg-tab]');
+    if (!tog && !tab) return false;
+    var p = guidePrefs();
+    if (tog) p.open = !p.open;
+    if (tab) { p.tab = tab.dataset.hgTab; p.open = true; }
+    saveGuidePrefs(p);
+    var host = $('[data-hg]');
+    if (host) {
+      var wrap = document.createElement('div');
+      wrap.innerHTML = HeadwayGuide.html(p.tab, !!p.open);
+      host.replaceWith(wrap.firstChild);
+      if (window.lucide) lucide.createIcons();
+      if (tab) { var b = $('[data-hg-tab="' + p.tab + '"]'); if (b) b.focus(); }
+    }
+    return true;
   }
 
   // app version for the start page footer (desktop only — the browser build
@@ -11963,9 +13241,11 @@
       });
       return;
     }
+    if (e.target.closest('[data-sp-openbundle]')) { openSharedRoadmap(); return; }
     if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
     if (e.target.closest('[data-sp-update]')) { updateButtonClick(); return; }
     if (e.target.closest('[data-sp-notes]')) { openReleaseNotes(); return; }
+    if (guideClick(e)) return;
   });
   $('#startPage').addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -11975,6 +13255,11 @@
 
   function openRecent(path) {
     if (!window.HeadwayDesktop || !HeadwayDesktop.openPath) return;
+    var entry = loadRecents().filter(function (r) { return r.path === path; })[0];
+    if (entry && entry.kind === 'bundle') {
+      openBundleDoc(path).catch(function () { dropRecent(path); renderStartPage(); });
+      return;
+    }
     HeadwayDesktop.openPath(path).catch(function (err) {
       toast('Could not open “' + String(path).replace(/^.*[\\/]/, '') + '” — ' +
         (err && err.message || err), 'err');
@@ -12010,9 +13295,7 @@
           closeModal();
           // flush pending edits to the currently-open file before the paths
           // switch, so the last few seconds of work can't land in the wrong file
-          var flush = (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath())
-            ? (doSave(false, true) || Promise.resolve()) : Promise.resolve();
-          flush.then(function () { createProjectOnDisk(st); },
+          settleCurrentDoc().then(function () { createProjectOnDisk(st); },
             function () { createProjectOnDisk(st); });
         }
         $('#npCreate', host).onclick = go;
@@ -12022,12 +13305,16 @@
   }
 
   function adoptProject(st, savedPath) {
-    replaceState('new project', st);
-    selectedId = null;
-    docSaved = true;
-    updateSaveBtn();
-    if (savedPath) noteRecent(savedPath);
-    enterEditor();
+    // a new project is a standalone workbook: the bundle session (and any
+    // flush it still owes) ends first, or the new state would flush into it
+    return closeBundleSession().then(function () {
+      replaceState('new project', st);
+      selectedId = null;
+      docSaved = true;
+      updateSaveBtn();
+      if (savedPath) noteRecent(savedPath);
+      enterEditor();
+    });
   }
 
   function createProjectOnDisk(st) {
@@ -12060,17 +13347,21 @@
   function updateSaveBtn() {
     var sb = $('#btnSave');
     if (savingNow) return;
-    var mode = docSaved ? 'saved' : 'save';
+    var bundle = docKind === 'bundle';
+    // the mode key carries the kind so a bundle↔xlsx switch repaints the label
+    var mode = flushing ? 'syncing' : (bundle ? 'b:' : 'x:') + (docSaved ? 'saved' : 'save');
     if (sb.dataset.mode === mode) return;
     sb.dataset.mode = mode;
-    sb.disabled = docSaved;
-    sb.innerHTML = docSaved
-      ? '<i data-lucide="check"></i>Saved'
-      : '<i data-lucide="download"></i>Save';
+    sb.disabled = docSaved || flushing;
+    sb.title = bundle ? 'Write pending changes to the shared folder' : 'Save as .xlsx (styled, re-loadable)';
+    if (flushing) sb.innerHTML = '<i data-lucide="refresh-cw"></i>Syncing…';
+    else if (bundle) sb.innerHTML = docSaved ? 'Synced ✓' : '<i data-lucide="refresh-cw"></i>Sync';
+    else sb.innerHTML = docSaved ? '<i data-lucide="check"></i>Saved' : '<i data-lucide="download"></i>Save';
     if (window.lucide) lucide.createIcons();
   }
 
   function doSave(forceDialog, quiet) {
+    if (docKind === 'bundle') return exportXlsx(); // Save / Save as… = a standalone export
     var btn = $('#btnSave');
     savingNow = true;
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -12082,8 +13373,9 @@
     // the exact document JSON this export embeds — the desktop shell keeps it
     // to recognize a sync client's rewrite of this very save (same document,
     // different bytes) and not reload over it
-    var stateJson = RMExcel.stateJsonOf(state);
-    return RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
+    var vs = viewState(); // sheet rows in on-screen order; the blob re-sorts by key on load
+    var stateJson = RMExcel.stateJsonOf(vs);
+    return RMExcel.exportWorkbook(vs, exportUiSnapshot()).then(function (blob) {
       var name = saveFileName();
       if (window.HeadwayDesktop) { // desktop: write straight to disk
         return HeadwayDesktop.saveBlob(blob, name, forceDialog, stateJson).then(function (path) {
@@ -12114,13 +13406,17 @@
       restoreBtn();
     });
   }
-  $('#btnSave').addEventListener('click', function () { doSave(false); });
+  $('#btnSave').addEventListener('click', function () {
+    if (docKind === 'bundle') flushBundle(); else doSave(false);
+  });
 
   // ------------------------------------------------- unsaved-work guard
   // Anything that would drop the open document — closing the window (the
   // desktop shell calls this from onCloseRequested), opening or creating
-  // another project — runs through here first.
-  function unsavedNow() { return sessionEdited && !docSaved; }
+  // another project — runs through here first. A shared bundle is never
+  // "unsaved" in the xlsx sense: its pending flush is awaited by
+  // beforeClose / closeBundleSession, so the question is never asked there.
+  function unsavedNow() { return docKind !== 'bundle' && sessionEdited && !docSaved; }
   function guardUnsaved(proceed) {
     flushPanelEdit(); // typing still in the field counts as an edit too
     if (!unsavedNow()) { proceed(); return; }
@@ -12167,7 +13463,13 @@
   // the screen does not — view, prefs, selection, scroll offsets, open
   // dialogs and the field being edited all stay exactly where they were
   function loadWorkbookBuffer(buf, name, reload) {
-    return RMExcel.importWorkbook(buf).then(function (r) {
+    // an .xlsx is a standalone document, always — and the bundle session ends
+    // (pending flush landed, folder left) BEFORE the workbook opens, so the
+    // desktop's leave cannot tear down the watcher the xlsx open sets up
+    return closeBundleSession().then(function () {
+      return RMExcel.importWorkbook(buf);
+    }).then(function (r) {
+      resumeInfo = null; docKind = 'xlsx'; // a workbook never re-links a folder
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
@@ -12220,6 +13522,18 @@
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage,
+    // shared bundle (folder) contract — see the comment block in js/desktop.js
+    openBundleDoc: openBundleDoc,
+    applyExternalEntities: applyExternalEntities,
+    presenceChanged: presenceChanged,
+    plansChanged: plansChanged,
+    planShardChanged: planShardChanged,
+    resumeBundle: resumeBundle,
+    beforeClose: beforeClose,
+    editingIds: editingIds,
+    flushBundle: flushBundle,
+    closeBundleSession: closeBundleSession,
+    userId: userId,
     maybeShowReleaseNotes: maybeShowReleaseNotes,
     openReleaseNotes: openReleaseNotes,
     openModal: openModal,
@@ -12249,7 +13563,7 @@
         var sel = selectedId ? RM.itemById(state, selectedId) : null;
         return {
           view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory, weekPx: weekPx,
-          deps: depsMode === 'on', crit: showCrit, cap: showCap, autoOrder: autoOrder,
+          deps: depsMode === 'on', crit: showCrit, range: showRange, cap: showCap, autoOrder: autoOrder,
           groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
           desktop: !!window.HeadwayDesktop, userName: userName()
         };
@@ -12260,11 +13574,9 @@
         if (key === 'snapFeat' || key === 'snapStory') { if (SNAP_MODES.indexOf(val) === -1) return false; setSnapMode(key === 'snapStory' ? 'story' : 'feature', val); }
         else if (key === 'deps') depsMode = val ? 'on' : 'none';
         else if (key === 'crit') showCrit = !!val;
+        else if (key === 'range') showRange = !!val;
         else if (key === 'cap') showCap = !!val;
-        else if (key === 'autoOrder') {
-          autoOrder = !!val;
-          if (autoOrder) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
-        }
+        else if (key === 'autoOrder') autoOrder = !!val; // view-only; render() below re-sorts
         else if (key === 'groupWs') groupWs = !!val;
         else if (key === 'groupEpic') groupEpic = !!val;
         else if (key === 'colorBy') { if (RM.COLOR_MODES.indexOf(val) === -1) return false; setColorBy(val); }
@@ -12701,18 +14013,19 @@
   }
 
   function exportPngTo(exOpts) {
-    var entries = RM_EXPORT.plan(state, exOpts);
+    var vs = viewState(); // rows in on-screen order
+    var entries = RM_EXPORT.plan(vs, exOpts);
     if (!entries.length) { toast('Nothing to export in this selection', 'err'); return; }
     var split = exOpts.byPhase || exOpts.byWs;
     if (!split) {
-      RM_EXPORT.toBlob(state, entries[0].opts)
+      RM_EXPORT.toBlob(vs, entries[0].opts)
         .then(function (r) { return saveExport(r, PNG_KIND); })
         .catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
       return;
     }
     var docName = safeName(state.meta.title || '') || 'Roadmap';
     Promise.all(entries.map(function (e) {
-      return RM_EXPORT.toBlob(state, e.opts).then(function (r) {
+      return RM_EXPORT.toBlob(vs, e.opts).then(function (r) {
         return { blob: r.blob, name: docName + ' — ' + safeName(e.name) + '.png' };
       });
     })).then(function (files) {
@@ -12738,7 +14051,7 @@
   }
 
   function exportPptxTo(exOpts) {
-    RM_PPTX.toBlob(state, exOpts)
+    RM_PPTX.toBlob(viewState(), exOpts)
       .then(function (r) { return saveExport(r, PPTX_KIND); })
       .catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
   }
@@ -12779,6 +14092,15 @@
     saveFileName: saveFileName,
     getValidation: function () { return validation; },
     templateState: templateState,
+    getHistory: function () { return docKind === 'bundle' ? historyView().slice() : RM.clone(state.history || []); },
+    getInfo: function () {
+      return { docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId, docSaved: docSaved,
+        undoLen: undoStack.length, redoLen: redoStack.length, plans: RM.clone(planList), peers: RM.clone(peers),
+        peerByItem: RM.clone(peerByItem), presenceOn: presenceOn,
+        pendingHistory: pendingHistory.length, renderCount: renderCount, userId: readUser().id || null,
+        flushing: flushing, planGone: planGone, deferred: deferredExternal.length,
+        localAt: RM.clone(localAt), lastEnv: RM.clone(lastEnv) };
+    },
     releaseNotesFor: releaseNotesFor,
     maybeShowReleaseNotes: maybeShowReleaseNotes,
     openReleaseNotes: openReleaseNotes,

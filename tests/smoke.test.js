@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/guide.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -148,6 +148,26 @@ ok(!doc.querySelector('#startBody [data-sp-notes]') && !doc.querySelector('#star
 
   delete window.HeadwayDesktop;
   window.HeadwayApp.renderStartPage();
+}
+
+// ---- "How to use Headway" area (js/guide.js): collapsed on a machine with a
+// session, opens to four tabs, remembers the tab, folds back
+{
+  const hg = () => doc.querySelector('#startBody [data-hg]');
+  ok(!!hg() && !hg().classList.contains('open'), 'start page carries the How-to area, collapsed when a session exists');
+  click(hg().querySelector('[data-hg-toggle]'));
+  ok(hg().classList.contains('open') && hg().querySelectorAll('[data-hg-tab]').length === 4 && hg().querySelectorAll('.hg-steps li').length === 5,
+    'opening it shows four tabs and the five Start-here steps');
+  click(hg().querySelector('[data-hg-tab="keys"]'));
+  ok(hg().querySelector('[data-hg-body="keys"]') && hg().querySelectorAll('.hg-key kbd.kbd').length > 20,
+    'the Shortcuts tab lists the keys as <kbd> chips (' + hg().querySelectorAll('.hg-key kbd.kbd').length + ')');
+  ok((window.localStorage.getItem('headway-guide-v1') || '').includes('"tab":"keys"'), 'the chosen tab is remembered per machine');
+  click(hg().querySelector('[data-hg-tab="ideas"]'));
+  ok(hg().querySelectorAll('.hg-card').length >= 8 && /Range estimates/.test(hg().textContent) && !/Ideas/.test(hg().textContent), 'the Features tab covers the range estimates and carries no ideas section');
+  click(hg().querySelector('[data-hg-toggle]'));
+  ok(!hg().classList.contains('open') && !hg().querySelector('.hg-body'), 'the header folds it back');
+  window.HeadwayApp.renderStartPage();
+  ok(!doc.querySelector('#startBody [data-hg]').classList.contains('open'), 'a re-render keeps it folded');
 }
 
 const contBtn = doc.querySelector('#startBody [data-sp-continue]');
@@ -311,6 +331,18 @@ ok(Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Dow
   'File menu offers Download template');
 ok(Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Sync with Jira/.test(b.textContent)),
   'File menu offers Sync with Jira (the CSV export stays in the Export dialog)');
+{
+  // browser build: shared folders are desktop-only — none of the three items,
+  // Save stays Save, and the start page has no Open shared roadmap button
+  const labels = Array.from(doc.querySelectorAll('#popover .menu-list button')).map(b => b.textContent.trim());
+  ok(!labels.some(l => /New shared roadmap|Open shared roadmap|Convert to shared/.test(l)),
+    'browser build: File menu has no shared-roadmap items');
+  ok(labels.some(l => /^Save/.test(l)) && !labels.some(l => /Export \.xlsx/.test(l)),
+    'browser build: Save is Save, not Export .xlsx');
+  ok(!window.HeadwayApp.menuItems('macApp').some(m => m.label && /shared roadmap|Convert to shared/.test(m.label)),
+    'browser build: the macApp list has none either');
+  ok(!doc.querySelector('#startBody [data-sp-openbundle]'), 'browser build: start page has no Open shared roadmap… button');
+}
 {
   const tpl = window.__headway.templateState();
   ok(tpl.items.length === 1 && /Example/.test(tpl.items[0].feature) &&
@@ -486,9 +518,93 @@ depInput.dispatchEvent(new window.Event('input', { bubbles: true }));
 const sugBtn = doc.querySelector('#panel .dep-sug [data-addep]');
 ok(!!sugBtn, 'dep search suggests matches by name');
 if (sugBtn) {
-  const num = parseInt(sugBtn.getAttribute('data-addep'), 10);
+  // deps hold item IDS (num is display-only): the suggestion carries the id,
+  // the stored dep is that id, and the chip still reads #num
+  const depId = sugBtn.getAttribute('data-addep');
+  const depItem = state().items.find(i => i.id === depId);
+  ok(!!depItem && !/^\d+$/.test(depId), 'suggestions carry the item id, not its number');
   click(sugBtn);
-  ok(state().items.find(i => i.id === itId).deps.indexOf(num) !== -1, 'clicking a suggestion adds the dependency');
+  const depsNow = state().items.find(i => i.id === itId).deps;
+  ok(depsNow.indexOf(depId) !== -1, 'clicking a suggestion adds the dependency by id');
+  ok(depsNow.every(d => typeof d === 'string' && state().items.some(i => i.id === d)),
+    'every stored dep is an existing item id');
+  const chip = doc.querySelector('#panel .dep-chip[data-depgo="' + depId + '"]');
+  ok(!!chip && chip.firstElementChild.textContent === '#' + depItem.num,
+    'the dependency chip reads #' + depItem.num);
+  click(doc.querySelector('#panel .dep-chip [data-deprm="' + depId + '"]'));
+  ok(state().items.find(i => i.id === itId).deps.indexOf(depId) === -1, 'the chip\'s x removes the dependency');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === itId).deps.indexOf(depId) !== -1, 'undo restores the dependency');
+}
+
+// ---------------------------------------------------------------- row reorder = ONE order key; auto-order = view sort
+{
+  const st0 = state();
+  const byId = (s, id) => s.items.find(i => i.id === id);
+  const rowSeq = () => [...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id);
+  ok(st0.items.every(i => typeof i.order === 'string' && i.order.length), 'every item carries an order key after load');
+  // an adjacent on-screen pair in one expanded phase, A strictly earlier than B
+  let A = null, B = null;
+  const seq0 = rowSeq();
+  for (let k = 0; k + 1 < seq0.length && !A; k++) {
+    const a = byId(st0, seq0[k]), b = byId(st0, seq0[k + 1]);
+    if (a && b && a.phaseId === b.phaseId &&
+      a.startDay != null && b.startDay != null && a.startDay < b.startDay) { A = a; B = b; }
+  }
+  ok(!!A, 'an adjacent scheduled pair exists in an expanded phase for the reorder test');
+  if (A) {
+    const ph0 = A.phaseId;
+    // drag A's row to the end of its phase = drop just above the NEXT phase's
+    // band. jsdom rects are all zero, so give that one band a real rect and
+    // aim the pointer above its midline (no next band: far below = last phase)
+    const pi = st0.phases.findIndex(p => p.id === ph0);
+    const nextBand = pi + 1 < st0.phases.length && doc.querySelector('#rows .row.band[data-phase="' + st0.phases[pi + 1].id + '"]');
+    let dropY = 9999;
+    if (nextBand) {
+      nextBand.getBoundingClientRect = () => ({ top: 100, bottom: 120, height: 20, left: 0, right: 100, width: 100 });
+      dropY = 50;
+    }
+    doc.querySelector('#rows .row.item[data-id="' + A.id + '"] .row-left').dispatchEvent(
+      new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 30, clientY: 30, button: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 30, clientY: dropY }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 30, clientY: dropY }));
+    click(doc.querySelector('#rows')); // the click a browser fires after the drop (the app swallows it)
+    const st1 = state();
+    const changed = st1.items.filter(i => byId(st0, i.id).order !== i.order).map(i => i.id);
+    ok(changed.length === 1 && changed[0] === A.id, 'dragging a row rewrites exactly one order key (' + changed.length + ')');
+    ok(st1.items.every(i => i.phaseId === byId(st0, i.id).phaseId) && st1.items.length === st0.items.length,
+      'the reorder moves nothing else');
+    const keysPh0 = st1.items.filter(i => i.phaseId === ph0 && i.id !== A.id).map(i => i.order);
+    ok(keysPh0.every(k => k < byId(st1, A.id).order), 'the moved row now keys after every other row of its phase');
+    // the arrangement survives a save/load cycle: normalizeState re-sorts by
+    // key and lands on the same per-phase order with the same keys
+    const rt = window.RM.normalizeState(JSON.parse(JSON.stringify(st1)));
+    const perPhase = (s) => s.phases.map(p => s.items.filter(i => i.phaseId === p.id).map(i => i.id + ':' + i.order).join(',')).join('|');
+    ok(perPhase(rt) === perPhase(st1), 'the reordered document round-trips through normalizeState (per-phase order + keys)');
+
+    // auto-order (default on) is a view sort: A still shows by start…
+    const seqOn = rowSeq();
+    ok(seqOn.indexOf(A.id) !== -1 && seqOn.indexOf(A.id) < seqOn.indexOf(B.id),
+      'with auto-order on the moved row still renders by start day, before its later neighbour');
+    const toggleAuto = () => {
+      window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+      click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Auto-order rows by start/.test(b.textContent)));
+    };
+    toggleAuto();
+    ok(JSON.stringify(state().items) === JSON.stringify(st1.items),
+      'toggling auto-order off leaves the items array — order keys included — byte-identical');
+    ok(window.localStorage.getItem('headway-ui-v1').includes('"autoOrder":false'),
+      'auto-order is a per-machine UI pref, not document state');
+    const seqOff = rowSeq();
+    ok(seqOff.join() !== seqOn.join() && seqOff.indexOf(A.id) > seqOff.indexOf(B.id),
+      'with auto-order off the rows follow the order keys — the moved row renders after its neighbour');
+    toggleAuto();
+    ok(JSON.stringify(state().items) === JSON.stringify(st1.items), 'toggling it back on is a no-op for the document too');
+    ok(rowSeq().join() === seqOn.join(), 'rows return to start order');
+    // put the row back for the tests that follow
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(byId(state(), A.id).order === A.order, 'undo restores the original order key');
+  }
 }
 
 // ---------------------------------------------------------------- holidays are day-granular
@@ -1527,6 +1643,11 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   const fresh = s3.items[anchorIdx - 1];
   ok(fresh && fresh.feature === '' && fresh.startDay == null, 'new item sits immediately above the anchor');
   ok(fresh.holdPos === true, 'inserted item carries holdPos until a date is set');
+  const anchorIt = s3.items[anchorIdx];
+  ok(typeof fresh.order === 'string' && fresh.order < anchorIt.order,
+    'the inserted item is keyed just before its anchor');
+  const rowsNow = [...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id);
+  ok(rowsNow.indexOf(fresh.id) === rowsNow.indexOf(anchorId) - 1, 'and renders directly above it');
   ok(!doc.querySelector('#panel .p-name'), 'insert does not open an item in the edit panel');
   ok(!!doc.querySelector('#panel .p-empty'), 'persistent panel shows its no-selection state');
   const focused = doc.activeElement;
@@ -1534,6 +1655,128 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     focused.closest('.row.item').dataset.id === fresh.id,
     'focus lands on the new row\'s inline title input');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+}
+
+// ---------------------------------------------------------------- insert lands at the ON-SCREEN slot when array order ≠ view order
+// auto-order on, A keyed to the end of its phase yet rendered first (earliest
+// start): Insert below/above must land next to A as displayed, not at A's
+// array slot
+{
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const st0 = state();
+  const byId = (s, id) => s.items.find(i => i.id === id);
+  const rowSeq = () => [...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id);
+  let A = null, B = null, ph = null;
+  for (const p of st0.phases) {
+    const vis = rowSeq().map(id => byId(st0, id)).filter(i => i && i.phaseId === p.id && i.startDay != null);
+    if (vis.length >= 3 && vis[0].startDay < vis[1].startDay) { A = vis[0]; B = vis[1]; ph = p; break; }
+  }
+  ok(!!A, 'a phase with three scheduled rows exists for the insert test');
+  if (A) {
+    const pi = st0.phases.indexOf(ph);
+    const nextBand = pi + 1 < st0.phases.length && doc.querySelector('#rows .row.band[data-phase="' + st0.phases[pi + 1].id + '"]');
+    let dropY = 9999;
+    if (nextBand) {
+      nextBand.getBoundingClientRect = () => ({ top: 100, bottom: 120, height: 20, left: 0, right: 100, width: 100 });
+      dropY = 50;
+    }
+    doc.querySelector('#rows .row.item[data-id="' + A.id + '"] .row-left').dispatchEvent(
+      new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 30, clientY: 30, button: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 30, clientY: dropY }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 30, clientY: dropY }));
+    click(doc.querySelector('#rows'));
+    const st1 = state();
+    const arr = st1.items.filter(i => i.phaseId === ph.id).map(i => i.id);
+    let seq = rowSeq();
+    ok(arr[arr.length - 1] === A.id && seq.indexOf(A.id) < seq.indexOf(B.id),
+      'setup: A is last in the array but still first on screen (auto-order)');
+    doc.querySelector('#rows .row.item[data-id="' + A.id + '"]').dispatchEvent(
+      new window.MouseEvent('contextmenu', { bubbles: true, clientX: 220, clientY: 220 }));
+    click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Insert feature below/.test(b.textContent)));
+    const fresh = state().items.find(i => !byId(st1, i.id));
+    seq = rowSeq();
+    ok(!!fresh && seq.indexOf(fresh.id) === seq.indexOf(A.id) + 1,
+      'Insert below renders the new row directly under A on screen');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    doc.querySelector('#rows .row.item[data-id="' + A.id + '"]').dispatchEvent(
+      new window.MouseEvent('contextmenu', { bubbles: true, clientX: 220, clientY: 220 }));
+    click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Insert feature above/.test(b.textContent)));
+    const fresh2 = state().items.find(i => !byId(st1, i.id));
+    seq = rowSeq();
+    ok(!!fresh2 && seq.indexOf(fresh2.id) === seq.indexOf(A.id) - 1,
+      'Insert above renders the new row directly over A on screen');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // the insert
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // the reorder
+    ok(byId(state(), A.id).order === A.order && state().items.length === st0.items.length,
+      'two undos restore the original key and row count');
+  }
+}
+
+// ---------------------------------------------------------------- cross-phase row drag = new phase + ONE order key
+{
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const st0 = state();
+  const byId = (s, id) => s.items.find(i => i.id === id);
+  const vis = [...doc.querySelectorAll('#rows .row.item')].map(r => byId(st0, r.dataset.id)).filter(Boolean);
+  const A = vis[0];
+  const B = vis.find(i => i.phaseId !== A.phaseId);
+  ok(!!B, 'rows in two expanded phases exist for the cross-phase drag');
+  if (B) {
+    // only B's row has a real rect: the pointer above its midline drops A right before B
+    const rowB = doc.querySelector('#rows .row.item[data-id="' + B.id + '"]');
+    rowB.getBoundingClientRect = () => ({ top: 100, bottom: 120, height: 20, left: 0, right: 100, width: 100 });
+    doc.querySelector('#rows .row.item[data-id="' + A.id + '"] .row-left').dispatchEvent(
+      new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 30, clientY: 30, button: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 30, clientY: 105 }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 30, clientY: 105 }));
+    click(doc.querySelector('#rows'));
+    const st1 = state();
+    const A1 = byId(st1, A.id);
+    ok(A1.phaseId === B.phaseId, 'the row moved into B\'s phase');
+    const changed = st1.items.filter(i => byId(st0, i.id).order !== i.order).map(i => i.id);
+    ok(changed.length === 1 && changed[0] === A.id, 'exactly one order key changed (' + changed.length + ')');
+    ok(st1.items.every(i => i.id === A.id || i.phaseId === byId(st0, i.id).phaseId) && st1.items.length === st0.items.length,
+      'no other row changed phase, nothing added or lost');
+    const keyed = st1.items.filter(i => i.phaseId === B.phaseId).sort((p, q) => (p.order < q.order ? -1 : p.order > q.order ? 1 : 0)).map(i => i.id);
+    ok(keyed.indexOf(A.id) === keyed.indexOf(B.id) - 1, 'A keys immediately before B in the target phase');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    const A2 = byId(state(), A.id);
+    ok(A2.phaseId === A.phaseId && A2.order === A.order, 'undo puts the row back (phase + key)');
+  }
+}
+
+// ---------------------------------------------------------------- a dependency on an item deleted mid-session
+{
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const st0 = state();
+  const shown = new Set([...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id));
+  let E = null, D = null;
+  for (const it of st0.items) {
+    if (!shown.has(it.id)) continue;
+    const d = (it.deps || []).map(id => st0.items.find(x => x.id === id)).find(x => x && shown.has(x.id));
+    if (d) { E = it; D = d; break; }
+  }
+  ok(!!E, 'a visible item depends on another visible item');
+  if (E) {
+    click(doc.querySelector('#rows .row.item[data-id="' + D.id + '"] .r-num'));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    ok(!doc.querySelector('#modalHost').hidden, 'Delete asks for confirmation');
+    click(doc.querySelector('#modalHost [data-m="ok"]'));
+    ok(!state().items.some(i => i.id === D.id), 'the dependency target is gone');
+    const E1 = state().items.find(i => i.id === E.id);
+    ok(E1.deps.indexOf(D.id) !== -1, 'the dependent keeps the dangling id (deps are by id, not renumbered away)');
+    const v = window.__headway.getValidation();
+    ok((v.byItem[E.id] || []).some(x => x.code === 'UNKNOWN_DEP'), 'validate flags UNKNOWN_DEP on the dependent');
+    click(doc.querySelector('#rows .row.item[data-id="' + E.id + '"] .r-num'));
+    const chip = doc.querySelector('#panel .dep-chip.unknown');
+    ok(!!chip && /#\?/.test(chip.textContent), 'the panel renders the dangling dependency as #?');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(state().items.some(i => i.id === D.id), 'undo restores the deleted item');
+    ok(!(window.__headway.getValidation().byItem[E.id] || []).some(x => x.code === 'UNKNOWN_DEP'), '…and the warning clears');
+  }
 }
 
 // ---------------------------------------------------------------- clear all deps (Edit menu)
@@ -3176,7 +3419,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   w2.ExcelJS = ExcelJS;
   w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
   w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/guide.js', 'js/app.js']) {
     w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   const d2 = w2.document;
@@ -3193,7 +3436,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   dom3.window.ExcelJS = ExcelJS;
   dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/guide.js', 'js/app.js']) {
     dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   dom3.window.document.querySelector('#startBody [data-sp-continue]')
@@ -5788,10 +6031,111 @@ let taggedForXlsx = null;
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- range estimates (Setup → Sizing → Estimates)
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  ok(!!doc.querySelector('#setupView [data-suest="single"]') && !!doc.querySelector('#setupView [data-suest="range"]'), 'Setup offers single / range estimates');
+  ok(!doc.querySelector('#setupView [data-suestbasis]'), 'no unit / basis pickers in single mode');
+  click(doc.querySelector('#setupView [data-suest="range"]'));
+  ok(state().meta.estimateMode === 'range', 'range mode commits');
+  ok(!!doc.querySelector('#setupView [data-suestunit="points"]') && !!doc.querySelector('#setupView [data-suestbasis="low"]'), 'unit and basis pickers appear in range mode');
+  click(doc.querySelector('#setupView [data-suestunit="hours"]'));
+  ok(state().meta.estimateUnit === 'hours' && state().meta.daysPerUnit === 1 / 8, 'unit commits with its default rate');
+  click(doc.querySelector('#setupView [data-suestunit="days"]'));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const rbar = doc.querySelector('#rows .bar:not(.ms)[data-bar]');
+  const rid = rbar.getAttribute('data-bar');
+  click(doc.querySelector('#rows .row.item[data-id="' + rid + '"] .r-num'));
+  const lowIn = doc.querySelector('#panel input[data-f="estLow"]'), highIn = doc.querySelector('#panel input[data-f="estHigh"]');
+  ok(!!lowIn && !!highIn, 'the panel shows Low / High estimate fields in range mode');
+  ok(/Estimate low \(d\)/.test(doc.querySelector('#panel').textContent), 'labels carry the project unit (d), not a per-row unit');
+  const before = state().items.find(i => i.id === rid).durDays;
+  highIn.value = String(before + 5); highIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const lowIn2 = doc.querySelector('#panel input[data-f="estLow"]');
+  lowIn2.value = String(Math.max(1, before - 3)); lowIn2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const itR = state().items.find(i => i.id === rid);
+  ok(itR.estLow === Math.max(1, before - 3) && itR.estHigh === before + 5, 'low / high commit: ' + JSON.stringify([itR.estLow, itR.estHigh]));
+  ok(itR.durDays >= before + 5, 'basis high: the planned bar follows the high estimate');
+  const rb = doc.querySelector('#rows .bar-range[data-range="' + rid + '"]'), bb = doc.querySelector('#rows .bar[data-bar="' + rid + '"]');
+  ok(!!rb, 'a min/max band is drawn over the bar');
+  const rbR = parseFloat(rb.style.left) + parseFloat(rb.style.width), bbR = parseFloat(bb.style.left) + parseFloat(bb.style.width);
+  ok(parseFloat(rb.style.left) > parseFloat(bb.style.left) && rbR <= bbR + 1, 'basis high: the band runs from the low finish to the bar end, not from the start');
+  window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+  const rngBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Estimate ranges/.test(b.textContent));
+  ok(!!rngBtn, 'View menu offers an estimate-ranges toggle in range mode');
+  click(rngBtn);
+  ok(!doc.querySelector('#rows .bar-range'), 'toggling ranges off hides the bands (the estimates stay)');
+  ok(window.localStorage.getItem('headway-ui-v1').includes('"showRange":false'), 'the range toggle persists to the UI prefs');
+  window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Estimate ranges/.test(b.textContent)));
+  ok(!!doc.querySelector('#rows .bar-range[data-range="' + rid + '"]'), 'toggling back on redraws the band');
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  click(doc.querySelector('#setupView [data-suest="single"]'));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!doc.querySelector('#rows .bar-range'), 'single mode hides the span again');
+  window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+  ok(!Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Estimate ranges/.test(b.textContent)), 'single mode drops the toggle from the View menu');
+  window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+  ok(!doc.querySelector('#panel input[data-f="estLow"]'), '…and the fields');
+  window.HeadwayApp.ai.commit('restoreEst', (s) => { const t = window.RM.itemById(s, rid); t.estLow = null; t.estHigh = null; t.durDays = before; });
+}
+
 // NOTE: this export promise chain must stay LAST in this file — its .then /
 // .catch bodies run after every synchronous block, and the .then calls
 // process.exit. New blocks go ABOVE this line.
-tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) => {
+// ---------------------------------------------------------------- manual order (auto-order off) survives export → import
+const manualOrderRoundTrip = () => {
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const toggleAuto = () => {
+    window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+    click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Auto-order rows by start/.test(b.textContent)));
+  };
+  toggleAuto(); // off: rows follow the order keys
+  const st0 = state();
+  const byId = (s, id) => s.items.find(i => i.id === id);
+  const rowSeq = () => [...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id);
+  const A = byId(st0, rowSeq()[0]);
+  const ph = st0.phases.find(p => p.id === A.phaseId);
+  const pi = st0.phases.indexOf(ph);
+  const nextBand = pi + 1 < st0.phases.length && doc.querySelector('#rows .row.band[data-phase="' + st0.phases[pi + 1].id + '"]');
+  let dropY = 9999;
+  if (nextBand) {
+    nextBand.getBoundingClientRect = () => ({ top: 100, bottom: 120, height: 20, left: 0, right: 100, width: 100 });
+    dropY = 50;
+  }
+  doc.querySelector('#rows .row.item[data-id="' + A.id + '"] .row-left').dispatchEvent(
+    new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 30, clientY: 30, button: 0 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 30, clientY: dropY }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 30, clientY: dropY }));
+  click(doc.querySelector('#rows'));
+  const st1 = state();
+  const perPhase = (s) => s.phases.map(p => s.items.filter(i => i.phaseId === p.id).map(i => i.id + ':' + i.order).join(',')).join('|');
+  ok(rowSeq()[0] !== A.id && byId(st1, A.id).order !== A.order, 'with auto-order off the dragged row leaves the top of its phase');
+  const readBlob = (blob) => new Promise((res, rej) => {
+    const fr = new window.FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(fr.error);
+    fr.readAsArrayBuffer(blob);
+  });
+  // ExcelJS lives in node's realm: a jsdom-realm ArrayBuffer fails its instanceof check, a Buffer does not
+  return window.RMExcel.exportWorkbook(state()).then(readBlob)
+    .then(buf => window.RMExcel.importWorkbook(Buffer.from(new Uint8Array(buf)))).then(r => {
+    const rt = window.RM.normalizeState(r.state);
+    ok(r.source === 'tool', 'the workbook re-imports through the tool sheet');
+    ok(perPhase(rt) === perPhase(st1), 'export → import keeps every order key and the per-phase sequence');
+    ok(byId(rt, A.id).order === byId(st1, A.id).order, 'the manually placed row keeps its key');
+    toggleAuto(); // back on
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(byId(state(), A.id).order === A.order, 'undo restores the original key');
+  });
+};
+
+tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
+  failed++;
+  console.error('  ✗ manual order round-trip threw: ' + (e && e.message || e));
+}).then(() => window.RMExcel.exportWorkbook(state())).then((buf) => {
   const bytes = buf.size != null ? buf.size : buf.byteLength;
   ok(buf && bytes > 20000, 'xlsx export produced a workbook (' + bytes + ' bytes)');
   // a disk reload (third arg) swaps the data under the screen: the view, the
@@ -5939,7 +6283,11 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       ok(opened.meta.capRowTypes === undefined, 'on open: an old capRowTypes selection is dropped');
       const sorted = window.RM.clone(opened);
       window.RM.sortItemsByStart(sorted);
-      ok(sorted.items.map((i) => i.id).join() === opened.items.map((i) => i.id).join(), 'on open: the rows are in start order');
+      const shownIds = [...doc.querySelectorAll('#rows .row.item')].map((r) => r.dataset.id);
+      ok(shownIds.join() === sorted.items.map((i) => i.id).filter((id) => shownIds.indexOf(id) !== -1).join(),
+        'on open: the rows RENDER in start order (auto-order is a view sort over the order keys)');
+      ok(opened.history.length === doc0.history.length && !opened.history.some((h) => h.label === 'auto'),
+        'on open: no version-history entry is written — opening is not an edit');
       const before = JSON.stringify(state().items);
       undo(); // the open cleared the stack — nothing to step back to
       ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the open');

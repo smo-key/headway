@@ -51,8 +51,12 @@
     var meta = state.meta;
     var phaseName = {};
     (state.phases || []).forEach(function (p) { phaseName[p.id] = p.name; });
-    var keyByNum = {};
-    state.items.forEach(function (it) { if (it.jiraKey) keyByNum[it.num] = it.jiraKey; });
+    // deps hold item ids (a legacy number resolves by num): Blocked By carries
+    // the dependency's Jira key
+    function depKey(d) {
+      var dep = RM.itemById(state, d) || RM.itemByNum(state, +d);
+      return dep ? dep.jiraKey || '' : '';
+    }
     var out = [];
 
     state.items.forEach(function (it) {
@@ -80,7 +84,7 @@
           'Due Date': it.deadline || '',
           'Start Date': sched ? iso(meta, it.startDay) : '',
           'End Date': sched ? RM.fmtISO(RM.spanEndDate(meta, it.startDay, it.durDays)) : '',
-          'Blocked By': it.deps.map(function (n) { return keyByNum[n]; }).filter(Boolean).join(' '),
+          'Blocked By': it.deps.map(depKey).filter(Boolean).join(' '),
           'Jira Key': it.jiraKey || ''
         });
       }

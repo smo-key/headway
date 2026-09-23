@@ -366,10 +366,11 @@
     var workId = {};
     work.forEach(function (it) { workId[it.id] = true; });
     work.forEach(function (it) {
-      it.deps.forEach(function (n) {
-        var dep = RM.itemByNum(state, n);
+      it.deps.forEach(function (d) {
+        // deps hold item ids (a legacy number resolves by num)
+        var dep = RM.itemById(state, d) || RM.itemByNum(state, +d);
         if (!dep || !workId[dep.id]) return;
-        plan.links.push({ blockerNum: n, blockerId: dep.id, blockedNum: it.num, blockedId: it.id });
+        plan.links.push({ blockerNum: dep.num, blockerId: dep.id, blockedNum: it.num, blockedId: it.id });
       });
     });
     // story -> story dependencies become the same Blocks link, as long as

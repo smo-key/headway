@@ -4,6 +4,7 @@
  */
 'use strict';
 var RM = require('../js/core.js');
+var RB = require('../js/bundle.js');
 
 var passed = 0, failed = 0, skipped = 0;
 function ok(cond, name) {
@@ -119,7 +120,8 @@ var sD = mkState([
 eq(RM.resolveDeps(sD, sD.items[1]).deps.map(function (x) { return x.num; }), [1], 'numbered dep resolves');
 eq(RM.resolveDeps(sD, sD.items[2]).deps.length, 0, '"All above" is dropped — only explicit deps count');
 ok(sD.items[2].depsAllAbove === undefined, 'depsAllAbove stripped by normalize');
-eq(RM.resolveDeps(sD, sD.items[3]).unknown, [99], 'unknown dep reported');
+eq(RM.resolveDeps(sD, sD.items[3]).unknown, [], 'a dep number with no item is not an unknown id');
+eq(sD.items[3].depsText, ['#99'], 'unresolvable numbered dep moves to depsText on load');
 
 var sC = mkState([
   { num: 1, feature: 'a', deps: [2] },
@@ -139,6 +141,7 @@ var sV = mkState([
   { num: 4, feature: 'ghost dep', deps: [42], startDay: 20, durDays: 5, size: 'M' },
   { num: 5, feature: 'big ask', startDay: 0, durDays: 25, size: 'XL', teamType: 'Data', capType: 'Development' }
 ], { team: [{ name: 'X', type: 'Development', capType: 'Development' }, { name: 'Y', type: 'Data' }] });
+sV.items[3].deps.push('i-gone'); // deps are ids; a dep on a deleted item is what UNKNOWN_DEP means now
 var v = RM.validate(sV);
 function codes(state, i) { return (v.byItem[state.items[i].id] || []).map(function (x) { return x.code; }); }
 ok(codes(sV, 1).indexOf('DEP_ORDER') !== -1, 'DEP_ORDER: starts before dep ends');
@@ -804,7 +807,8 @@ var offIdx = sHol.meta.holidayRanges.findIndex(function (r) { return r.name === 
 RM.removeHolidayRange(sHol.meta, offIdx);
 ok(sHol.meta.holidays.indexOf('2026-08-05') === -1, 'removing a range removes its dates');
 // self-dependency flagged, not silent
-var sSelf = mkState([{ num: 1, feature: 'ouroboros', deps: [1] }]);
+var sSelf = mkState([{ num: 1, feature: 'ouroboros' }]);
+sSelf.items[0].deps.push(sSelf.items[0].id); // by id, in-session (normalize strips a self-dep on load)
 ok((RM.validate(sSelf).byItem[sSelf.items[0].id] || []).some(function (x) { return x.code === 'SELF_DEP'; }),
   'self-dependency produces SELF_DEP warning');
 // ------------------------------------------------------------- color
@@ -976,7 +980,7 @@ var sRn = mkState([
   { num: 5, feature: 'c' }
 ]);
 eq(RM.renumberItem(sRn, sRn.items[0].id, 9), 9, 'free number accepted');
-eq(sRn.items[1].deps, [9], 'deps follow the rename');
+eq(RM.resolveDeps(sRn, sRn.items[1]).deps.map(function (x) { return x.num; }), [9], 'deps still resolve after the rename (stored by id)');
 eq(RM.renumberItem(sRn, sRn.items[2].id, 9), 10, 'taken number falls back to next available');
 eq(RM.renumberItem(sRn, sRn.items[2].id, 'zap'), 11, 'invalid number falls back to next available');
 
@@ -1677,7 +1681,11 @@ if (!ExcelJS) {
         });
         ok(wkOk, 'bar starts re-import at week precision (not rounded to sprints)');
         var it2 = r2.state.items.filter(function (i2) { return i2.num === 11; })[0];
-        ok(it2 && it2.deps.indexOf(1) !== -1 && it2.deps.indexOf(2) !== -1, 'deps re-parsed from cell text');
+        // the seed's #11 depends on 1 and on a 2 that no item carries: the real
+        // dep comes back as an id, the dangling number rides in depsText
+        var it2Nums = it2 ? it2.deps.map(function (id) { return RM.itemById(r2.state, id).num; }) : [];
+        ok(it2 && it2Nums.indexOf(1) !== -1, 'deps re-parsed from cell text (as ids)');
+        ok(it2 && it2.depsText.indexOf('#2') !== -1, 'a dangling dep number round-trips through depsText');
         var withStories = r2.state.items.filter(function (i2) { return i2.stories.length === 2; });
         ok(withStories.length === 1, 'stories re-attached via Stories sheet');
         eq(withStories[0].stories[0].description, 'rich body', 'template path keeps story description as text');
@@ -1774,7 +1782,10 @@ if (!ExcelJS) {
                   return wbT3.xlsx.load(bufT).then(function () {
                     wbT3.removeWorksheet(wbT3.getWorksheet('_RoadmapTool').id);
                     var rws3 = wbT3.getWorksheet('Roadmap');
-                    rws3.spliceColumns(rws3.columnCount, 1);
+                    // drop the Tags column by its header (it is no longer the last column: Est. low / Est. high follow it)
+                    var tagsCol = 0;
+                    rws3.getRow(3).eachCell({ includeEmpty: false }, function (c, n) { if (String(c.value).toLowerCase() === 'tags') tagsCol = n; });
+                    rws3.spliceColumns(tagsCol, rws3.columnCount - tagsCol + 1);
                     var sws3 = wbT3.getWorksheet('Stories');
                     sws3.spliceColumns(7, 3);
                     return wbT3.xlsx.writeBuffer();
@@ -2233,6 +2244,534 @@ var sSf2 = mkState([{ num: 1, feature: 'a', assignees: ['tm1'], stories: [{ titl
 });
 eq(sSf2.items[0].stories[0].assignees, ['tm1'], 'story assignees dedupe and keep real people');
 
+// ============================================================= shared bundle (RMBundle)
+var T0 = '2026-09-01T10:00:00.000Z', T1 = '2026-09-01T10:05:00.000Z', T2 = '2026-09-01T10:10:00.000Z', T3 = '2026-09-01T10:15:00.000Z';
+var commutePairs = []; // every (a, b) merged below is re-merged as (b, a) at the end
+function mergeBoth(a, b) { commutePairs.push([a, b]); return RB.mergeEntity(a, b); }
+
+// ------------------------------------------------------------- bundle: canonicalize
+section('bundle: canonicalize');
+eq(RB.canonicalize({ b: 1, a: { z: 1, y: [3, { k: 2, j: 1 }] } }), '{"a":{"y":[3,{"j":1,"k":2}],"z":1},"b":1}', 'keys sort at every depth; arrays keep order');
+eq(RB.canonicalize({ id: 'x', holdPos: true, nest: [{ _idx: 3, leadDays: 2, v: 1 }] }), '{"id":"x","nest":[{"v":1}]}', 'volatile keys stripped at any depth');
+eq(RB.canonicalize({ t: 'café 🚀' }), '{"t":"caf\\u00e9 \\ud83d\\ude80"}', 'non-ascii escaped');
+eq(RB.canonicalize({ a: 1, b: 2 }), RB.canonicalize({ b: 2, a: 1 }), 'key order does not matter');
+eq(RM.asciiJson({ e: 'é' }), '{"e":"\\u00e9"}', 'RM.asciiJson escapes like the excel helper did');
+
+// ------------------------------------------------------------- bundle: wrap/fieldsAt
+section('bundle: wrap/fieldsAt');
+var itA = { id: 'i1', feature: 'A', size: 'M', notes: '', deps: ['i9'], stories: [{ id: 's1', title: 'one' }], holdPos: true };
+var envA1 = RB.wrap(itA, null, 'ann-1', T0);
+eq(envA1.rev, 1, 'first envelope is rev 1');
+ok(!('id' in envA1.fields) && !('holdPos' in envA1.fields), 'fields drop id and volatile keys');
+eq(envA1.fieldsAt.feature, T0, 'every field stamped at creation');
+eq(envA1.fieldsAt['deps+i9'], T0, 'deps stamped as an add');
+eq(envA1.fieldsAt['stories.s1'], T0, 'stories stamped per story');
+var itA2 = RM.clone(itA); itA2.size = 'L';
+var envA2 = RB.wrap(itA2, envA1, 'ann-1', T1);
+eq(envA2.rev, 2, 'rev increments');
+eq(envA2.fieldsAt.feature, T0, 'unchanged field keeps its old stamp');
+eq(envA2.fieldsAt.size, T1, 'changed field gets the new stamp');
+eq(envA2.fieldsAt['stories.s1'], T0, 'untouched story keeps its stamp');
+var itA3 = RM.clone(itA2); itA3.deps = [];
+var envA3 = RB.wrap(itA3, envA2, 'ann-1', T2);
+eq(envA3.fieldsAt['deps-i9'], T2, 'removed dep stamped as a remove');
+eq(envA3.fieldsAt['deps+i9'], T0, 'earlier add stamp carried forward');
+eq(RB.unwrap(envA3), { id: 'i1', feature: 'A', size: 'L', notes: '', deps: [], stories: [{ id: 's1', title: 'one' }] }, 'unwrap restores the entity (id first)');
+eq(RB.unwrap(RB.tombstone(envA3, 'ann-1', T3)), null, 'a tombstone unwraps to null');
+eq(RB.tombstone(envA3, 'ann-1', T3).rev, 4, 'tombstone bumps rev');
+
+// ------------------------------------------------------------- bundle: merge same field
+section('bundle: merge same field');
+var base = RB.wrap({ id: 'i1', feature: 'A', size: 'M', notes: 'n' }, null, 'ann-1', T0);
+var eA = RB.wrap({ id: 'i1', feature: 'A', size: 'L', notes: 'n' }, base, 'ann-1', T1);
+var eB = RB.wrap({ id: 'i1', feature: 'A', size: 'XL', notes: 'n' }, base, 'bob-2', T2);
+eq(mergeBoth(eA, eB).fields.size, 'XL', 'newer stamp wins');
+eq(mergeBoth(eA, eB).fieldsAt.size, T2, 'merged stamp is the newer one');
+var eB2 = RB.wrap({ id: 'i1', feature: 'A', size: 'XL', notes: 'n' }, base, 'bob-2', T1);
+eq(mergeBoth(eA, eB2).fields.size, 'XL', 'equal stamps: the greater updatedBy wins');
+eq(mergeBoth(eA, eB2).rev, 2, 'rev = max');
+eq(mergeBoth(eA, eB2).updatedBy, 'bob-2', 'updatedBy of the newer (tie: greater) side');
+
+// ------------------------------------------------------------- bundle: merge different fields
+section('bundle: merge different fields');
+var eC = RB.wrap({ id: 'i1', feature: 'A', size: 'L', notes: 'n' }, base, 'ann-1', T1);
+var eD = RB.wrap({ id: 'i1', feature: 'A', size: 'M', notes: 'changed' }, base, 'bob-2', T2);
+var mCD = mergeBoth(eC, eD);
+eq(mCD.fields.size, 'L', 'ann\'s size edit survives');
+eq(mCD.fields.notes, 'changed', 'bob\'s notes edit survives');
+eq(mCD.fields.feature, 'A', 'untouched field intact');
+eq(mCD.updatedAt, T2, 'updatedAt = max');
+
+// ------------------------------------------------------------- bundle: merge stories by id
+section('bundle: merge stories by id');
+var sBase = RB.wrap({ id: 'i1', stories: [{ id: 's1', title: 'one', order: 'V' }, { id: 's2', title: 'two', order: 'W' }] }, null, 'ann-1', T0);
+var sA = RB.wrap({ id: 'i1', stories: [{ id: 's1', title: 'one!', order: 'V' }, { id: 's2', title: 'two', order: 'W' }, { id: 's3', title: 'three', order: 'X' }] }, sBase, 'ann-1', T1);
+var sB = RB.wrap({ id: 'i1', stories: [{ id: 's1', title: 'one', order: 'V' }] }, sBase, 'bob-2', T2); // bob deleted s2
+var mS = mergeBoth(sA, sB);
+eq(mS.fields.stories.map(function (s) { return s.id; }), ['s1', 's3'], 'union by id: ann\'s new story kept, bob\'s deletion kept');
+eq(mS.fields.stories[0].title, 'one!', 'per-story newer edit wins over an untouched copy');
+var sC = RB.wrap({ id: 'i1', stories: [{ id: 's1', title: 'ONE', order: 'V' }, { id: 's2', title: 'two', order: 'W' }] }, sBase, 'bob-2', T3);
+eq(mergeBoth(sA, sC).fields.stories[0].title, 'ONE', 'same story edited twice: newer stamp wins');
+
+// ------------------------------------------------------------- bundle: deps OR-set
+section('bundle: deps OR-set');
+var dBase = RB.wrap({ id: 'i1', deps: ['i2', 'i3'] }, null, 'ann-1', T0);
+var dA = RB.wrap({ id: 'i1', deps: ['i3'] }, dBase, 'ann-1', T1);          // ann removed i2
+var dB = RB.wrap({ id: 'i1', deps: ['i2', 'i3'], size: 'S' }, dBase, 'bob-2', T2); // bob touched something else
+eq(mergeBoth(dA, dB).fields.deps, ['i3'], 'a dep removed on one side, untouched on the other, stays removed');
+var dC = RB.wrap({ id: 'i1', deps: ['i2', 'i3', 'i4'] }, dBase, 'bob-2', T2);   // bob added i4
+eq(mergeBoth(dA, dC).fields.deps, ['i3', 'i4'], 'a dep added on one side is present; the other side\'s removal holds');
+var dD = RB.wrap({ id: 'i1', deps: ['i2', 'i3'] }, dA, 'ann-1', T3);            // ann re-added i2 later
+eq(mergeBoth(dD, dB).fields.deps, ['i2', 'i3'], 'a re-add newer than the remove brings the dep back');
+
+// ------------------------------------------------------------- bundle: tombstone vs edit
+section('bundle: tombstone vs edit');
+var tBase = RB.wrap({ id: 'i1', feature: 'A' }, null, 'ann-1', T0);
+var tomb = RB.tombstone(tBase, 'ann-1', T2);
+var oldEdit = RB.wrap({ id: 'i1', feature: 'B' }, tBase, 'bob-2', T1);
+var newEdit = RB.wrap({ id: 'i1', feature: 'C' }, tBase, 'bob-2', T3);
+ok(mergeBoth(tomb, oldEdit).deleted === true, 'an edit older than the delete loses to the tombstone');
+var mNew = mergeBoth(tomb, newEdit);
+ok(mNew.deleted === false && mNew.fields.feature === 'C', 'an edit newer than the delete wins');
+eq(mNew.rev, 2, 'rev = max across both');
+ok(mergeBoth(tomb, RB.tombstone(tBase, 'bob-2', T3)).deleted === true, 'two tombstones stay deleted');
+
+// ------------------------------------------------------------- bundle: merge is commutative
+section('bundle: merge is commutative');
+var commOk = commutePairs.every(function (p) {
+  return JSON.stringify(RB.mergeEntity(p[0], p[1])) === JSON.stringify(RB.mergeEntity(p[1], p[0]));
+});
+ok(commOk, 'mergeEntity(a, b) deep-equals mergeEntity(b, a) for every case above (' + commutePairs.length + ' pairs)');
+var assoc = RB.mergeEntity(RB.mergeEntity(eA, eB), dB);
+eq(JSON.stringify(assoc), JSON.stringify(RB.mergeEntity(eA, RB.mergeEntity(eB, dB))), 'three-way merge order does not matter');
+
+// ------------------------------------------------------------- bundle: diffEntities
+section('bundle: diffEntities');
+var sDf = mkState([{ num: 1, feature: 'a' }, { num: 2, feature: 'b' }], { team: [{ id: 't1', name: 'Ada', type: 'Development' }] });
+var d0 = RB.diffEntities({}, sDf);
+eq(d0.changed.filter(function (c) { return c.kind === 'items'; }).length, 2, 'fresh diff reports every item');
+eq(d0.changed.filter(function (c) { return c.kind === 'phases'; }).length, 2, '…and every phase');
+eq(d0.changed.filter(function (c) { return c.kind === 'team'; }).length, 1, '…and every person');
+eq(d0.changed.filter(function (c) { return c.kind === 'meta'; }).length, 1, '…and the meta entity');
+eq(d0.deleted, [], 'nothing deleted');
+var canon = {};
+d0.changed.forEach(function (c) { canon[c.kind + '/' + c.id] = c.canon; });
+eq(RB.diffEntities(canon, sDf).changed, [], 'no change → empty diff');
+sDf.items[0].holdPos = true;
+eq(RB.diffEntities(canon, sDf).changed, [], 'volatile keys do not register as changes');
+sDf.items[0].feature = 'renamed';
+var removed = sDf.items.pop();
+var d1 = RB.diffEntities(canon, sDf);
+eq(d1.changed.map(function (c) { return c.kind + '/' + c.id; }), ['items/' + sDf.items[0].id], 'only the edited item is reported');
+eq(d1.deleted, [{ kind: 'items', id: removed.id }], 'the removed item is reported deleted');
+
+// ------------------------------------------------------------- bundle: fractional order
+section('bundle: fractional order');
+var front = [RM.orderBetween(null, null)];
+for (var fi = 0; fi < 200; fi++) front.unshift(RM.orderBetween(null, front[0]));
+ok(front.every(function (k, i) { return i === 0 || front[i - 1] < k; }), '200 front-inserts stay strictly increasing');
+ok(front.every(function (k) { return k && !/0$/.test(k); }), 'keys are non-empty and never end in 0');
+var back = [RM.orderBetween(null, null)];
+for (var bi = 0; bi < 200; bi++) back.push(RM.orderBetween(back[back.length - 1], null));
+ok(back.every(function (k, i) { return i === 0 || back[i - 1] < k; }), '200 appends stay strictly increasing');
+ok(back[back.length - 1].length <= 8, 'appends grow keys slowly (' + back[back.length - 1].length + ' chars after 200)');
+var lo = 'V', hi = 'W', mids = [];
+for (var mi = 0; mi < 60; mi++) { var mk = RM.orderBetween(lo, hi); mids.push(mk); if (mi % 2) lo = mk; else hi = mk; }
+ok(mids.every(function (k) { return k > 'V' && k < 'W'; }), '60 bisections all stay strictly between the bounds');
+ok(RM.orderBetween('V', 'V') > 'V', 'orderBetween(x, x) returns a string > x');
+ok(RM.orderBetween('W', 'V') > 'W', 'orderBetween(a, b) with a > b still returns > a');
+// foreign keys: a neighbour ending in '0' is the same fraction without it and
+// must never produce a key that sorts on its wrong side
+var beforeTen = RM.orderBetween('', '10');
+ok(beforeTen > '' && beforeTen < '10' && beforeTen < '1', 'a neighbour with a trailing 0 is read as its fraction');
+var frn = RM.ensureOrder([{ id: 'x0' }, { id: 'x1', order: '0' }, { id: 'x2', order: 'a-b' }]);
+eq(frn.map(function (x) { return x.id; }), ['x0', 'x1', 'x2'], 'ensureOrder regenerates a trailing-0 key and a bad-digit key, keeping array order');
+ok(frn.every(function (x) { return x.order && !/0$/.test(x.order) && /^[0-9A-Za-z]+$/.test(x.order); }), 'regenerated keys are clean');
+eq(RM.ensureOrder([{ id: 'y', order: 'V0' }])[0].order, 'V', 'a trailing 0 is stripped from an otherwise good key');
+eq(RM.orderAfterAll([{ order: 'V' }, { order: 'k' }, { order: 'c' }]), RM.orderBetween('k', null), 'orderAfterAll takes the max key');
+eq(RM.sortByOrder([{ id: 'b', order: 'k' }, { id: 'a', order: 'k' }, { id: 'z' }, { id: 'c', order: 'V' }]).map(function (x) { return x.id; }),
+  ['c', 'a', 'b', 'z'], 'sortByOrder: by key, ties by id, keyless last');
+
+// ------------------------------------------------------------- bundle: mergePlanList
+section('bundle: mergePlanList');
+var pA = [RB.newPlanEntry('p-main', 'Main', T0), RB.newPlanEntry('p-ann', 'Ann\'s idea', T1)];
+var pB = [RB.newPlanEntry('p-main', 'Main', T0), RB.newPlanEntry('p-bob', 'Bob\'s idea', T1)];
+eq(RB.mergePlanList(pA, pB).map(function (p) { return p.id; }), ['p-main', 'p-ann', 'p-bob'], 'concurrent creates both survive; sorted by createdAt then id');
+var renamed = RM.clone(pA); renamed[1].name = 'Renamed'; renamed[1].updatedAt = T3;
+var deletedP = RM.clone(pA); deletedP[1].deleted = true; deletedP[1].updatedAt = T2;
+ok(RB.mergePlanList(renamed, deletedP)[1].deleted === true, 'a tombstone beats a later rename');
+ok(RB.mergePlanList(deletedP, renamed)[1].deleted === true, '…in either order');
+var renamed2 = RM.clone(pA); renamed2[1].name = 'Older rename'; renamed2[1].updatedAt = T2;
+eq(RB.mergePlanList(renamed, renamed2)[1].name, 'Renamed', 'LWW rename: newer updatedAt wins');
+eq(RB.mergePlanList(renamed2, renamed)[1].name, 'Renamed', '…in either order');
+
+// ------------------------------------------------------------- deps by id
+section('bundle: meta shard carries every top-level map');
+var sMk = mkState([{ id: 'iMk', num: 1, feature: 'Login flow', epic: 'Login', phaseId: 'p1' }], { epicTypes: { Login: 'epic' }, epicJira: { Login: 'HW-1' }, capTypes: ['Development', 'QA'] });
+var migMk = RB.migrateFromState(sMk, 'ann-1', T0);
+var planMk = migMk.plans[Object.keys(migMk.plans)[0]];
+eq(planMk.meta.fields.epicTypes, { Login: 'epic' }, 'epicTypes (item types & hierarchy) rides in the meta shard');
+eq(planMk.meta.fields.epicJira, { Login: 'HW-1' }, 'epicJira still there');
+var backMk = RM.normalizeState(RB.assembleState(planMk.meta, { items: planMk.items, phases: planMk.phases, team: planMk.team, costs: planMk.costs }));
+eq(backMk.epicTypes, { Login: 'epic' }, 'assembling the plan restores epicTypes');
+eq(planMk.meta.fields.capTypes, ['Development', 'QA'], 'capTypes (capacity types, upstream 2026-09) rides in the meta shard');
+eq(backMk.capTypes, ['Development', 'QA'], 'assembling the plan restores capTypes');
+// every top-level key normalizeState produces is either an entity list or a META_KEY
+var topMk = Object.keys(RM.normalizeState({ meta: { title: 'k' }, items: [], phases: [] }));
+var strayMk = topMk.filter(function (k) { return ['items', 'phases', 'team', 'costs', 'history', 'options', 'optId', 'optName'].indexOf(k) === -1 && RB.META_KEYS.indexOf(k) === -1; });
+eq(strayMk, [], 'no top-level state key falls outside the shards (would be dropped on Convert)');
+
+section('story numbers: settled the same way on every machine');
+// two machines assemble the same shards in a different array order; a story
+// that collides with an older one (uid time) yields, whatever the order
+var uidAt = function (prefix, t) { return prefix + (1790000000000 + t).toString(36) + '-0-zzzzz'; }; // 8 base-36 chars, like RM.uid
+var sOld = uidAt('s', 1000), sNew = uidAt('s', 2000);
+ok(RM.uidTime(sOld) < RM.uidTime(sNew), 'fixture ids carry distinct creation times');
+var mkDoc = function (order) {
+  var f1 = { id: uidAt('i', 100), num: 1, feature: 'one', phaseId: 'p1', stories: [{ id: sOld, num: 7, title: 'older seven', deps: [7, 8] }] };
+  var f2 = { id: uidAt('i', 200), num: 2, feature: 'two', phaseId: 'p1', stories: [{ id: sNew, num: 7, title: 'younger seven' }, { id: uidAt('s', 3000), title: 'blank' }] };
+  return mkState(order === 'a' ? [f1, f2] : [f2, f1]);
+};
+var dA = mkDoc('a'), dB = mkDoc('b');
+var numsOf = function (d) { var m = {}; d.items.forEach(function (it) { it.stories.forEach(function (st) { m[st.id] = st.num; }); }); return m; };
+var pairsOf = function (d) { var m = numsOf(d); return Object.keys(m).sort().map(function (k) { return k + '=' + m[k]; }); };
+eq(pairsOf(dA), pairsOf(dB), 'the same story numbers regardless of array order');
+eq(numsOf(dA)[sOld], 7, 'the older story keeps the contested number');
+ok(numsOf(dA)[sNew] > 2 && numsOf(dA)[sNew] !== 7, 'the younger one is renumbered past the pool');
+var stOld = RM.itemById(dA, uidAt('i', 100)).stories[0];
+eq(stOld.deps, [8], 'a story never depends on itself; other deps stay');
+var allNums = [];
+dA.items.forEach(function (it) { allNums.push(it.num); it.stories.forEach(function (st) { allNums.push(st.num); }); });
+eq(allNums.filter(function (n, i) { return allNums.indexOf(n) === i; }).length, allNums.length, 'features and stories share one pool without collisions');
+
+section('estimate range');
+var sEr = mkState([{ id: 'iEr', num: 1, feature: 'ranged', phaseId: 'p1', startDay: 0, durDays: 10, estLow: 12, estHigh: 6,
+  stories: [{ id: 'sEr', title: 's', estLow: '2', estHigh: 'x' }] }]);
+eq([sEr.meta.estimateMode, sEr.meta.estimateUnit, sEr.meta.estimateBasis, sEr.meta.daysPerUnit], ['single', 'days', 'high', 1], 'documents default to single estimates in working days, basis high');
+var iEr = RM.itemById(sEr, 'iEr');
+eq([iEr.estLow, iEr.estHigh], [6, 12], 'a reversed range is swapped on normalize');
+eq([iEr.stories[0].estLow, iEr.stories[0].estHigh], [2, null], 'story range: numbers parse, junk becomes null');
+ok(!RM.rangeEnabled(sEr), 'single mode reports range off');
+sEr.meta.estimateMode = 'range';
+var rsEr = RM.rangeSpans(sEr, iEr);
+eq([rsEr.low, rsEr.high, rsEr.planned], [6, 12, 10], 'range spans carry low / high / planned working days');
+ok(rsEr.lowEnd < iEr.startDay + iEr.durDays && rsEr.highEnd > iEr.startDay + iEr.durDays, 'low ends inside the bar, high past it');
+eq(RM.basisDays(sEr, iEr), 12, 'basis high → the high estimate');
+sEr.meta.estimateBasis = 'low';
+eq(RM.basisDays(sEr, iEr), 6, 'basis low → the low estimate');
+sEr.meta.estimateUnit = 'hours'; sEr.meta.daysPerUnit = 1 / 8;
+eq(RM.estRange(sEr, iEr).high, 1.5, 'hours convert to working days through daysPerUnit');
+sEr.meta.estimateUnit = 'days'; sEr.meta.daysPerUnit = 1;
+iEr.durDays = 20;
+ok(/EST_RANGE/.test(JSON.stringify(RM.validate(sEr))), 'a planned duration outside the range is noted (EST_RANGE)');
+iEr.durDays = 8;
+ok(!/EST_RANGE/.test(JSON.stringify(RM.validate(sEr))), 'inside the range: no note');
+sEr.meta.estimateMode = 'single'; iEr.durDays = 20;
+ok(!/EST_RANGE/.test(JSON.stringify(RM.validate(sEr))), 'single mode never notes the range');
+var sErN = RM.normalizeState(RM.clone(sEr));
+eq([sErN.meta.estimateMode, RM.itemById(sErN, 'iEr').estLow, RM.itemById(sErN, 'iEr').estHigh], ['single', 6, 12], 'mode and range survive normalize');
+
+section('deps by id');
+var sIds = mkState([
+  { num: 1, feature: 'root' },
+  { num: 2, feature: 'child', deps: [1, 99, 2] }
+]);
+eq(sIds.items[1].deps, [sIds.items[0].id], 'numeric dep → id; unknown and self dropped');
+eq(sIds.items[1].depsText, ['#99'], 'unknown numbered dep lands in depsText');
+var beforeMig = JSON.stringify(sIds.items);
+RM.migrateDepsToIds(sIds);
+eq(JSON.stringify(sIds.items), beforeMig, 'migrate is idempotent');
+eq(JSON.stringify(RM.normalizeState(sIds).items.map(function (i) { return [i.deps, i.depsText]; })),
+  JSON.stringify(sIds.items.map(function (i) { return [i.deps, i.depsText]; })), 'a second normalize changes nothing');
+RM.renumberItem(sIds, sIds.items[0].id, 40);
+eq(RM.resolveDeps(sIds, sIds.items[1]).deps.map(function (x) { return x.num; }), [40], 'renumberItem keeps deps resolving');
+// an id-shaped dep whose target is gone stays put (in a shared bundle its
+// shard may simply not have arrived yet) — validate keeps flagging it, and
+// nothing unreadable lands in depsText
+var sGone = mkState([
+  { id: 'iKeep', num: 1, feature: 'keep' },
+  { id: 'iDep', num: 2, feature: 'dep', deps: ['iKeep', 'iGone-1-zzzzz'] }
+]);
+eq(sGone.items[1].deps, ['iKeep', 'iGone-1-zzzzz'], 'a dangling id dep survives normalize');
+eq(sGone.items[1].depsText, [], 'a dangling id dep does not leak into depsText');
+var sGone2 = RM.normalizeState(JSON.parse(JSON.stringify(sGone)));
+eq(sGone2.items[1].deps, ['iKeep', 'iGone-1-zzzzz'], 'a second normalize (a reload) keeps it');
+ok(JSON.stringify(RM.validate(sGone2)).indexOf('UNKNOWN_DEP') !== -1, 'validate still flags the missing target after a reload');
+// two items with the same num: the older uid keeps it, deps land on the keeper
+var older = 'i' + (1700000000000).toString(36) + '-1-aaaaa';
+var newer = 'i' + (1700000005000).toString(36) + '-1-bbbbb';
+ok(RM.uidTime(older) === 1700000000000 && RM.uidTime(newer) === 1700000005000, 'uidTime decodes the time36 segment');
+eq(RM.uidTime('p1'), 0, 'fixture ids decode to 0');
+ok(RM.uidTime(RM.uid('cost')) > 1700000000000, 'a letter-ending prefix (cost) still decodes');
+var sDup7 = mkState([
+  { id: newer, num: 7, feature: 'newer seven' },
+  { id: older, num: 7, feature: 'older seven' },
+  { id: 'i3', num: 3, feature: 'leaf', deps: [7] }
+]);
+eq(RM.itemById(sDup7, older).num, 7, 'older uidTime keeps 7');
+ok(RM.itemById(sDup7, newer).num !== 7, 'newer duplicate renumbered (' + RM.itemById(sDup7, newer).num + ')');
+eq(RM.resolveDeps(sDup7, RM.itemById(sDup7, 'i3')).deps.map(function (x) { return x.id; }), [older], 'dep on #7 resolves to the keeper');
+ok(!(RM.validate(sDup7).byItem['i3'] || []).some(function (x) { return x.code === 'UNKNOWN_DEP'; }), 'no unknown-dep warning on the resolved dep');
+// shiftDependents and the critical path walk ids
+var sShift = mkState([
+  { num: 1, feature: 'a', startDay: 0, durDays: 5 },
+  { num: 2, feature: 'b', deps: [1], startDay: 5, durDays: 5 }
+]);
+sShift.items[0].durDays = 10;
+eq(RM.shiftDependents(sShift, sShift.items[0].id, 5), 1, 'dependents follow via id deps');
+eq(sShift.items[1].startDay, 10, 'pushed to the dependency end');
+ok(RM.criticalPath(sShift).edges[sShift.items[0].id + '>' + sShift.items[1].id], 'critical path edge keyed by ids');
+
+// ------------------------------------------------------------- order keys
+section('order keys');
+var sOk = mkState([
+  { id: 'iA', num: 1, feature: 'A', phaseId: 'p1' },
+  { id: 'iB', num: 2, feature: 'B', phaseId: 'p1' },
+  { id: 'iC', num: 3, feature: 'C', phaseId: 'p2', stories: [{ id: 'sX', title: 'x' }, { id: 'sY', title: 'y' }] }
+], { team: [{ id: 't1', name: 'Ada', type: 'Development' }], costs: [{ id: 'c1', name: 'Licence', amount: 10 }] });
+ok(sOk.items.every(function (i) { return typeof i.order === 'string' && i.order; }), 'every item gets an order key');
+ok(sOk.items[0].order < sOk.items[1].order && sOk.items[1].order < sOk.items[2].order, 'keys follow the array index');
+ok(sOk.phases.every(function (p) { return p.order; }) && sOk.team[0].order && sOk.costs[0].order, 'phases, team and costs get keys too');
+ok(sOk.items[2].stories[0].order < sOk.items[2].stories[1].order, 'stories get keys in array order');
+var sOk2 = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', order: 'V' }],
+  items: [{ id: 'i2', num: 2, order: 'W' }, { id: 'i1', num: 1, order: 'V' }, { id: 'i3', num: 3 }] });
+eq(sOk2.items.map(function (i) { return i.id; }), ['i1', 'i2', 'i3'], 'load sorts by order; a keyless row keeps its array slot');
+ok(sOk2.items[2].order > 'W', 'the keyless row got a key after its neighbour');
+var sOk3 = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }],
+  items: [{ id: 'i1', num: 1, phaseId: 'p1' }, { id: 'i2', num: 2, phaseId: 'p1', order: '0' }] });
+eq(sOk3.items.map(function (i) { return i.id; }), ['i1', 'i2'], 'a foreign order "0" on load does not invert the row order');
+var keysBefore = {};
+sOk.items.forEach(function (i) { keysBefore[i.id] = i.order; });
+RM.placeItem(sOk, 'iC', 'p1', 'iA');
+eq(sOk.items.map(function (i) { return i.id; }), ['iC', 'iA', 'iB'], 'placeItem moves the row in the array');
+eq(sOk.items[0].phaseId, 'p1', 'placeItem sets the phase');
+ok(sOk.items.filter(function (i) { return keysBefore[i.id] !== i.order; }).length === 1, 'placeItem changes exactly one order key');
+eq(RM.sortByOrder(sOk.items.slice()).map(function (i) { return i.id; }), ['iC', 'iA', 'iB'], 'array order agrees with key order');
+RM.placeItem(sOk, 'iC', 'p1', null);
+eq(sOk.items.map(function (i) { return i.id; }), ['iA', 'iB', 'iC'], 'placeItem with null appends to the phase');
+var pKeys = sOk.phases.map(function (p) { return p.order; });
+RM.movePhaseTo(sOk, 'p2', 'p1');
+eq(sOk.phases.map(function (p) { return p.id; }), ['p2', 'p1'], 'movePhaseTo moves the phase in the array');
+ok(sOk.phases[1].order === pKeys[0] && sOk.phases[0].order < pKeys[0], 'movePhaseTo changes only the moved phase\'s key');
+var sView = mkState([
+  { num: 1, feature: 'late', phaseId: 'p1', startDay: 10, durDays: 5 },
+  { num: 2, feature: 'inserted', phaseId: 'p1' },
+  { num: 3, feature: 'early', phaseId: 'p1', startDay: 0, durDays: 5 }
+]);
+sView.items[1].holdPos = true;
+var viewBefore = JSON.stringify(sView.items);
+var viewed = RM.viewItems(sView, { autoOrder: true });
+eq(JSON.stringify(sView.items), viewBefore, 'viewItems does not mutate state.items (holdPos intact)');
+ok(viewed !== sView.items, 'viewItems returns a new array');
+eq(viewed.map(function (x) { return x.num; }), RM.sortItemsByStart(RM.clone(sView)).items.map(function (x) { return x.num; }), 'autoOrder view matches sortItemsByStart');
+eq(RM.viewItems(sView, {}).map(function (x) { return x.num; }), [1, 2, 3], 'without autoOrder the view is by order key');
+
+// ------------------------------------------------------------- history lines
+section('history lines');
+eq(RM.mergeOps([['a', 'bc', 1, 2]], [['ab', 'c', 3, 4]]).length, 2, 'mergeOps keys by field AND label: ("a","bc") and ("ab","c") do not collide');
+eq(RM.mergeOps([['size', 'S', 'S', 'M']], [['size', 'S', 'M', 'L']]), [['size', 'S', 'S', 'L']], 'mergeOps keeps the first before and the last after for the same op');
+var hl1 = RB.historyLine({ t: 1000, u: 'Ann', label: 'move', n: 2, d: [['timeline', 'x', '1', '2']] }, 'ann-1', 'p-main');
+eq(hl1, { t: 1000, u: 'Ann', userId: 'ann-1', planId: 'p-main', label: 'move', n: 2, d: [['timeline', 'x', '1', '2']] }, 'historyLine carries entry fields plus userId/planId');
+var enc = RB.encodeHistory([hl1, RB.historyLine({ t: 2000, u: 'Ann', label: 'café' }, 'ann-1', 'p-main')]);
+ok(enc.split('\n').length === 3 && enc.indexOf('\\u00e9') !== -1, 'encodeHistory is one ascii JSON line per entry');
+var parsed = RB.parseHistory(enc + '{not json\n' + '[1,2]\n' + '{"t":"nope"}\n');
+eq(parsed.length, 2, 'parseHistory skips malformed lines');
+eq(parsed[1].label, 'café', 'round-trips text');
+var hAnn = [RB.historyLine({ t: 3000, u: 'Ann', label: 'a' }, 'ann-1', 'p'), RB.historyLine({ t: 1000, u: 'Ann', label: 'a' }, 'ann-1', 'p')];
+var hBob = [RB.historyLine({ t: 2000, u: 'Bob', label: 'b' }, 'bob-2', 'p'), RB.historyLine({ t: 3000, u: 'Bob', label: 'b' }, 'bob-2', 'p')];
+var hCid = [RB.historyLine({ t: 500, u: 'Cid', label: 'c' }, 'cid-3', 'p')];
+var mergedH = RB.mergeHistory([hAnn, hBob, hCid]);
+eq(mergedH.map(function (l) { return l.t + l.userId; }), ['500cid-3', '1000ann-1', '2000bob-2', '3000ann-1', '3000bob-2'], '3-user merge sorted by t then userId');
+eq(RB.mergeHistory([hAnn, hBob, hCid], 2).map(function (l) { return l.t; }), [3000, 3000], 'cap keeps the newest');
+eq(RM.HISTORY_COALESCE_MS, 5 * 60 * 1000, 'coalesce window is five minutes');
+eq(RM.mergeOps([['scope', 'A', '1', '2'], ['scope', 'B', 'x', 'y']], [['scope', 'A', '2', '3'], ['scope', 'B', 'y', 'x']]),
+  [['scope', 'A', '1', '3']], 'mergeOps keeps first old / last new and drops a field that came back to its value');
+eq(RM.mergeTl([{ id: 'i1', n: 1, f: 'a', ms: 0, s0: 0, d0: 5, s1: 5, d1: 5 }], [{ id: 'i1', n: 1, f: 'a', ms: 0, s0: 5, d0: 5, s1: 10, d1: 5 }, { id: 'i2', n: 2, f: 'b', ms: 0, s0: 0, d0: 5, s1: 0, d1: 5 }]),
+  [{ id: 'i1', n: 1, f: 'a', ms: 0, s0: 0, d0: 5, s1: 10, d1: 5 }], 'mergeTl keeps first before / last after and drops no-op moves');
+eq(RM.normalizeHistory([{ t: 5, u: 'A', label: 'x' }, { t: 'bad' }, null]).length, 1, 'normalizeHistory drops unusable entries');
+
+// ------------------------------------------------------------- plans
+section('plans');
+var parked1 = mkState([{ num: 1, feature: 'alt one' }]);
+var parked2 = mkState([{ num: 1, feature: 'alt two' }]);
+var sPl = mkState([{ num: 1, feature: 'main', deps: [] }], {
+  optId: 'opt-main', optName: 'Main plan',
+  options: [{ id: 'opt-a', name: 'Option A', doc: parked1 }, { id: 'opt-b', name: 'Option B', doc: parked2 }],
+  history: [{ t: 1000, u: 'Ann', label: 'edit' }, { t: 2000, u: 'Bob', label: 'move' }]
+});
+var split = RM.splitOptions(sPl);
+eq(split.length, 3, 'splitOptions: 2 parked → 3 docs');
+eq(split.map(function (d) { return d.id; }), ['opt-main', 'opt-a', 'opt-b'], 'active first, ids kept');
+eq(split.map(function (d) { return d.name; }), ['Main plan', 'Option A', 'Option B'], 'names kept');
+ok(split.every(function (d) { return d.doc.options === undefined && d.doc.optId === undefined && d.doc.optName === undefined; }), 'no nesting: docs carry no option bookkeeping');
+eq(split[1].doc.items[0].feature, 'alt one', 'parked docs are the parked documents');
+ok(sPl.options.length === 2, 'splitOptions does not mutate its input');
+var mig = RB.migrateFromState(sPl, 'ann-1', T0);
+eq(mig.headway.format, 'headway-bundle-v1', 'bundle format tag');
+ok(/^doc/.test(mig.headway.docId), 'docId minted');
+eq(mig.headway.title, 'T', 'title from meta');
+eq(mig.headway.plans.map(function (p) { return p.id; }), ['opt-main', 'opt-a', 'opt-b'], 'N+1 plan entries');
+eq(Object.keys(mig.plans).sort(), ['opt-a', 'opt-b', 'opt-main'], 'one sub-bundle per plan');
+var mainPlan = mig.plans['opt-main'];
+ok(mainPlan.items.length === 1 && mainPlan.phases.length === 2 && Array.isArray(mainPlan.team) && Array.isArray(mainPlan.costs), 'plan carries items/phases/team/costs envelopes');
+ok(mainPlan.items.concat(mainPlan.phases).every(function (e) { return e.rev === 1 && e.updatedBy === 'ann-1' && e.updatedAt === T0; }), 'envelopes are rev 1');
+eq(mainPlan.meta.id, 'meta', 'meta shard is an envelope');
+eq(mainPlan.meta.fields.meta.title, 'T', 'meta shard carries meta.*');
+ok(Array.isArray(mainPlan.meta.fields.teamTypes) && Array.isArray(mainPlan.meta.fields.wsOrder), 'meta shard carries the top-level lists');
+eq(mig.history['ann-1'].map(function (l) { return l.planId; }), ['opt-main', 'opt-main'], 'legacy history lines carry the active plan id');
+eq(mig.history['ann-1'][1].u, 'Bob', 'original author names kept on the lines');
+// assemble the main plan back from its shards
+var back = RB.assembleState(mainPlan.meta, { items: mainPlan.items, phases: mainPlan.phases, team: mainPlan.team, costs: mainPlan.costs });
+eq(RB.canonicalize(back.items), RB.canonicalize(split[0].doc.items), 'assembleState rebuilds the items exactly');
+eq(RB.canonicalize(back.meta), RB.canonicalize(split[0].doc.meta), '…and meta');
+eq(back.optId, 'opt-default', 'an assembled plan is a standalone document');
+var tombed = RB.assembleState(mainPlan.meta, { items: [RB.tombstone(mainPlan.items[0], 'ann-1', T1)], phases: mainPlan.phases });
+eq(tombed.items.length, 0, 'assembleState skips tombstones');
+var exp = RB.exportableState({ meta: { title: 'x' }, docId: 'doc1', bundle: { dir: '/x' }, planId: 'p', items: [] });
+ok(exp.docId === undefined && exp.bundle === undefined && exp.planId === undefined && exp.meta.title === 'x', 'exportableState strips bundle markers');
+
+// ------------------------------------------------------------- import (add-only merge)
+section('import: add-only merge');
+// template-created documents carry low-entropy phase ids on BOTH sides ('ph1'…); an id
+// match alone must never pair two unrelated phases
+var impHave = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'MVP' }],
+  items: [{ id: 'iHave0001-1-aaaaa', num: 1, feature: 'Existing', phaseId: 'ph1' }] });
+var impWant = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'Later' }],
+  items: [{ id: 'iWant0002-1-bbbbb', num: 7, feature: 'Newcomer', phaseId: 'ph1' }] });
+var impPlan = RM.planImport(impHave, impWant);
+eq(impPlan.phases.add.map(function (p) { return p.name; }), ['Later'], 'a same-id phase with a different name is NOT paired — it is added');
+eq(impPlan.items.add.length, 1, 'the workbook item is an add');
+ok(impPlan.items.add[0].phaseId !== 'ph1', 'and it lands in the NEW phase, not the unrelated ph1 (' + impPlan.items.add[0].phaseId + ')');
+var impSame = RM.planImport(impHave, RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'MVP' }], items: [] }));
+eq(impSame.phases.add.length, 0, 'same id AND same name pairs by name');
+// teamType is not an import field: an unset role is '' (= any role) on both
+// sides, and an explicit role in the workbook must never overwrite the
+// shared roadmap's choice — neither counts as a conflict
+var ttHave = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }], teamTypes: ['Development', 'Data'],
+  items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1' }] });
+var ttWant = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }], teamTypes: ['Data', 'Development'],
+  items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1', teamType: 'Data' }] });
+eq(ttHave.items[0].teamType, '', 'precondition: an unset role normalizes to "" (any role)');
+eq(RM.planImport(ttHave, ttWant).items.conflicts, 0, 'a teamType difference is not counted as a conflict');
+eq(RM.planImport(ttHave, ttWant).items.fill.length, 0, 'and the workbook role is not filled in either');
+// the shared roadmap: three features in two phases, one story, one teammate
+var sImpBase = mkState([
+  { id: 'iA', num: 1, feature: 'Alpha feature', phaseId: 'p1', notes: 'kept notes', enables: '', stories: [{ id: 'sA1', title: 'Story one', description: '' }] },
+  { id: 'iB', num: 2, feature: 'Beta feature', phaseId: 'p1', deps: ['iA'] },
+  { id: 'iC', num: 3, feature: 'Gamma feature', phaseId: 'p2' }
+], { team: [{ id: 'tA', name: 'Ada', type: 'Development' }] });
+// the workbook: same lineage, edited elsewhere — ids kept where the export
+// kept them, one row re-minted (matches by num+title), one by title alone,
+// one brand-new feature in a new phase, a new teammate
+var sImpIn = RM.normalizeState({
+  meta: RM.clone(META),
+  phases: [
+    { id: 'p1', name: 'Alpha', bucket: false },
+    { id: 'pX', name: 'next', bucket: true },     // p2 by name (case-insensitive)
+    { id: 'pNew', name: 'Later', bucket: false }  // new phase
+  ],
+  items: [
+    { id: 'iA', num: 1, feature: 'Alpha feature', phaseId: 'p1', notes: 'CONFLICT notes', enables: 'filled enables',
+      stories: [
+        { id: 'sA1', title: 'Story one', description: '<p>filled body</p>' }, // by id → fill
+        { id: 'sZZ', title: 'Story two' }                                     // new story
+      ] },
+    { id: 'iB2', num: 2, feature: '  beta   FEATURE ', phaseId: 'p1', deps: ['iA'], size: 'M' }, // by num + title → fill size
+    { id: 'iC2', num: 30, feature: 'Gamma feature', phaseId: 'pX' },                            // by title alone
+    { id: 'iD', num: 40, feature: 'Delta feature', phaseId: 'pNew', deps: ['iB2', 'iC2', 'iGhost'], depsText: ['ext'] }, // new feature
+    { id: 'iE', num: 41, feature: 'Epsilon feature', phaseId: 'pNew', deps: ['iD'] }             // dep on another added item
+  ],
+  team: [
+    { id: 'tOther', name: 'ADA', type: 'Development' }, // by name
+    { id: 'tB', name: 'Grace', type: 'Data' }           // new
+  ],
+  teamTypes: ['Development', 'Data']
+});
+var planImp = RM.planImport(sImpBase, sImpIn);
+eq(planImp.summary.matched, 3, 'three features matched (id, num+title, title)');
+eq(planImp.summary.items, 2, 'two features to add');
+eq(planImp.summary.phases, 1, 'one phase to add');
+eq(planImp.summary.team, 1, 'one teammate to add');
+eq(planImp.summary.stories, 1, 'one story to add');
+eq(planImp.summary.fills, 3, 'three fields to fill (enables, size, story body)');
+eq(planImp.summary.conflicts, 1, 'one conflict (notes differs) — reported, never applied');
+eq(planImp.summary.empty, false, 'not empty');
+ok(planImp.items.fill.some(function (f) { return f.id === 'iA' && f.fields.enables === 'filled enables' && !('notes' in f.fields); }), 'fill for iA: enables only, notes left alone');
+ok(planImp.items.fill.some(function (f) { return f.id === 'iB' && f.fields.size === 'M'; }), 'num+title match fills size on iB');
+ok(planImp.stories.fill.some(function (f) { return f.itemId === 'iA' && f.id === 'sA1' && /filled body/.test(f.fields.description); }), 'story matched by id → description filled');
+eq(planImp.stories.add[0].itemId, 'iA', 'new story goes under the matched item');
+eq(planImp.stories.add[0].story.title, 'Story two', '…the new one');
+var addedDelta = planImp.items.add.filter(function (x) { return x.feature === 'Delta feature'; })[0];
+var addedEps = planImp.items.add.filter(function (x) { return x.feature === 'Epsilon feature'; })[0];
+eq(addedDelta.id, 'iD', 'an added feature keeps its id when it is free');
+var nextBase = RM.nextNum(sImpBase); // stories share the number pool, so the next free number counts them too
+eq([addedDelta.num, addedEps.num], [nextBase, nextBase + 1], 'added features take the next nums');
+eq(addedDelta.phaseId, planImp.phases.add[0].id, 'phase mapped to the phase being added');
+eq(planImp.phases.add[0].name, 'Later', '…which is the new phase');
+eq(addedDelta.deps.slice().sort(), ['iB', 'iC'].sort(), 'deps on matched items resolve to the roadmap ids');
+eq(addedDelta.depsText, ['ext'], 'a dangling non-numeric dep id is dropped; existing depsText kept');
+eq(addedEps.deps, [addedDelta.id], 'a dep on another added item follows its new id');
+eq(planImp.team.add[0].name, 'Grace', 'new teammate');
+ok(!sImpBase.items.some(function (x) { return x.feature === 'Delta feature'; }), 'planImport does not touch the state');
+
+var sImpApplied = RM.clone(sImpBase);
+var resImp = RM.applyImport(sImpApplied, planImp);
+eq(resImp, { added: { items: 2, stories: 1, team: 1, phases: 1 }, filled: 3 }, 'applyImport reports the counts');
+eq(sImpApplied.items.length, 5, 'five features now');
+eq(sImpApplied.phases.length, 3, 'three phases');
+eq(RM.itemById(sImpApplied, 'iA').notes, 'kept notes', 'conflicting field untouched');
+eq(RM.itemById(sImpApplied, 'iA').enables, 'filled enables', 'empty field filled');
+eq(RM.itemById(sImpApplied, 'iB').size, 'M', 'size filled on the num+title match');
+eq(RM.itemById(sImpApplied, 'iA').stories.length, 2, 'story added');
+eq(RM.itemById(sImpApplied, 'iA').stories[0].description, '<p>filled body</p>', 'story body filled');
+ok(sImpApplied.items.every(function (x) { return typeof x.order === 'string' && x.order; }), 'added rows carry order keys');
+ok(RM.itemById(sImpApplied, addedDelta.id).order > RM.itemById(sImpApplied, 'iC').order, 'added feature sorts after the existing ones');
+var nums = [];
+sImpApplied.items.forEach(function (x) { nums.push(x.num); (x.stories || []).forEach(function (st) { nums.push(st.num); }); });
+eq(nums.filter(function (n, i) { return nums.indexOf(n) === i; }).length, nums.length, 'nums stay unique across features and stories');
+eq(sImpApplied.items.map(function (x) { return x.num; }).slice(0, 3), [1, 2, 3], 'existing features keep their numbers');
+ok(RM.normalizeState(sImpApplied).items.length === 5, 'the merged document normalizes cleanly');
+
+// idempotent: the same workbook again has nothing to add or fill
+var planImp2 = RM.planImport(sImpApplied, sImpIn);
+eq([planImp2.summary.items, planImp2.summary.stories, planImp2.summary.fills, planImp2.summary.team, planImp2.summary.phases], [0, 0, 0, 0, 0], 'second plan: nothing new');
+eq(planImp2.summary.empty, true, '…and says so');
+eq(planImp2.summary.conflicts, 1, 'the conflict is still reported');
+var sImpTwice = RM.clone(sImpApplied);
+RM.applyImport(sImpTwice, planImp2);
+eq(JSON.stringify(sImpTwice), JSON.stringify(sImpApplied), 'applying the empty plan changes nothing');
+
+// an added row whose id is already taken by a DIFFERENT feature is re-minted
+var sCol = mkState([{ id: 'x1', num: 1, feature: 'One' }]);
+var planCol = RM.planImport(sCol, RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'Alpha' }], items: [
+  { id: 'x1', num: 1, feature: 'One' },
+  { id: 'x1', num: 2, feature: 'Other' }
+] }));
+eq([planCol.summary.matched, planCol.summary.items], [1, 1], 'duplicate incoming id: One matches by num+title, Other is added');
+ok(planCol.items.add[0].id !== 'x1' && /^i/.test(planCol.items.add[0].id), 'the added row gets a fresh id');
+// title-only matching refuses to guess when a title repeats on either side
+var sDup = mkState([
+  { id: 'd1', num: 1, feature: 'Same' },
+  { id: 'd2', num: 2, feature: 'Same' }
+]);
+var planDup = RM.planImport(sDup, mkState([{ id: 'dX', num: 9, feature: 'same' }]));
+eq([planDup.summary.matched, planDup.summary.items], [0, 1], 'ambiguous title → added, not matched');
+// a fill never overwrites a value typed after the preview
+var sLate = RM.clone(sImpBase);
+var planLate = RM.planImport(sLate, sImpIn);
+RM.itemById(sLate, 'iA').enables = 'typed meanwhile';
+var resLate = RM.applyImport(sLate, planLate);
+eq(RM.itemById(sLate, 'iA').enables, 'typed meanwhile', 'a field filled since the preview is left alone');
+eq(resLate.filled, 2, '…and not counted');
+// deps: filled only when the roadmap has none; unresolvable numeric → depsText
+var sDeps = mkState([{ id: 'q1', num: 1, feature: 'One' }, { id: 'q2', num: 2, feature: 'Two' }]);
+var planDeps = RM.planImport(sDeps, mkState([
+  { id: 'q1', num: 1, feature: 'One' },
+  { id: 'q2', num: 2, feature: 'Two', deps: ['q1', '77'] }
+]));
+var fDeps = planDeps.items.fill.filter(function (f) { return f.id === 'q2'; })[0];
+eq(fDeps && fDeps.fields.deps, ['q1'], 'empty dep list filled with the resolvable dep');
+eq(fDeps && fDeps.fields.depsText, ['#77'], 'the unresolvable numbered dep lands in depsText');
 // ------------------------------------------------------------- jira keys
 section('jira keys');
 var sJk = mkState([{ num: 1, feature: 'a', epic: 'Login', jiraKey: ' hw-12 ',

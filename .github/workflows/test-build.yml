@@ -1,0 +1,62 @@
+# Headway Test — side-by-side build of this branch for Windows and macOS.
+#
+# Push a tag like `test-v1.0.13-2` and both installers land on a prerelease of
+# this fork. The Test overlay (src-tauri/tauri.test.conf.json) renames the app,
+# gives it its own identifier and data directory, points the updater at this
+# fork (no signed updater artifacts are produced, so the Update button never
+# installs anything) — the stock Headway install on a tester's machine is left
+# alone.
+name: Headway Test build
+
+on:
+  push:
+    tags: ['test-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin --bundles app,dmg
+          - platform: windows-latest
+            args: --bundles nsis
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Headway Test ${{ github.ref_name }}
+          releaseBody: |
+            Side-by-side test build of the shared-bundle branch (${{ github.sha }}).
+            Installs as "Headway Test" next to stock Headway. Unsigned: Windows shows
+            SmartScreen (More info → Run anyway); macOS needs right-click → Open the
+            first time, or System Settings → Privacy & Security → Open Anyway.
+            Do not use the in-app Update button.
+          releaseDraft: false
+          prerelease: true
+          includeUpdaterJson: false
+          args: ${{ matrix.args }} --config src-tauri/tauri.test.conf.json

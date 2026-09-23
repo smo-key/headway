@@ -32,18 +32,10 @@
     return { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + argbHex } };
   }
 
-  // \u-escape every non-ASCII char: the result is still valid JSON, and
-  // pure-ASCII chunks are immune to the surrogate-pair corruption ExcelJS
-  // exhibits at certain in-cell offsets (splitting mid-escape is fine —
-  // concatenation restores it before JSON.parse).
-  function asciiJson(obj) {
-    return JSON.stringify(obj).replace(/[\u007F-\uFFFF]/g, function (ch) {
-      return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
-    });
-  }
   // The canonical serialized document: the EXACT string exportWorkbook embeds
-  // in the hidden sheet. Two files carry the same document iff these match.
-  RMExcel.stateJsonOf = function (state) { return asciiJson(state); };
+  // in the hidden sheet (RM.asciiJson: ASCII-only, so ExcelJS chunking can't
+  // corrupt it). Two files carry the same document iff these match.
+  RMExcel.stateJsonOf = function (state) { return RM.asciiJson(state); };
 
   // The embedded document JSON of a workbook (the string stateJsonOf wrote),
   // or null for foreign/template files with no valid _RoadmapTool sheet.
@@ -64,8 +56,15 @@
     });
   };
 
-  function depCellText(it) {
-    var parts = it.deps.map(String);
+  // Dependencies column: item numbers (deps are stored by id; the number is
+  // the human label parseDeps reads back) plus free-text deps. A dep whose
+  // item is gone is skipped.
+  function depCellText(state, it) {
+    var parts = [];
+    (it.deps || []).forEach(function (id) {
+      var dep = RM.itemById(state, id);
+      if (dep) parts.push(String(dep.num));
+    });
     (it.depsText || []).forEach(function (t) { parts.push(t); });
     return parts.length ? parts.join(', ') : 'None';
   }
@@ -101,9 +100,12 @@
       noAuto: futureCol + 6,
       // free-form tags: a trailing visible column (the sprint grid owns the
       // columns right after 'Dependency Risk/Size', so it appends here)
-      tags: futureCol + 7
+      tags: futureCol + 7,
+      // range estimate (project unit), see Setup → Sizing → Estimates
+      estLow: futureCol + 8,
+      estHigh: futureCol + 9
     };
-    var lastCol = extraCols.tags;
+    var lastCol = extraCols.estHigh;
 
     var ws = wb.addWorksheet('Roadmap', {
       views: [{ state: 'frozen', xSplit: 4, ySplit: 3 }]
@@ -192,6 +194,8 @@
     r3.getCell(extraCols.status).value = 'Status';
     r3.getCell(extraCols.noAuto).value = 'Excluded from Auto';
     r3.getCell(extraCols.tags).value = 'Tags';
+    r3.getCell(extraCols.estLow).value = 'Est. low';
+    r3.getCell(extraCols.estHigh).value = 'Est. high';
     Object.keys(extraCols).forEach(function (k) {
       r3.getCell(extraCols[k]).font = { bold: true, italic: true };
     });
@@ -241,10 +245,12 @@
         r.getCell(5).value = RM.htmlToText(it.enables || '') || null;
         r.getCell(6).value = RM.htmlToText(it.outOfScope || '') || null;
         r.getCell(7).value = RM.htmlToText(it.notes || '') || null;
-        r.getCell(8).value = depCellText(it);
+        r.getCell(8).value = depCellText(state, it);
         r.getCell(9).value = RM.htmlToText(it.extDeps || '') || null;
         r.getCell(10).value = it.size || null;
         r.getCell(11).value = it.risk || null;
+        r.getCell(extraCols.estLow).value = it.estLow != null ? it.estLow : null;
+        r.getCell(extraCols.estHigh).value = it.estHigh != null ? it.estHigh : null;
         [4, 5, 6, 7, 9].forEach(function (c) {
           r.getCell(c).alignment = { wrapText: true, vertical: 'top' };
         });
@@ -366,7 +372,7 @@
       n += 1;
     }
     hws.getCell('A2').value = n; // chunk count
-    if (ui) hws.getCell('A3').value = asciiJson(ui);
+    if (ui) hws.getCell('A3').value = RM.asciiJson(ui);
     hws.state = 'veryHidden';
 
     return wb.xlsx.writeBuffer().then(function (buf) {
@@ -518,7 +524,13 @@
           // rich fields export flattened — only a real Excel-side edit (vs the
           // flattened text) replaces the stored value, as plain text
           var stored = f[1] === 'feature' ? it[f[1]] : RM.htmlToText(it[f[1]] || '');
-          if (norm(v) !== norm(stored)) it[f[1]] = norm(v);
+          var vN = norm(v), sN = norm(stored);
+          if (vN === sN) return;
+          // not an edit: ExcelJS mangles a surrogate pair at some in-cell offsets (U+FFFD where
+          // the stored text has none) and Excel caps a cell at 32,767 characters
+          var mangled = vN.indexOf('�') !== -1 && sN.indexOf('�') === -1;
+          var capped = sN.length > 32767 && vN === sN.slice(0, vN.length);
+          if (!mangled && !capped) it[f[1]] = vN;
         });
       }
     }
@@ -595,6 +607,8 @@
       else if (t === 'status') extraMap.status = colNumber;
       else if (t === 'excluded from auto') extraMap.noAuto = colNumber;
       else if (t === 'tags') extraMap.tags = colNumber;
+      else if (t === 'est. low' || t === 'est low') extraMap.estLow = colNumber;
+      else if (t === 'est. high' || t === 'est high') extraMap.estHigh = colNumber;
     });
     if (!sprintCols.length) throw new Error('No sprint date columns found in the header row');
     sprintCols.sort(function (a, b) { return a.col - b.col; });
@@ -722,6 +736,8 @@
         durDays: durDays,
         riskDays: riskDays,
         tags: extraMap.tags ? cellText(row.getCell(extraMap.tags)) : '',
+        estLow: extraMap.estLow ? cellText(row.getCell(extraMap.estLow)) : null,
+        estHigh: extraMap.estHigh ? cellText(row.getCell(extraMap.estHigh)) : null,
         locked: statusText === 'locked',
         // a row marked both Locked and Excluded imports as Locked: the two
         // are mutually exclusive and normalizeState keeps the Lock

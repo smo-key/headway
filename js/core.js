@@ -13,6 +13,42 @@
   // Working days per size — measured in weeks: XS 2d · S 1w · M 2w · L 4w · XL 8w.
   RM.DEFAULT_SIZE_DAYS = { XS: 2, S: 5, M: 10, L: 20, XL: 40 };
   RM.LEGACY_SIZE_DAYS = { XS: 2, S: 3, M: 5, L: 10, XL: 20 };
+
+  // ---- range estimates (a project setting, Setup → Sizing → Estimates).
+  // meta.estimateMode 'single' (one planned duration, the default) or 'range'
+  // (estLow / estHigh per feature and story). meta.estimateUnit is what those
+  // numbers are counted in; meta.daysPerUnit converts them to working days.
+  RM.ESTIMATE_UNITS = {
+    days: { name: 'Working days', short: 'd', daysPerUnit: 1 },
+    points: { name: 'Story points', short: 'pts', daysPerUnit: 1 },
+    hours: { name: 'Hours', short: 'h', daysPerUnit: 1 / 8 }
+  };
+  RM.ESTIMATE_UNIT_ORDER = ['days', 'points', 'hours'];
+  RM.estDays = function (v) {
+    var n = v == null || v === '' ? NaN : Number(v);
+    return isFinite(n) && n >= 0 ? Math.round(n * 4) / 4 : null;
+  };
+  RM.rangeEnabled = function (state) {
+    var m = state && state.meta ? state.meta : state;
+    return !!m && m.estimateMode === 'range';
+  };
+  RM.estUnit = function (state) {
+    var m = state && state.meta ? state.meta : state;
+    return RM.ESTIMATE_UNITS[m && m.estimateUnit] ? m.estimateUnit : 'days';
+  };
+  RM.estUnitShort = function (state) { return RM.ESTIMATE_UNITS[RM.estUnit(state)].short; };
+  // estimate value (in the project unit) → working days
+  RM.estToDays = function (state, v) {
+    var m = state && state.meta ? state.meta : state;
+    if (v == null) return null;
+    var per = m && isFinite(m.daysPerUnit) && m.daysPerUnit > 0 ? m.daysPerUnit : RM.ESTIMATE_UNITS[RM.estUnit(state)].daysPerUnit;
+    return Math.max(0, Math.round(v * per * 2) / 2);
+  };
+  RM.fixEstRange = function (x) {
+    if (x && x.estLow != null && x.estHigh != null && x.estLow > x.estHigh) { var t = x.estLow; x.estLow = x.estHigh; x.estHigh = t; }
+    return x;
+  };
+
   RM.SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL'];
 
   // Sizing approaches (meta.sizeScheme). Every option maps to working days so
@@ -425,6 +461,7 @@
   RM.HISTORY_MAX = 300; // version-history entries kept per document
   RM.OPTIONS_MAX = 12;  // parked alternate-plan options kept per document
   RM.HISTORY_OPS_MAX = 120; // change-detail rows kept per history entry
+  RM.HISTORY_COALESCE_MS = 5 * 60 * 1000; // same-label edits by one person inside this window merge into one entry
   RM.ANY_TYPE = '';
 
   // Scoping-view columns. Built-ins map to fixed item fields; custom columns
@@ -865,6 +902,142 @@
     return (prefix || 'x') + Date.now().toString(36) + '-' + uidCounter + '-' + Math.random().toString(36).slice(2, 7);
   };
   RM.clone = function (o) { return JSON.parse(JSON.stringify(o)); };
+
+  // \u-escape every non-ASCII char: the result is still valid JSON, and
+  // pure-ASCII text is immune to the surrogate-pair corruption ExcelJS
+  // exhibits at certain in-cell offsets (splitting mid-escape is fine —
+  // concatenation restores it before JSON.parse). Also the bundle's
+  // canonical form, so shard contents compare as plain ASCII strings.
+  RM.asciiJson = function (obj) {
+    return JSON.stringify(obj).replace(/[\u007F-\uFFFF]/g, function (ch) {
+      return '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4);
+    });
+  };
+  // Creation time (epoch ms) decoded from a uid's time36 segment; 0 for ids
+  // that aren't uids (fixtures like 'p1'). time36 is 8 chars for any date
+  // between 1972 and 2059 and the prefix may end in letters too, so the
+  // segment is anchored from the right instead of by stripping letters.
+  RM.uidTime = function (id) {
+    var m = /^[a-z]+([0-9a-z]{8})-\d+-[0-9a-z]*$/.exec(String(id || ''));
+    return m ? parseInt(m[1], 36) || 0 : 0;
+  };
+
+  // ---- fractional order keys. Entities carry `order`, a base-62 string
+  // compared as a plain string; inserting between two rows mints one new key
+  // and touches nothing else. Keys never end in '0' (a trailing zero would
+  // make two different strings the same fraction).
+  var ORDER_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+  function orderDigit(s, i) {
+    var k = i < s.length ? ORDER_DIGITS.indexOf(s.charAt(i)) : 0;
+    return k < 0 ? 0 : k;
+  }
+  // A usable key: base-62 digits only, trailing '0's dropped (they add
+  // nothing to the fraction). Anything else — a foreign or hand-edited key —
+  // reads as absent and gets regenerated.
+  function orderKey(s) {
+    if (typeof s !== 'string') return '';
+    for (var i = 0; i < s.length; i++) if (ORDER_DIGITS.indexOf(s.charAt(i)) === -1) return '';
+    return s.replace(/0+$/, '');
+  }
+  // A key strictly between a and b (null = open end). No room, or a >= b,
+  // extends a with a suffix, so the result is always > a.
+  RM.orderBetween = function (a, b) {
+    a = orderKey(a);
+    b = orderKey(b);
+    if (!(b > a)) b = null;
+    var n = ORDER_DIGITS.length, p, d;
+    if (b == null) {
+      // append: bump the last non-'z' digit and drop what follows — keys
+      // stay short; only an all-'z' key needs a new digit
+      for (p = a.length - 1; p >= 0 && orderDigit(a, p) === n - 1; p--) { /* skip */ }
+      if (p < 0) return a + 'V';
+      return a.slice(0, p) + ORDER_DIGITS.charAt(orderDigit(a, p) + 1);
+    }
+    if (!a) {
+      // prepend: decrement b's last digit; a would-be trailing '0' becomes '0V'
+      p = b.length - 1;
+      d = orderDigit(b, p);
+      if (d > 1) return b.slice(0, p) + ORDER_DIGITS.charAt(d - 1);
+      if (d === 1) return b.slice(0, p) + '0V';
+    }
+    // between: walk the shared prefix, then bisect the first digit with room
+    var out = '';
+    for (var i = 0; ; i++) {
+      if (b != null && i >= b.length) b = null; // out equals b — nothing fits below it
+      var da = orderDigit(a, i);
+      var db = b == null ? n : orderDigit(b, i);
+      if (db - da > 1) return out + ORDER_DIGITS.charAt(Math.floor((da + db) / 2));
+      out += ORDER_DIGITS.charAt(da);
+      if (db > da) b = null; // already below b from here on
+    }
+  };
+  RM.orderAfterAll = function (list) {
+    var top = null;
+    (list || []).forEach(function (x) {
+      var k = x ? orderKey(x.order) : '';
+      if (k && (top == null || k > top)) top = k;
+    });
+    return RM.orderBetween(top, null);
+  };
+  // in place, stable: by key, then id; entries without a key sink to the end
+  RM.sortByOrder = function (list) {
+    var idx = list.map(function (x, i) { return { x: x, i: i }; });
+    idx.sort(function (p, q) {
+      var a = p.x, b = q.x;
+      var ka = typeof a.order === 'string' && a.order, kb = typeof b.order === 'string' && b.order;
+      if (!ka !== !kb) return ka ? -1 : 1;
+      if (ka && ka !== kb) return ka < kb ? -1 : 1;
+      var ia = String(a.id || ''), ib = String(b.id || '');
+      if (ia !== ib) return ia < ib ? -1 : 1;
+      return p.i - q.i;
+    });
+    for (var k = 0; k < idx.length; k++) list[k] = idx[k].x;
+    return list;
+  };
+  // Give every entry a key, interpolated from its array neighbours (so a
+  // row spliced in by older code keeps its slot); a trailing keyless row
+  // goes after the list's highest key. Then sort by key.
+  RM.ensureOrder = function (list) {
+    var prev = null, top = null;
+    list.forEach(function (x) {
+      // sanitize first: a key that fails orderKey is treated as missing
+      x.order = orderKey(x.order) || null;
+      if (x.order && (top == null || x.order > top)) top = x.order;
+    });
+    for (var i = 0; i < list.length; i++) {
+      var x = list[i];
+      if (typeof x.order !== 'string' || !x.order) {
+        var next = null;
+        for (var j = i + 1; j < list.length && next == null; j++) {
+          if (typeof list[j].order === 'string' && list[j].order) next = list[j].order;
+        }
+        var base = prev;
+        if (next == null || (prev != null && next <= prev)) { base = top; next = null; }
+        x.order = RM.orderBetween(base, next);
+        if (top == null || x.order > top) top = x.order;
+      }
+      prev = x.order;
+    }
+    return RM.sortByOrder(list);
+  };
+  // Move `entry` inside `list` to sit before `beforeId` (null = after the
+  // last entry that inGroup accepts): ONE order key changes, relative to the
+  // new neighbours, and the array mirrors the move for index-based code.
+  function placeInList(list, entry, beforeId, inGroup) {
+    var peers = RM.sortByOrder(list.filter(function (x) { return x !== entry && inGroup(x); }));
+    var at = -1;
+    peers.forEach(function (x, i) { if (x.id === beforeId) at = i; });
+    var before = at === -1 ? null : peers[at];
+    var prev = at === -1 ? peers[peers.length - 1] : peers[at - 1];
+    entry.order = RM.orderBetween(prev ? prev.order : null, before ? before.order : null);
+    var cur = list.indexOf(entry);
+    if (cur !== -1) list.splice(cur, 1); // an entry not yet in the list is simply inserted
+    var pos = list.length;
+    if (before) pos = list.indexOf(before);
+    else for (var i = list.length - 1; i >= 0; i--) if (inGroup(list[i])) { pos = i + 1; break; }
+    list.splice(pos, 0, entry);
+    return entry;
+  }
 
   // ---------------------------------------------------------------- calendar
   RM.parseISO = function (iso) {
@@ -1334,6 +1507,71 @@
     return best;
   };
 
+  // ---------------------------------------------------------------- history
+  // One version-history entry: {t: epoch ms, u: user name, label, n: coalesce
+  // count, d: change details [[category, field label, old, new], …],
+  // x: overflow, tl: schedule moves}; null when unusable.
+  RM.normalizeHistoryEntry = function (h) {
+    if (!h || typeof h !== 'object') return null;
+    var ht = +h.t;
+    if (!isFinite(ht) || ht <= 0) return null;
+    var d = Array.isArray(h.d) ? h.d.slice(0, RM.HISTORY_OPS_MAX).map(function (op) {
+      if (!Array.isArray(op)) return null;
+      return [String(op[0] || '').slice(0, 20), String(op[1] || '').slice(0, 120),
+        String(op[2] == null ? '' : op[2]).slice(0, 400), String(op[3] == null ? '' : op[3]).slice(0, 400)];
+    }).filter(Boolean) : [];
+    var out = {
+      t: Math.round(ht),
+      u: typeof h.u === 'string' ? h.u.slice(0, 80) : '',
+      label: typeof h.label === 'string' ? h.label.slice(0, 140) : '',
+      n: isFinite(+h.n) && +h.n > 1 ? Math.round(+h.n) : 1
+    };
+    if (d.length) out.d = d;
+    if (isFinite(+h.x) && +h.x > 0) out.x = Math.round(+h.x);
+    // tl: machine-readable schedule moves for the visual timeline diff
+    if (Array.isArray(h.tl)) {
+      var tl = h.tl.slice(0, 60).map(function (m2) {
+        if (!m2 || typeof m2 !== 'object') return null;
+        function day(v) { return v == null || !isFinite(+v) ? null : Math.round(+v); }
+        return { id: String(m2.id || ''), n: isFinite(+m2.n) ? +m2.n : 0,
+          f: String(m2.f || '').slice(0, 60), ms: m2.ms ? 1 : 0,
+          s0: day(m2.s0), d0: day(m2.d0), s1: day(m2.s1), d1: day(m2.d1) };
+      }).filter(Boolean);
+      if (tl.length) out.tl = tl;
+    }
+    return out;
+  };
+  RM.normalizeHistory = function (list) {
+    return (Array.isArray(list) ? list : []).map(function (h) { return RM.normalizeHistoryEntry(h); })
+      .filter(Boolean).slice(-RM.HISTORY_MAX);
+  };
+  // merge coalesced ops: same field keeps its FIRST old and LAST new value
+  RM.mergeOps = function (base, add) {
+    var out = base.slice();
+    var at = {};
+    // key by field AND label with a separator, so ('a','bc') never collides with ('ab','c')
+    out.forEach(function (op, i) { at[op[0] + '\u0001' + op[1]] = i; });
+    add.forEach(function (op) {
+      var k = op[0] + '\u0001' + op[1];
+      if (at[k] != null) out[at[k]] = [op[0], op[1], out[at[k]][2], op[3]];
+      else { at[k] = out.length; out.push(op); }
+    });
+    return out.filter(function (op) { return op[2] !== op[3]; });
+  };
+  // coalesced schedule moves keep each item's FIRST before and LAST after
+  RM.mergeTl = function (base, add) {
+    var out = base.slice();
+    var by = {};
+    out.forEach(function (t, i) { by[t.id] = i; });
+    add.forEach(function (t) {
+      if (by[t.id] != null) {
+        var b = out[by[t.id]];
+        out[by[t.id]] = { id: t.id, n: t.n, f: t.f, ms: t.ms, s0: b.s0, d0: b.d0, s1: t.s1, d1: t.d1 };
+      } else { by[t.id] = out.length; out.push(t); }
+    });
+    return out.filter(function (t) { return !(t.s0 === t.s1 && t.d0 === t.d1); });
+  };
+
   // ---------------------------------------------------------------- state
   // an attention flag: null, or { reason } (reason may be empty). Accepts
   // true / a string / an object so hand-written JSON and the AI both work.
@@ -1364,6 +1602,10 @@
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    m.estimateMode = m.estimateMode === 'range' ? 'range' : 'single';
+    m.estimateUnit = RM.ESTIMATE_UNITS[m.estimateUnit] ? m.estimateUnit : 'days';
+    m.estimateBasis = m.estimateBasis === 'low' ? 'low' : 'high';
+    m.daysPerUnit = isFinite(m.daysPerUnit) && m.daysPerUnit > 0 ? +m.daysPerUnit : RM.ESTIMATE_UNITS[m.estimateUnit].daysPerUnit;
     m.planLevel = m.planLevel === 'story' ? 'story' : 'feature';
     // demand model: a unit in flight costs one person (× its multiplier) or
     // its story points spread over its weeks against each person's points
@@ -1649,6 +1891,7 @@
       if (ps != null && pe != null && pe <= ps) pe = ps + 1;
       return {
         id: p.id || RM.uid('p'),
+        order: typeof p.order === 'string' && p.order ? p.order : null,
         name: p.name || 'Phase',
         description: p.description || '',
         bucket: !!p.bucket,
@@ -1662,6 +1905,7 @@
     if (!state.phases.length) {
       state.phases = [{ id: RM.uid('p'), name: 'Phase 1', description: '', bucket: false, collapsed: false }];
     }
+    RM.ensureOrder(state.phases);
 
     var phaseIds = {};
     state.phases.forEach(function (p) { phaseIds[p.id] = true; });
@@ -1674,6 +1918,7 @@
     state.items = (state.items || []).map(function (it) {
       return {
         id: it.id || RM.uid('i'),
+        order: typeof it.order === 'string' && it.order ? it.order : null,
         num: it.num != null ? it.num : null,
         phaseId: phaseIds[it.phaseId] ? it.phaseId : fallbackPhase,
         feature: it.feature || '',
@@ -1684,7 +1929,16 @@
         enables: it.enables || '',
         outOfScope: it.outOfScope || '',
         notes: it.notes || '',
-        deps: (it.deps || []).map(Number).filter(function (n) { return !isNaN(n); }),
+        // item ids (legacy nums migrate below in migrateDepsToIds)
+        deps: (function () {
+          var out = [];
+          (Array.isArray(it.deps) ? it.deps : []).forEach(function (d) {
+            if (d == null || d === '') return;
+            var s = String(d);
+            if (out.indexOf(s) === -1) out.push(s);
+          });
+          return out;
+        })(),
         depsText: it.depsText || [],
         extDeps: it.extDeps || '',
         // milestones are dates, not work: they carry neither size nor priority
@@ -1725,6 +1979,8 @@
           ? Math.max(it.milestone ? 0 : 1, it.durDays) : null,
         // risk t-shirt is planning metadata only — it never pads the schedule
         riskDays: 0,
+        // range estimate, in the project's estimate unit (null = not estimated)
+        estLow: RM.estDays(it.estLow), estHigh: RM.estDays(it.estHigh),
         locked: !!it.locked,
         // excluded from the Auto timeline (and ⚡): the scheduler leaves it
         // where it sits. Mutually exclusive with Lock — a document carrying
@@ -1765,11 +2021,12 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays != null && isFinite(s.durDays) && s.durDays >= 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            order: typeof s.order === 'string' && s.order ? s.order : null,
             // excluded from the Auto timeline (the feature's flag covers it too)
             noAuto: !!s.noAuto,
             flag: RM.normalizeFlag(s.flag),
             // stories are numbered from the same pool as features; a missing
-            // or colliding number is assigned by the unique-num pass below
+            // or colliding number is assigned by RM.dedupeStoryNums below
             num: s.num != null && isFinite(s.num) ? Math.round(s.num) : null,
             // story -> story dependencies by story number (same pool as
             // features); unknown numbers stay so validation can point at them
@@ -1785,6 +2042,7 @@
             type: RM.itemType(state, s.type) ? s.type : RM.defaultTypeFor(state, 'story'),
             jiraKey: RM.jiraKeyOf(s.jiraKey),
             size: s.size || null,
+            estLow: RM.estDays(s.estLow), estHigh: RM.estDays(s.estHigh),
             priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
             // stories rate risk on the document's risk scheme, like features
@@ -1821,43 +2079,19 @@
       };
     });
 
-    state.items.forEach(function (it) { delete it.leadDays; });
-
-    // Unique nums: assign missing, renumber collisions (first occurrence wins —
-    // that matches how deps on the duplicated number already resolved).
-    var seen = {};
-    var maxNum = 0;
     state.items.forEach(function (it) {
-      if (it.num != null && !seen[it.num]) { seen[it.num] = true; maxNum = Math.max(maxNum, it.num); }
+      delete it.leadDays;
+      RM.fixEstRange(it);
+      it.stories.forEach(RM.fixEstRange);
+      RM.ensureOrder(it.stories);
     });
-    state.items.forEach(function (it) {
-      if (it.num == null || seen[it.num] !== true) {
-        maxNum += 1; it.num = maxNum; seen[maxNum] = true;
-      } else {
-        seen[it.num] = 'used';
-      }
-    });
-    // stories draw from the same pool. A story that already holds a number
-    // keeps it (pre-seeded, so a blank story can never take it away and
-    // re-point the deps that name it); blank or colliding ones get numbers
-    // past everything in use, in document order after the features
-    state.items.forEach(function (it) {
-      it.stories.forEach(function (st) {
-        if (st.num != null && !seen[st.num]) { seen[st.num] = true; maxNum = Math.max(maxNum, st.num); }
-      });
-    });
-    state.items.forEach(function (it) {
-      it.stories.forEach(function (st) {
-        if (st.num == null || seen[st.num] !== true) { maxNum += 1; st.num = maxNum; }
-        seen[st.num] = 'used';
-      });
-    });
-    // a story never depends on itself (its number may have just been assigned)
-    state.items.forEach(function (it) {
-      it.stories.forEach(function (st) {
-        st.deps = st.deps.filter(function (n) { return n !== st.num; });
-      });
-    });
+    // canonical array order first, so a num collision resolves the same way
+    // on every machine; then deps (which reference ids) can be resolved.
+    // Stories draw from the same number pool and are settled the same way.
+    RM.ensureOrder(state.items);
+    RM.dedupeNums(state);
+    RM.dedupeStoryNums(state);
+    RM.migrateDepsToIds(state);
 
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
     state.wsColors = state.wsColors && typeof state.wsColors === 'object' ? state.wsColors : {};
@@ -1902,6 +2136,7 @@
         ? Math.round(+c.endDay) : null;
       return {
         id: c.id || RM.uid('cost'),
+        order: typeof c.order === 'string' && c.order ? c.order : null,
         name: typeof c.name === 'string' && c.name ? c.name : 'Cost',
         amount: isFinite(+c.amount) && +c.amount >= 0 ? +c.amount : 0,
         kind: kind,
@@ -1909,38 +2144,9 @@
         endDay: ed
       };
     }).filter(Boolean);
-    // version history: {t: epoch ms, u: user name, label, n: coalesce count,
-    // d: change details [[category, field label, old, new], …], x: overflow}
-    state.history = (Array.isArray(state.history) ? state.history : []).map(function (h) {
-      if (!h || typeof h !== 'object') return null;
-      var ht = +h.t;
-      if (!isFinite(ht) || ht <= 0) return null;
-      var d = Array.isArray(h.d) ? h.d.slice(0, RM.HISTORY_OPS_MAX).map(function (op) {
-        if (!Array.isArray(op)) return null;
-        return [String(op[0] || '').slice(0, 20), String(op[1] || '').slice(0, 120),
-          String(op[2] == null ? '' : op[2]).slice(0, 400), String(op[3] == null ? '' : op[3]).slice(0, 400)];
-      }).filter(Boolean) : [];
-      var out = {
-        t: Math.round(ht),
-        u: typeof h.u === 'string' ? h.u.slice(0, 80) : '',
-        label: typeof h.label === 'string' ? h.label.slice(0, 140) : '',
-        n: isFinite(+h.n) && +h.n > 1 ? Math.round(+h.n) : 1
-      };
-      if (d.length) out.d = d;
-      if (isFinite(+h.x) && +h.x > 0) out.x = Math.round(+h.x);
-      // tl: machine-readable schedule moves for the visual timeline diff
-      if (Array.isArray(h.tl)) {
-        var tl = h.tl.slice(0, 60).map(function (m2) {
-          if (!m2 || typeof m2 !== 'object') return null;
-          function day(v) { return v == null || !isFinite(+v) ? null : Math.round(+v); }
-          return { id: String(m2.id || ''), n: isFinite(+m2.n) ? +m2.n : 0,
-            f: String(m2.f || '').slice(0, 60), ms: m2.ms ? 1 : 0,
-            s0: day(m2.s0), d0: day(m2.d0), s1: day(m2.s1), d1: day(m2.d1) };
-        }).filter(Boolean);
-        if (tl.length) out.tl = tl;
-      }
-      return out;
-    }).filter(Boolean).slice(-RM.HISTORY_MAX);
+    RM.ensureOrder(state.costs);
+    // version history (see normalizeHistoryEntry for the entry shape)
+    state.history = RM.normalizeHistory(state.history);
     // options — alternate plan versions. The active document carries its own
     // option id/name; the others are parked in state.options as full document
     // snapshots. A parked doc never nests options of its own.
@@ -1981,6 +2187,7 @@
       });
       return {
         id: mbr.id || RM.uid('t'),
+        order: typeof mbr.order === 'string' && mbr.order ? mbr.order : null,
         // name is optional — a row can be a yet-unnamed seat ("Senior Dev TBD")
         name: mbr.name != null ? String(mbr.name) : '',
         // free-text role/title (what they do), independent of the rate card
@@ -2004,6 +2211,7 @@
         weekHours: wh
       };
     });
+    RM.ensureOrder(state.team);
     // every referenced work type must exist in the list
     state.items.forEach(function (it) {
       if (it.teamType && state.teamTypes.indexOf(it.teamType) === -1) state.teamTypes.push(it.teamType);
@@ -2110,6 +2318,371 @@
       (it.stories || []).forEach(function (st) { if (st.num > mx) mx = st.num; });
     });
     return mx + 1;
+  };
+
+  // Unique nums: assign missing, renumber collisions. Among duplicates the
+  // OLDEST item (uid creation time, then array position) keeps its number —
+  // the same answer on every machine that assembles the same shards. Safe
+  // because deps reference ids, not nums.
+  RM.dedupeNums = function (state) {
+    var byNum = {}, maxNum = 0, loose = [];
+    state.items.forEach(function (it, i) {
+      if (it.num == null || !isFinite(it.num)) { loose.push(it); return; }
+      (byNum[it.num] = byNum[it.num] || []).push({ it: it, i: i });
+      if (it.num > maxNum) maxNum = it.num;
+    });
+    Object.keys(byNum).forEach(function (n) {
+      var group = byNum[n];
+      if (group.length < 2) return;
+      group.sort(function (p, q) {
+        var tp = RM.uidTime(p.it.id), tq = RM.uidTime(q.it.id);
+        return tp !== tq ? tp - tq : p.i - q.i;
+      });
+      group.slice(1).forEach(function (x) { loose.push(x.it); });
+    });
+    // fresh numbers go out in array order
+    var pos = {};
+    state.items.forEach(function (it, i) { pos[it.id] = i; });
+    loose.sort(function (p, q) { return pos[p.id] - pos[q.id]; });
+    loose.forEach(function (it) { maxNum += 1; it.num = maxNum; });
+    return state;
+  };
+
+  // Story numbers share the feature pool. A story keeps its number unless it
+  // collides with a feature or an older story (uid creation time, then array
+  // position decide — the same answer on every machine). Blank or bumped
+  // stories are numbered past everything in use, in document order. A story
+  // never depends on itself. Idempotent.
+  RM.dedupeStoryNums = function (state) {
+    var taken = {}, maxNum = 0;
+    state.items.forEach(function (it) {
+      if (it.num != null && isFinite(it.num)) { taken[it.num] = true; if (it.num > maxNum) maxNum = it.num; }
+    });
+    var all = [], byNum = {};
+    state.items.forEach(function (it, i) {
+      (it.stories || []).forEach(function (st, j) {
+        var rec = { st: st, i: i, j: j };
+        all.push(rec);
+        if (st.num == null || !isFinite(st.num) || taken[st.num]) { rec.loose = true; return; }
+        (byNum[st.num] = byNum[st.num] || []).push(rec);
+        if (st.num > maxNum) maxNum = st.num;
+      });
+    });
+    Object.keys(byNum).forEach(function (n) {
+      var group = byNum[n];
+      if (group.length < 2) return;
+      group.sort(function (p, q) {
+        var tp = RM.uidTime(p.st.id), tq = RM.uidTime(q.st.id);
+        return tp !== tq ? tp - tq : (p.i !== q.i ? p.i - q.i : p.j - q.j);
+      });
+      group.slice(1).forEach(function (x) { x.loose = true; });
+    });
+    all.forEach(function (rec) { if (rec.loose) { maxNum += 1; rec.st.num = maxNum; } });
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        st.deps = (st.deps || []).filter(function (n) { return n !== st.num; });
+      });
+    });
+    return state;
+  };
+
+  // deps reference item IDS. Older documents and Excel imports carry nums:
+  // one that resolves becomes its id, one that doesn't moves to depsText as
+  // '#n' so the reference stays visible. Self-references drop. Idempotent.
+  RM.migrateDepsToIds = function (state) {
+    state.items.forEach(function (it) {
+      var out = [];
+      if (!Array.isArray(it.depsText)) it.depsText = [];
+      (it.deps || []).forEach(function (d) {
+        var key = String(d);
+        var dep = RM.itemById(state, key);
+        if (!dep && /^\d+$/.test(key)) {
+          // a legacy number: resolve it once; one that points nowhere becomes
+          // free text so the reference is not lost
+          dep = RM.itemByNum(state, Number(key));
+          if (!dep) {
+            if (it.depsText.indexOf('#' + key) === -1) it.depsText.push('#' + key);
+            return;
+          }
+        }
+        // an id whose target is missing stays put — validate flags it, and in
+        // a shared bundle the target's shard may simply not have arrived yet
+        var id = dep ? dep.id : key;
+        if (id !== it.id && out.indexOf(id) === -1) out.push(id);
+      });
+      it.deps = out;
+    });
+    return state;
+  };
+
+  // Move an item into a phase, before another item (null = end of phase).
+  RM.placeItem = function (state, itemId, phaseId, beforeItemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return null;
+    if (RM.phaseIndex(state, phaseId) !== -1) it.phaseId = phaseId;
+    return placeInList(state.items, it, beforeItemId, function (x) { return x.phaseId === it.phaseId; });
+  };
+  RM.movePhaseTo = function (state, phaseId, beforeId) {
+    var i = RM.phaseIndex(state, phaseId);
+    if (i === -1) return null;
+    return placeInList(state.phases, state.phases[i], beforeId, function () { return true; });
+  };
+
+  // The document as N+1 standalone plans — the active one first, then each
+  // parked option — every doc normalized with the option bookkeeping
+  // (optId/optName/options) removed, so nothing nests.
+  RM.splitOptions = function (state) {
+    var s = RM.normalizeState(state);
+    function bare(doc) {
+      var d = RM.normalizeState(doc);
+      delete d.optId; delete d.optName; delete d.options;
+      return d;
+    }
+    var out = [{ id: s.optId, name: s.optName, doc: bare(s) }];
+    s.options.forEach(function (o) { out.push({ id: o.id, name: o.name, doc: bare(o.doc) }); });
+    return out;
+  };
+
+  // ------------------------------------------------------------ import (add-only)
+  // Merge a workbook into an open document without overwriting it: unknown
+  // features, stories, team members and phases are added; a matched row only
+  // gains values for fields it left empty. Where both sides hold a value and
+  // disagree the difference is counted, never applied — the shared roadmap
+  // wins. planImport is pure; applyImport mutates (inside commit).
+  // teamType is not here: an empty role means "any role" (a real value, not
+  // a gap), so a workbook must neither fill it nor count it as a conflict
+  RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'ac', 'size', 'risk'];
+  RM.IMPORT_STORY_FILL_FIELDS = ['description', 'ac'];
+  function normTitle(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
+  // Only an RM.uid-shaped id is identity across documents. Template imports
+  // mint low-entropy ids ('ph1', 'tm1', …) on BOTH sides, so pairing those by
+  // id would marry unrelated rows; they fall through to the name/title key.
+  function strongId(x) {
+    var id = x && x.id != null ? String(x.id) : '';
+    return /^[a-z]+[0-9a-z]{6,}-\d+-[0-9a-z]{4,}$/.test(id) ? id : '';
+  }
+  function emptyVal(v) { return v == null || v === '' || (Array.isArray(v) && !v.length); }
+  function sameVal(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  function sameSet(a, b) { return sameVal((a || []).slice().sort(), (b || []).slice().sort()); }
+  // Pair `want` rows with `have` rows, one key function at a time; a key
+  // pairs only when exactly one unmatched row on EACH side carries it, so a
+  // shared title never guesses. Rows left over are adds.
+  function pairRows(have, want, keyFns) {
+    var pairs = [], hFree = have.slice(), wFree = want.slice();
+    keyFns.forEach(function (keyOf) {
+      var hBy = {}, wBy = {};
+      hFree.forEach(function (h, i) { var k = keyOf(h); if (k) (hBy[k] = hBy[k] || []).push(i); });
+      wFree.forEach(function (w, i) { var k = keyOf(w); if (k) (wBy[k] = wBy[k] || []).push(i); });
+      // rows are tracked by position, not id: a workbook may repeat an id
+      var hTaken = {}, wTaken = {};
+      wFree.forEach(function (w, i) {
+        var k = keyOf(w);
+        if (!k || !hBy[k] || hBy[k].length !== 1 || wBy[k].length !== 1) return;
+        pairs.push({ have: hFree[hBy[k][0]], want: w });
+        hTaken[hBy[k][0]] = true;
+        wTaken[i] = true;
+      });
+      hFree = hFree.filter(function (h, i) { return !hTaken[i]; });
+      wFree = wFree.filter(function (w, i) { return !wTaken[i]; });
+    });
+    return { pairs: pairs, add: wFree };
+  }
+  function byId(x) { return strongId(x); } // import pairing: uid-shaped ids only (see strongId)
+  // fill/conflict pass over one matched pair; returns the fields to fill
+  function fillFields(have, want, fields, counter) {
+    var out = {}, any = false;
+    fields.forEach(function (f) {
+      var hv = have[f], wv = want[f];
+      if (emptyVal(wv)) return;
+      if (emptyVal(hv)) { out[f] = RM.clone(wv); any = true; }
+      else if (!sameVal(hv, wv)) counter.conflicts++;
+    });
+    return any ? out : null;
+  }
+
+  // state, incoming: normalized states. Returns a plan for applyImport plus
+  // the counts the preview shows; nothing in `state` is touched.
+  RM.planImport = function (state, incoming) {
+    var plan = {
+      items: { add: [], fill: [], matched: 0, conflicts: 0 },
+      stories: { add: [], fill: [], matched: 0, conflicts: 0 },
+      team: { add: [] },
+      phases: { add: [] },
+      summary: {}
+    };
+    function used(list) { var m = {}; (list || []).forEach(function (x) { m[x.id] = true; }); return m; }
+    function fresh(id, taken, prefix) { var out = taken[id] ? RM.uid(prefix) : id; taken[out] = true; return out; }
+
+    // phases: id, then name
+    var phaseMap = {}, phaseTaken = used(state.phases);
+    var ph = pairRows(state.phases, incoming.phases, [byId, function (p) { return normTitle(p.name); }]);
+    ph.pairs.forEach(function (pr) { phaseMap[pr.want.id] = pr.have.id; });
+    ph.add.forEach(function (p) {
+      var np = RM.clone(p);
+      np.id = fresh(p.id, phaseTaken, 'p');
+      np.order = null;
+      phaseMap[p.id] = np.id;
+      plan.phases.add.push(np);
+    });
+
+    // team: id, then name (an unnamed seat never matches by name)
+    var teamMap = {}, teamTaken = used(state.team);
+    var tm = pairRows(state.team, incoming.team, [byId, function (m) { return normTitle(m.name); }]);
+    tm.pairs.forEach(function (pr) { teamMap[pr.want.id] = pr.have.id; });
+    tm.add.forEach(function (m) {
+      var nm = RM.clone(m);
+      nm.id = fresh(m.id, teamTaken, 't');
+      nm.order = null;
+      teamMap[m.id] = nm.id;
+      plan.team.add.push(nm);
+    });
+    function mapAssignees(list) {
+      var out = [];
+      (list || []).forEach(function (a) { var to = teamMap[a]; if (to && out.indexOf(to) === -1) out.push(to); });
+      return out;
+    }
+
+    // items: id, then num + title, then a title unique on both sides
+    var idMap = {}, itemTaken = used(state.items);
+    var im = pairRows(state.items, incoming.items, [
+      byId,
+      function (it) { return it.num != null && normTitle(it.feature) ? it.num + '|' + normTitle(it.feature) : ''; },
+      function (it) { return normTitle(it.feature); }
+    ]);
+    im.pairs.forEach(function (pr) { idMap[pr.want.id] = pr.have.id; });
+    var num = RM.nextNum(state), srcOf = {};
+    im.add.forEach(function (it) {
+      var n = RM.clone(it);
+      delete n.holdPos;
+      n.id = fresh(it.id, itemTaken, 'i');
+      n.num = num++;
+      n.order = null;
+      n.phaseId = phaseMap[it.phaseId] || state.phases[0].id;
+      n.assignees = mapAssignees(it.assignees);
+      n.stories.forEach(function (s) { s.assignees = mapAssignees(s.assignees); });
+      if (!idMap[it.id]) idMap[it.id] = n.id; // a matched row with this id keeps the mapping
+      srcOf[n.id] = it;
+      plan.items.add.push(n);
+    });
+    // deps reference incoming ids: a target that is matched or added maps to
+    // its merged id; one already in the roadmap stays; anything else falls to
+    // depsText as '#num' so the reference is not lost
+    function mapDeps(it, selfId) {
+      var deps = [], text = (it.depsText || []).slice();
+      (it.deps || []).forEach(function (d) {
+        var to = idMap[d] || (RM.itemById(state, d) ? d : null);
+        if (to) { if (to !== selfId && deps.indexOf(to) === -1) deps.push(to); return; }
+        var tgt = RM.itemById(incoming, d);
+        var label = tgt && tgt.num != null ? '#' + tgt.num : (/^\d+$/.test(d) ? '#' + d : null);
+        if (label && text.indexOf(label) === -1) text.push(label);
+      });
+      return { deps: deps, depsText: text };
+    }
+    plan.items.add.forEach(function (n) {
+      var md = mapDeps(srcOf[n.id], n.id);
+      n.deps = md.deps;
+      n.depsText = md.depsText;
+    });
+    im.pairs.forEach(function (pr) {
+      plan.items.matched++;
+      var fields = fillFields(pr.have, pr.want, RM.IMPORT_FILL_FIELDS, plan.items) || {};
+      if (normTitle(pr.want.feature) && normTitle(pr.have.feature) !== normTitle(pr.want.feature)) plan.items.conflicts++;
+      // a dependency list is filled only when the roadmap has none at all
+      var md = mapDeps(pr.want, pr.have.id);
+      if (md.deps.length || md.depsText.length) {
+        if (emptyVal(pr.have.deps) && emptyVal(pr.have.depsText)) { fields.deps = md.deps; fields.depsText = md.depsText; }
+        else if (!sameSet(pr.have.deps, md.deps)) plan.items.conflicts++;
+      }
+      if (Object.keys(fields).length) plan.items.fill.push({ id: pr.have.id, fields: fields });
+      // stories inside a matched item: id, then title
+      var sm = pairRows(pr.have.stories, pr.want.stories, [byId, function (s) { return normTitle(s.title); }]);
+      var sTaken = used(pr.have.stories);
+      sm.add.forEach(function (s) {
+        var ns = RM.clone(s);
+        ns.id = fresh(s.id, sTaken, 's');
+        ns.order = null;
+        ns.assignees = mapAssignees(s.assignees);
+        plan.stories.add.push({ itemId: pr.have.id, story: ns });
+      });
+      sm.pairs.forEach(function (sp) {
+        plan.stories.matched++;
+        var sf = fillFields(sp.have, sp.want, RM.IMPORT_STORY_FILL_FIELDS, plan.stories);
+        if (normTitle(sp.want.title) && normTitle(sp.have.title) !== normTitle(sp.want.title)) plan.stories.conflicts++;
+        if (sf) plan.stories.fill.push({ itemId: pr.have.id, id: sp.have.id, fields: sf });
+      });
+    });
+
+    function fieldCount(list) { return list.reduce(function (n, f) { return n + Object.keys(f.fields).length; }, 0); }
+    var s = plan.summary;
+    s.items = plan.items.add.length;
+    s.stories = plan.stories.add.length;
+    s.fills = fieldCount(plan.items.fill) + fieldCount(plan.stories.fill);
+    s.team = plan.team.add.length;
+    s.phases = plan.phases.add.length;
+    s.conflicts = plan.items.conflicts + plan.stories.conflicts;
+    s.matched = plan.items.matched;
+    s.empty = !(s.items || s.stories || s.fills || s.team || s.phases);
+    return plan;
+  };
+
+  // Apply a plan in place. A fill re-checks that the field is STILL empty, so
+  // a value typed since the preview is never overwritten. New rows go after
+  // the last row of their list.
+  RM.applyImport = function (state, plan) {
+    var added = { items: 0, stories: 0, team: 0, phases: 0 }, filled = 0;
+    function addType(t) { if (t && state.teamTypes.indexOf(t) === -1) state.teamTypes.push(t); }
+    function fillInto(obj, fields) {
+      Object.keys(fields).forEach(function (f) {
+        if (!emptyVal(obj[f])) return;
+        obj[f] = RM.clone(fields[f]);
+        filled++;
+      });
+    }
+    (plan.phases.add || []).forEach(function (p) {
+      if (RM.phaseIndex(state, p.id) !== -1) return;
+      var np = RM.clone(p);
+      np.order = RM.orderAfterAll(state.phases);
+      state.phases.push(np);
+      added.phases++;
+    });
+    (plan.team.add || []).forEach(function (m) {
+      if (state.team.some(function (x) { return x.id === m.id; })) return;
+      var nm = RM.clone(m);
+      nm.order = RM.orderAfterAll(state.team);
+      state.team.push(nm);
+      addType(nm.type);
+      added.team++;
+    });
+    (plan.items.add || []).forEach(function (it) {
+      if (RM.itemById(state, it.id)) return;
+      var n = RM.clone(it);
+      n.order = RM.orderAfterAll(state.items);
+      if (RM.phaseIndex(state, n.phaseId) === -1) n.phaseId = state.phases[0].id;
+      RM.ensureOrder(n.stories);
+      state.items.push(n);
+      addType(n.teamType);
+      added.items++;
+    });
+    (plan.stories.add || []).forEach(function (a) {
+      var it = RM.itemById(state, a.itemId);
+      if (!it || it.stories.some(function (s) { return s.id === a.story.id; })) return;
+      var ns = RM.clone(a.story);
+      ns.order = RM.orderAfterAll(it.stories);
+      it.stories.push(ns);
+      added.stories++;
+    });
+    (plan.items.fill || []).forEach(function (f) {
+      var it = RM.itemById(state, f.id);
+      if (!it) return;
+      fillInto(it, f.fields);
+      addType(it.teamType);
+    });
+    (plan.stories.fill || []).forEach(function (f) {
+      var it = RM.itemById(state, f.itemId);
+      var st = it && it.stories.filter(function (s) { return s.id === f.id; })[0];
+      if (st) fillInto(st, f.fields);
+    });
+    return { added: added, filled: filled };
   };
 
   // ------------------------------------------------------------ scope columns
@@ -2224,14 +2797,42 @@
   // Risk is metadata only now — it contributes no working days to the plan.
   RM.riskEffortDays = function () { return 0; };
 
+  // The low / high of a row in WORKING DAYS; a missing side falls back to the
+  // planned duration (working days inside the bar). null when nothing is known.
+  RM.estRange = function (state, x) {
+    var meta = state && state.meta ? state.meta : state;
+    var planned = x.startDay != null && x.durDays != null ? RM.workInSpan(meta, x.startDay, x.durDays)
+      : (x.durDays != null ? x.durDays : null);
+    var low = x.estLow != null ? RM.estToDays(state, x.estLow) : planned;
+    var high = x.estHigh != null ? RM.estToDays(state, x.estHigh) : planned;
+    if (low == null && high == null) return null;
+    return { low: low != null ? low : high, high: high != null ? high : low, planned: planned };
+  };
+  // where the low / high estimate would end on the grid for a scheduled row
+  RM.rangeSpans = function (state, x) {
+    var meta = state && state.meta ? state.meta : state;
+    var r = RM.estRange(state, x);
+    if (!r || x.startDay == null) return null;
+    return { low: r.low, high: r.high, planned: r.planned,
+      lowEnd: x.startDay + RM.stretchSpan(meta, x.startDay, r.low),
+      highEnd: x.startDay + RM.stretchSpan(meta, x.startDay, r.high) };
+  };
+  // working days the planned bar carries under the document's basis
+  RM.basisDays = function (state, x) {
+    var r = RM.estRange(state, x);
+    if (!r) return null;
+    return (state.meta || state).estimateBasis === 'low' ? r.low : r.high;
+  };
+
   // ------------------------------------------------------------ dependencies
-  // Concrete dependency item list from the explicit numbered deps.
-  // ("All above" support was removed — only specifically-defined deps count.)
+  // Concrete dependency item list from the explicit deps (item ids); unknown
+  // = ids with no item, i.e. deleted. ("All above" support was removed —
+  // only specifically-defined deps count.)
   RM.resolveDeps = function (state, it) {
     var out = { deps: [], unknown: [] };
-    it.deps.forEach(function (num) {
-      var dep = RM.itemByNum(state, num);
-      if (!dep) out.unknown.push(num);
+    (it.deps || []).forEach(function (id) {
+      var dep = RM.itemById(state, id);
+      if (!dep) out.unknown.push(id);
       else if (dep.id !== it.id) out.deps.push(dep);
     });
     return out;
@@ -2857,11 +3458,11 @@
 
     state.items.forEach(function (it) {
       var res = RM.resolveDeps(state, it);
-      res.unknown.forEach(function (n) {
-        add(it, 'warn', 'UNKNOWN_DEP', 'Depends on #' + n + ', which does not exist');
+      res.unknown.forEach(function () {
+        add(it, 'warn', 'UNKNOWN_DEP', 'Depends on a deleted item');
       });
       if (cyclic[it.id]) add(it, 'error', 'CYCLE', 'Part of a dependency cycle');
-      if (it.deps.indexOf(it.num) !== -1) add(it, 'warn', 'SELF_DEP', 'Depends on itself (ignored)');
+      if (it.deps.indexOf(it.id) !== -1) add(it, 'warn', 'SELF_DEP', 'Depends on itself (ignored)');
       if (!it.feature.trim()) add(it, 'warn', 'NO_TITLE', 'Feature has no title');
 
       if (!RM.anyTypeAnyLevel(state)) {
@@ -2884,6 +3485,12 @@
       if (scheduled) {
         if (it.startDay < 0 || it.startDay + RM.itemSpan(it) > horizon) {
           add(it, 'warn', 'OFF_TIMELINE', 'Bar extends outside the timeline');
+        }
+        if (RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null)) {
+          var er = RM.estRange(state, it);
+          if (er && er.planned != null && (er.planned < er.low || er.planned > er.high)) {
+            add(it, 'info', 'EST_RANGE', 'Planned duration (' + er.planned + ' working days) is outside its estimate range (' + er.low + '–' + er.high + ')');
+          }
         }
         res.deps.forEach(function (dep) {
           var depEnd = RM.itemEnd(dep);
@@ -2992,7 +3599,7 @@
   };
 
   // Renumber an item. An invalid or already-taken number falls back to the
-  // next available one. Dependency references follow the rename.
+  // next available one. Deps reference ids, so nothing else changes.
   RM.renumberItem = function (state, itemId, wanted) {
     var it = RM.itemById(state, itemId);
     if (!it) return null;
@@ -3007,9 +3614,6 @@
     if (!isFinite(n) || n < 1 || taken[n]) n = RM.nextNum(state);
     if (n === old) return n;
     it.num = n;
-    state.items.forEach(function (x) {
-      x.deps = x.deps.map(function (d) { return d === old ? n : d; });
-    });
     return n;
   };
 
@@ -3604,17 +4208,8 @@
     var t = RM.itemById(state, itemId);
     if (!t || beforeId === itemId) return false;
     var before = beforeId ? RM.itemById(state, beforeId) : null;
-    state.items = state.items.filter(function (x) { return x.id !== itemId; });
-    var at;
-    if (before) {
-      t.phaseId = before.phaseId;
-      at = state.items.indexOf(before);
-    } else {
-      at = -1;
-      state.items.forEach(function (x, i) { if (x.phaseId === t.phaseId) at = i; });
-      at = at === -1 ? state.items.length : at + 1;
-    }
-    state.items.splice(at, 0, t);
+    // one order key changes (placeItem mirrors the move in the array)
+    RM.placeItem(state, itemId, before ? before.phaseId : t.phaseId, before ? before.id : null);
     delete t.holdPos;
     return true;
   };
@@ -3653,15 +4248,8 @@
       // a 0-effort (0-point) story still occupies one working day on the grid
       if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, Math.max(1, RM.storyEffortDays(state, st)));
     }
-    if (beforeStId !== stId) {
-      it.stories = it.stories.filter(function (x) { return x.id !== stId; });
-      var at = it.stories.length;
-      if (beforeStId) {
-        var bi = it.stories.map(function (x) { return x.id; }).indexOf(beforeStId);
-        if (bi !== -1) at = bi;
-      }
-      it.stories.splice(at, 0, st);
-    }
+    // before another story (else last): its order key follows the row
+    if (beforeStId !== stId) placeInList(it.stories, st, beforeStId || null, function () { return true; });
     return true;
   };
 
@@ -3731,8 +4319,8 @@
         if (ch.milestone) return;
         // never start before any scheduled dependency's buffered end
         var floor = 0;
-        ch.deps.forEach(function (n) {
-          var dp = RM.itemByNum(state, n);
+        ch.deps.forEach(function (id) {
+          var dp = RM.itemById(state, id);
           if (dp && dp.startDay != null && !dp.done) floor = Math.max(floor, RM.itemEnd(dp));
         });
         var target;
@@ -3784,6 +4372,21 @@
     state.items.forEach(function (it) { if (out.indexOf(it) === -1) out.push(it); });
     state.items = out;
     return state;
+  };
+
+  // Items in display order, as a NEW array: by start day inside each phase
+  // when auto-order is on (sortItemsByStart's ordering, run on shallow
+  // copies so holdPos flags on the real items are left alone), else by
+  // order key. Never mutates state.items.
+  RM.viewItems = function (state, opts) {
+    if (!(opts && opts.autoOrder)) return RM.sortByOrder(state.items.slice());
+    var byId = {};
+    state.items.forEach(function (it) { byId[it.id] = it; });
+    var tmp = { phases: state.phases, items: state.items.map(function (it) {
+      return { id: it.id, phaseId: it.phaseId, startDay: it.startDay, holdPos: it.holdPos };
+    }) };
+    RM.sortItemsByStart(tmp);
+    return tmp.items.map(function (x) { return byId[x.id]; });
   };
 
   // ------------------------------------------------------------ budgeting
