@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Setup → Scheduling: pick the capacity type each role supplies, and a new How scheduling works card shows supply against demand. Setup → Custom columns: every column shows a delete button (disabled for built-ins).
 - Setup → Budgeting has its own Track budget switch next to the rate card, and Setup → Team lists everyone in one editable table (name, title, role, workstreams, allocation, points, rate and cost); a person's capacity type now follows their role.
 - Setup → Sizing, priority & risk: one grid picks the size, priority and risk scheme for features and for stories; priority and risk levels show as read-only chips, size scales stay editable.
 - Setup is regrouped into Project, Sprints, Organization, Sizing, Budgeting, Team, Scheduling and Custom columns, then Views and your Personal settings (this computer only); Capacity is now Scheduling, and Jira is Jira Integration.

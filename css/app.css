@@ -3529,3 +3529,15 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .su-team .su-tm-cap { color: var(--ink-3); white-space: nowrap; }
 .su-wsdot { font-size: 11px; padding: 1px 6px; margin: 1px; border-radius: 8px; box-shadow: none; }
 .su-wsdot.on { background: var(--blue-soft); color: var(--blue); }
+
+/* Setup → Scheduling: supply vs demand explainer */
+.su-roletypes select { width: 100%; }
+.su-sched-keys, .su-sched-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.su-sched-charts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+.su-sched-bars { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; height: 116px; align-items: end; border-bottom: 1px solid var(--line-2); margin-top: 6px; }
+.su-sched-wk { position: relative; height: 116px; display: flex; flex-direction: column; justify-content: flex-end; }
+.su-sched-wk i { display: block; }
+.su-sched-wk .ok { background: #7FAEDD; }
+.su-sched-wk .over { background: var(--err); }
+.su-sched-wk .sup { position: absolute; left: -2px; right: -2px; height: 2px; background: var(--ink); }
+@media (max-width: 720px) { .su-sched-keys, .su-sched-charts { grid-template-columns: 1fr; } }

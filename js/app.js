@@ -10422,7 +10422,20 @@
         '<div class="su-rows" data-sulist="captype">' + capTypeRows + '</div>' +
         '<div class="p-row" style="margin-top:8px"><input id="suCapTypeAdd" placeholder="New capacity type, e.g. Data"><button id="suCapTypeAddBtn" class="fixed">Add</button></div>' +
         '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it; a person\u2019s says what they supply. Drag the grips to reorder.</div>' +
-        '</section>',
+        '</section>' +
+        '<section class="su-card"><h2>Roles</h2>' +
+        '<div class="m-hint" style="margin:0 0 10px">Each role supplies one capacity type; the people in a role supply it.</div>' +
+        (state.teamTypes.length
+          ? '<table class="hol-table su-roletypes"><thead><tr><th>Role</th><th>Supplies</th><th>People</th></tr></thead><tbody>' +
+            state.teamTypes.map(function (r) {
+              var cur = (state.roleCapTypes || {})[r] || '';
+              return '<tr><td>' + esc(r) + '</td><td><select data-surolect="' + esc(r) + '" aria-label="Capacity type for ' + esc(r) + '">' +
+                '<option value="">None</option>' + RM.capTypesOf(state).map(function (ct) {
+                  return '<option value="' + esc(ct) + '"' + (ct === cur ? ' selected' : '') + '>' + esc(ct) + '</option>';
+                }).join('') + '</select></td><td class="band-count">' + (typeCounts[r] || 0) + '</td></tr>';
+            }).join('') + '</tbody></table>'
+          : '<div class="m-hint">No roles yet \u2014 add them on the Team or Budgeting section.</div>') +
+        '</section>' + schedExplainerHtml(),
       columns: (function () {
         var offNotes = [];
         if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing, priority & risk)');
@@ -10440,7 +10453,9 @@
                 return '<option value="' + sc + '"' + (((scopeColDef(c[0]) || {}).scope || 'both') === sc ? ' selected' : '') + '>' +
                   esc(scopeScopeLabel(sc)) + '</option>';
               }).join('') + '</select>') +
-            (fixed ? '' : '<button data-sucolrm="' + esc(c[0]) + '" class="danger" title="Remove column"><i data-lucide="x"></i></button>') +
+            (fixed
+              ? '<button data-sucoldel="' + esc(c[0]) + '" class="danger" disabled title="Built-in columns can\u2019t be deleted"><i data-lucide="x"></i></button>'
+              : '<button data-sucoldel="' + esc(c[0]) + '" class="danger" title="Delete column"><i data-lucide="x"></i></button>') +
             '</div>';
         }).join('');
         return '<section class="su-card"><h2>Scoping columns</h2>' +
@@ -10554,6 +10569,26 @@
       '<div class="m-hint">Allocation here is each person\u2019s default. You can change allocation and hours week by week later in the Resources panel under the timeline.</div>';
   }
   function renderSetupHost() { renderSetup(); }
+  // Setup → Scheduling: supply and demand, drawn on a small fixed example
+  function schedExplainerHtml() {
+    var SUP = [2, 2, 2, 1.2, 2, 2, 2, 2, 2, 2];
+    function chart(title, note, dem) {
+      return '<div class="su-sched-chart"><div><b>' + title + '</b> <span class="m-hint">' + note + '</span></div><div class="su-sched-bars">' +
+        dem.map(function (d, i) {
+          var fit = Math.min(d, SUP[i]), over = Math.max(0, d - SUP[i]);
+          return '<div class="su-sched-wk"><i class="over" style="height:' + Math.round(over * 36) + 'px"></i><i class="ok" style="height:' + Math.round(fit * 36) + 'px"></i>' +
+            '<i class="sup" style="bottom:' + Math.round(SUP[i] * 36) + 'px"></i></div>';
+        }).join('') + '</div></div>';
+    }
+    return '<section class="su-card"><h2>How scheduling works</h2>' +
+      '<div class="m-hint">Every week, for each capacity type, the work in flight has to fit inside what the people supply.</div>' +
+      '<div class="su-sched-keys">' +
+      '<div><b>Supply</b><div class="m-hint">Each person gives their role\u2019s capacity type their weekly hours, or points per sprint. Holidays and time off lower it.</div></div>' +
+      '<div><b>Demand</b><div class="m-hint">Each ' + esc(lvl(RM.planLevel(state)).toLowerCase()) + ' in flight asks its capacity type for one person \u00d7 its multiplier, or its points spread over its weeks.</div></div>' +
+      '<div><b>Over capacity</b><div class="m-hint">Demand above the line shows red on the timeline. Auto timeline moves work to the first week with room, after its dependencies.</div></div></div>' +
+      '<div class="su-sched-charts">' + chart('As drawn', 'weeks 3\u20134 over capacity', [1, 2, 3, 3, 1, 1, 0, 0, 0, 0]) +
+      chart('After Auto timeline', 'overflow moved to weeks 5\u20137', [1, 2, 2, 1.2, 2, 2, 0.8, 0, 0, 0]) + '</div></section>';
+  }
   // Sizing, priority & risk: one select per field × level
   function schemeSelect(what, level, cur, options) {
     return '<select data-suscheme-kind="' + what + '" data-kind="' + level + '" aria-label="' + esc(lvl(level) + ' ' + what) + '">' +
@@ -10681,6 +10716,12 @@
   });
 
   $('#setupView').addEventListener('change', function (e) {
+    var rs = e.target.closest('[data-surolect]');
+    if (rs) {
+      var rsRole = rs.dataset.surolect, rsT = rs.value;
+      commit('role capacity type', function (s2) { RM.setRoleCapType(s2, rsRole, rsT); });
+      return;
+    }
     if (e.target.matches('[data-subudget]')) {
       var budOn = e.target.checked;
       commit('budgeting', function (s2) { s2.meta.apps.budget = budOn; });
@@ -10974,8 +11015,9 @@
       commit('add column', function (s2) { RM.addScopeCol(s2, colV); });
       return;
     }
-    if (t.dataset.sucolrm) {
-      var rmKey = t.dataset.sucolrm;
+    if (t.dataset.sucoldel) {
+      if (t.disabled || isFixedColKey(t.dataset.sucoldel)) return; // built-ins stay
+      var rmKey = t.dataset.sucoldel;
       commit('remove column', function (s2) { RM.removeScopeCol(s2, rmKey); });
       return;
     }

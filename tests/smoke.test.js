@@ -790,6 +790,35 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(JSON.stringify([state().team, state().teamTypes, state().roleCapTypes, state().meta.apps]) === teamBefore, 'the team edits undo, nine steps');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
+// ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  suTab('scheduling');
+  ok(!doc.querySelector('#setupView [data-sucaprow]'), 'no Tracked checkboxes');
+  ok(!/Tracked/.test(doc.querySelector('#setupView').textContent), 'no "Tracked" copy');
+  const sel = doc.querySelector('#setupView [data-surolect]');
+  ok(!!sel && doc.querySelectorAll('#setupView [data-surolect]').length === state().teamTypes.length, 'each role picks the capacity type it supplies');
+  const role = sel.dataset.surolect, t = state().capTypes[0];
+  sel.value = t; sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().roleCapTypes[role] === t, 'role → type saved');
+  ok(state().team.filter(m => m.type === role).every(m => m.capType === t), 'people follow their role');
+  ok(/How scheduling works/.test(doc.querySelector('#setupView').textContent), 'explainer card present');
+  undo();
+
+  suTab('columns');
+  doc.querySelector('#suColAdd').value = 'Delete me';
+  click(doc.querySelector('#suColAddBtn'));
+  const dels = [...doc.querySelectorAll('#setupView [data-sucoldel]')];
+  ok(dels.length === doc.querySelectorAll('#setupView [data-sulist="scol"] .su-row').length && dels.filter(b => b.disabled).length > 0,
+    'every column shows a delete; built-ins show it disabled');
+  const live = dels.find(b => !b.disabled && state().meta.scopeCols.some(c => c.key === b.dataset.sucoldel && c.label === 'Delete me'));
+  const k = live.dataset.sucoldel;
+  click(live);
+  ok(!state().meta.scopeCols.some(c => c.key === k), 'deleting a custom column removes it');
+  undo(); undo();
+  ok(!state().meta.scopeCols.some(c => c.label === 'Delete me'), 'column add and delete undo');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 ok(doc.querySelectorAll('#resGrid .rrow[data-mid]').length === 1, 'resource row rendered for the member');
 ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every week (default 40h)');
 // spreadsheet edit: click a cell, type 24, commit
@@ -2482,7 +2511,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#suColAddBtn'));
   ok(state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column added from Setup');
   const revKey = state().meta.scopeCols.find(c => c.label === 'Reviewer').key;
-  click(doc.querySelector('#setupView [data-sucolrm="' + revKey + '"]'));
+  click(doc.querySelector('#setupView [data-sucoldel="' + revKey + '"]'));
   ok(!state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column removed from Setup');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
@@ -3944,7 +3973,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   scopeSel.value = 'story';
   scopeSel.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.scopeCols.find(c => c.key === zed.key).scope === 'story', 'Setup scope control commits');
-  click(doc.querySelector('#setupView [data-sucolrm="' + zed.key + '"]'));
+  click(doc.querySelector('#setupView [data-sucoldel="' + zed.key + '"]'));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
