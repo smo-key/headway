@@ -80,7 +80,7 @@
   var plColOrder = null;     // planning left-pane column order
   var plColHide = {};        // planning left-pane columns hidden
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
-  var setupTab = 'timeline';   // active vertical tab in the Setup view
+  var setupTab = 'project';    // active section in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
   var multiSel = null;       // multi-selection: item ids (null = single-select mode; selectedId stays the anchor)
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
@@ -185,7 +185,7 @@
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
-    setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
+    setupTab = normSetupTab(typeof ui.setupTab === 'string' ? ui.setupTab : 'project');
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
     leftCollapsed = ui.leftCollapsed === true;
     prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
@@ -513,7 +513,7 @@
   }
   // { disabled, tip } for the band button, the band menu entry and the dialog
   function autoPhaseStatus(phaseId) {
-    if (!state.meta.capacityEnabled) return { disabled: true, tip: 'Turn on capacity planning in Setup \u2192 Capacity' };
+    if (!state.meta.capacityEnabled) return { disabled: true, tip: 'Turn on scheduling in Setup \u2192 Scheduling' };
     var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
     if (!ph || ph.bucket) return { disabled: true, tip: 'A backlog bucket is never auto-scheduled' };
     if (!autoPhaseDryRun(phaseId).changed) return { disabled: true, tip: 'Everything in this phase is already in place' };
@@ -3635,7 +3635,7 @@
     });
     capRowsHtml.push('<div class="hdr-line hdr-cap">' +
       '<div class="hdr-left"><span class="cap-row-lab" title="' +
-      esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available across every capacity type — Setup → Capacity') + '">' +
+      esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available across every capacity type — Setup → Scheduling') + '">' +
       'Capacity (' + unitWord + ')</span></div>' +
       '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
     // phase lane above the dates: user-pinned dates win, otherwise the span
@@ -4916,7 +4916,7 @@
     } else {
       timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
     }
-    // estimate: the story's own size / priority / risk scales (Setup → Sizing)
+    // estimate: the story's own size / priority / risk scales (Setup → Sizing, priority & risk)
     var stSizeBtns = RM.sizingEnabled(state, 'story')
       ? '<label class="p-lab">Size</label><div class="seg">' +
         ['<button data-stf="size" data-v=""' + (!st.size ? ' class="on"' : '') + ' title="Not set">—</button>']
@@ -6547,7 +6547,7 @@
     items.push({ sep: true });
     items.push({ icon: 'settings-2', label: 'Holiday settings\u2026', fn: function () {
       view = 'setup';
-      setupTab = 'timeline';
+      setupTab = 'project';
       saveLocal();
       render();
     } });
@@ -10144,9 +10144,10 @@
     openBuCellEditor(e.target.closest('.bu-cell'));
   });
 
-  function renderSetup() {
+  // every Setup section's cards, keyed by section; the wizard shows the same
+  // bodies one step at a time
+  function setupBodies() {
     var m = state.meta;
-    var host = $('#setupView');
 
     // sizing approach picker + a fully editable option table (label → days);
     // editing options flips the scheme to Custom
@@ -10342,8 +10343,8 @@
       '<div class="m-hint">Behavior follows the level, not the type: a Bug at the ' + esc(RM.levelLabel(state, 'feature')) + ' level is a bar on the timeline like any other. The Jira name is what sync and the CSV export use.</div>' +
       '</section>';
 
-    // one card set per vertical tab
-    var tabBodies = {
+    // the cards, then grouped into sections below
+    var parts = {
       timeline:
         '<section class="su-card"><h2>Project</h2>' +
         '<label class="p-lab">Name</label>' +
@@ -10354,10 +10355,11 @@
         '<div><label class="p-lab">Start (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">End (last working day)</label><input type="text" readonly class="cal-in" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
         '</div>' +
-        '</section>' +
+        '</section>',
+      sprints:
         '<section class="su-card"><h2>Sprints</h2>' +
         '<div><label class="p-lab">Sprint length</label>' +
-        '<div class="seg">' + [[0, 'Disabled'], [1, '1 week'], [2, '2 weeks'], [4, '4 weeks']].map(function (o) {
+        '<div class="seg">' + [[0, 'Off'], [1, '1 week'], [2, '2 weeks'], [3, '3 weeks'], [4, '4 weeks']].map(function (o) {
           return '<button data-suwps="' + o[0] + '"' + (m.weeksPerSprint === o[0] ? ' class="on"' : '') + '>' + o[1] + '</button>';
         }).join('') + '</div></div>' +
         (RM.sprintsEnabled(m)
@@ -10366,7 +10368,8 @@
             '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
             '</div>'
           : '<div class="m-hint">No sprints — the header shows plain weeks.</div>') +
-        '</section>' +
+        '</section>',
+      holidays:
         '<section class="su-card"><h2>Holidays</h2>' +
         (holRows
           ? '<table class="hol-table"><thead><tr><th>Name</th><th>Dates</th><th></th></tr></thead><tbody>' + holRows + '</tbody></table>'
@@ -10403,7 +10406,8 @@
         '<div class="su-rows" data-sulist="type">' + typeRows + '</div>' +
         '<div class="p-row" style="margin-top:8px"><input id="suTypeAdd" placeholder="New role, e.g. Data Scientist"><button id="suTypeAddBtn" class="fixed">Add</button></div>' +
         '<div class="m-hint">People inherit their role’s hourly cost and bill rate; either can be overridden per person in Budgeting.</div>' +
-        '</section>' +
+        '</section>',
+      workweek:
         '<section class="su-card"><h2>Work week</h2>' +
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Full-time hours per week</label>' +
@@ -10422,8 +10426,8 @@
         '<div class="m-hint">Defines what one full-time person means — the schedule plans across exactly the days checked (1–7); bars keep their calendar dates when this changes.</div>' +
         '</section>',
       capacity:
-        '<section class="su-card"><h2>Capacity planning</h2>' +
-        '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
+        '<section class="su-card"><h2>Schedule against capacity</h2>' +
+        '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Schedule against capacity</label>' +
         '<div class="m-hint">People, their capacity type and weekly hours live in the Resources panel under the timeline. Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Planning level</h2><div class="su-schemes">' +
@@ -10455,10 +10459,10 @@
         '</section>',
       columns: (function () {
         var offNotes = [];
-        if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing)');
-        if (!RM.riskEnabled(state)) offNotes.push('Risk (pick a scheme in Sizing)');
-        if (!RM.priorityEnabled(state) && !RM.priorityEnabled(state, 'story')) offNotes.push('Priority (pick a scheme in Sizing)');
-        if (!state.meta.workstreamsEnabled) offNotes.push('Workstream (enable in Workstreams)');
+        if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing, priority & risk)');
+        if (!RM.riskEnabled(state) && !RM.riskEnabled(state, 'story')) offNotes.push('Risk (pick a scheme in Sizing, priority & risk)');
+        if (!RM.priorityEnabled(state) && !RM.priorityEnabled(state, 'story')) offNotes.push('Priority (pick a scheme in Sizing, priority & risk)');
+        if (!state.meta.workstreamsEnabled) offNotes.push('Workstream (enable in Organization)');
         var colRows = allScopeCols().map(function (c) {
           var fixed = isFixedColKey(c[0]);
           return '<div class="su-row" data-key="' + esc(c[0]) + '">' + grip() +
@@ -10500,14 +10504,20 @@
         '<div class="su-schemes">' + storyPriRows + '</div>' +
         '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
         '</section>',
-      apps:
-        '<section class="su-card"><h2>Apps</h2>' +
-        '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning an app off hides its tab; its data stays in the document.</div>' +
+      views:
+        '<section class="su-card"><h2>Views</h2>' +
+        '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning a view off hides its tab; its data stays in the document.</div>' +
         RM.APPS.map(function (a) {
-          var fixed = a[0] === 'planning' || a[0] === 'sprints'; // Sprinting follows sprints
-          return '<label class="p-check su-app' + (fixed ? ' fixed' : '') + '" title="' + esc(a[3]) + '">' +
-            '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + (fixed ? ' disabled' : '') + '> ' +
-            '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span></label>';
+          // Planning is home; Sprinting and Budgeting follow their sections
+          var fixedPill = a[0] === 'planning' ? 'Always on'
+            : a[0] === 'sprints' ? 'Follows Sprints' : a[0] === 'budget' ? 'Follows Budgeting' : '';
+          var ctl = fixedPill
+            ? '<span class="su-pill">' + fixedPill + '</span>'
+            : '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + '> ';
+          return '<label class="p-check su-app' + (fixedPill ? ' fixed' : '') + '" data-suview="' + a[0] + '" title="' + esc(a[3]) + '">' +
+            (fixedPill ? '' : ctl) +
+            '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span>' +
+            (fixedPill ? ctl : '') + '</label>';
         }).join('') +
         '</section>',
       appearance:
@@ -10525,7 +10535,36 @@
         (window.HeadwayJira ? HeadwayJira.settingsHtml() : '<div class="m-hint">Jira module not loaded.</div>') +
         '</section>'
     };
-    if (!tabBodies[setupTab]) setupTab = 'timeline';
+    return {
+      project: parts.timeline + parts.workweek + parts.holidays,
+      sprints: parts.sprints,
+      org: parts.phases + parts.workstreams,
+      est: parts.sizing,
+      budget: parts.team,
+      team: '<section class="su-card"><h2>People</h2>' +
+        '<div class="m-hint">People, their role and weekly hours live in the Resources panel under the timeline.</div></section>',
+      scheduling: parts.capacity,
+      columns: parts.columns,
+      views: parts.views,
+      appearance: parts.appearance,
+      prefs: parts.prefs,
+      ai: parts.ai,
+      jira: parts.jira
+    };
+  }
+  function sectionBody(key) { return setupBodies()[key] || ''; }
+  // the rail's on/off note for sections that switch a feature
+  function setupPill(key) {
+    if (key === 'sprints') return RM.sprintsEnabled(state.meta) ? state.meta.weeksPerSprint + ' wk' : 'Off';
+    if (key === 'budget') return RM.appEnabled(state, 'budget') ? 'On' : 'Off';
+    if (key === 'scheduling') return state.meta.capacityEnabled ? 'On' : 'Off';
+    return '';
+  }
+
+  function renderSetup() {
+    var host = $('#setupView');
+    setupTab = normSetupTab(setupTab);
+    var tabBodies = setupBodies();
 
     // view-only copies keep the theme and nothing else
     var sections = readOnly
@@ -10535,10 +10574,11 @@
       : SETUP_SECTIONS;
     if (readOnly) setupTab = 'appearance';
     var rail = sections.map(function (sec) {
-      return '<div class="su-rail-hd">' + sec[0] + '</div>' +
+      return (sec[0] ? '<div class="su-rail-hd">' + esc(sec[0]) + '</div>' : '') +
         sec[1].map(function (t) {
+          var pill = setupPill(t[0]);
           return '<button class="su-tab' + (setupTab === t[0] ? ' on' : '') + '" data-sutab="' + t[0] + '">' +
-            '<i data-lucide="' + t[2] + '"></i>' + t[1] + '</button>';
+            '<i data-lucide="' + t[2] + '"></i>' + esc(t[1]) + (pill ? '<span class="su-pill">' + pill + '</span>' : '') + '</button>';
         }).join('');
     }).join('');
 
@@ -10560,23 +10600,33 @@
   }
 
   var SETUP_SECTIONS = [
-    ['Project', [
-      ['timeline', 'Timeline', 'calendar-range'],
-      ['apps', 'Apps', 'layout-grid'],
-      ['phases', 'Phases', 'flag'],
-      ['workstreams', 'Workstreams', 'layers'],
+    ['', [
+      ['project', 'Project', 'calendar-range'],
+      ['sprints', 'Sprints', 'repeat'],
+      ['org', 'Organization', 'layers'],
+      ['est', 'Sizing, priority & risk', 'ruler'],
+      ['budget', 'Budgeting', 'wallet'],
       ['team', 'Team', 'users'],
-      ['capacity', 'Capacity', 'gauge'],
-      ['columns', 'Columns', 'columns-3'],
-      ['sizing', 'Sizing', 'ruler'],
-      ['jira', 'Jira', 'link']
+      ['scheduling', 'Scheduling', 'gauge'],
+      ['columns', 'Custom columns', 'columns-3'],
+      ['views', 'Views', 'layout-grid']
     ]],
-    ['Personal', [
+    ['Personal \u00b7 this computer only', [
       ['appearance', 'Appearance', 'palette'],
       ['prefs', 'Preferences', 'sliders-horizontal'],
-      ['ai', 'AI assistant', 'sparkles']
+      ['ai', 'AI assistant', 'sparkles'],
+      ['jira', 'Jira Integration', 'link']
     ]]
   ];
+  // section keys from before the regroup (UI snapshots, links)
+  var SETUP_KEY_MAP = { timeline: 'project', phases: 'org', workstreams: 'org', sizing: 'est',
+    capacity: 'scheduling', apps: 'views' };
+  function normSetupTab(k) {
+    k = SETUP_KEY_MAP[k] || k;
+    var all = [];
+    SETUP_SECTIONS.forEach(function (sec) { sec[1].forEach(function (t) { all.push(t[0]); }); });
+    return all.indexOf(k) !== -1 ? k : 'project';
+  }
 
   // vertical settings rail; personal controls share the modal's wiring
   $('#setupView').addEventListener('click', function (e) {
@@ -10600,7 +10650,7 @@
     if (t.id === 'suCapEnable') {
       var on = t.checked;
       commit('capacity feature', function (s2) { s2.meta.capacityEnabled = on; });
-      toast('Capacity planning ' + (on ? 'enabled' : 'disabled'));
+      toast('Scheduling ' + (on ? 'on' : 'off'));
       return;
     }
     if (t.id === 'suWsEnable') {
@@ -12184,7 +12234,7 @@
     openModal: openModal,
     closeModal: closeModal,
     openDropdown: openDropdown,
-    openSetup: function (tab) { setupTab = tab; view = 'setup'; saveLocal(); render(); },
+    openSetup: function (tab) { setupTab = normSetupTab(tab); view = 'setup'; saveLocal(); render(); },
     // hooks for the AI assistant (js/ai.js): reads are clones, every write
     // goes through commit() so it lands in undo + Version history (as
     // "<name> · AI")
@@ -12236,7 +12286,7 @@
       },
       setView: function (v) {
         if (['planning', 'scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(v) === -1) return false;
-        if (!RM.appEnabled(state, v)) return false; // switched off in Setup → Apps
+        if (!RM.appEnabled(state, v)) return false; // switched off in Setup → Views
         flushPanelEdit();
         view = v;
         if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
@@ -12546,7 +12596,7 @@
       '<label class="p-check"><input type="checkbox" id="jxFeatures"' + ck(pref.features != null ? pref.features : d.features) + '> Features</label>' +
       '<label class="p-check"><input type="checkbox" id="jxStories"' + ck(pref.stories != null ? pref.stories : d.stories) + '> Stories</label>' +
       '</div><div class="m-hint">Without story rows, a feature\'s stories become a checklist in its description.</div>' +
-      '<div class="m-hint">Issue types follow each item\'s type (Setup → Hierarchy).</div></div>' +
+      '<div class="m-hint">Issue types follow each item\'s type (Setup → Organization).</div></div>' +
       '<div class="m-sec"><label>In Jira</label><div class="m-hint">' +
       'Work navigator → ⋯ → Import issues from CSV (needs the Create work items and Make bulk changes permissions). ' +
       'Choose the date format <b>yyyy-MM-dd</b>. Parent and Blocked By carry the Jira keys entered in Headway; ' +

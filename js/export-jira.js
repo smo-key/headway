@@ -9,7 +9,7 @@
  *  - rows(state, opts) -> [{column: value}] (node-testable)
  *  - csv(state, opts)  -> CSV string (BOM, CRLF, RFC-4180 quoting)
  *  - fileName(state)   -> "<title>-jira.csv"
- * opts: features (bool), stories (bool). Issue types come from each row's type (Setup → Hierarchy).
+ * opts: features (bool), stories (bool). Issue types come from each row's type (Setup → Organization).
  */
 (function (root) {
   'use strict';

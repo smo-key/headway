@@ -3509,3 +3509,7 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .jr-pstate.on { color: var(--ok); }
 .jr-psearch { flex: 1; min-width: 160px; }
 .jr-presults select { max-width: 320px; }
+
+/* Setup rail: on/off note for sections that switch a feature */
+.su-pill { margin-left: auto; font-size: 11px; color: var(--ink-2); background: var(--well); border-radius: 10px; padding: 2px 8px; }
+.su-tab.on .su-pill { color: var(--blue); background: var(--blue-soft); }

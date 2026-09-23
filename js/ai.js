@@ -384,7 +384,7 @@
     },
     {
       name: 'add_items',
-      description: 'Create features in a phase. Each item: feature (title, required), type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, tags (array of strings), stories ([{title, type, description, ac, size, priority, done, tags, deps}]). Stories get their own number from the same pool as features. Returns the new feature numbers.',
+      description: 'Create features in a phase. Each item: feature (title, required), type (Feature, Bug, Task, … — a type label or key from Setup → Organization), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, tags (array of strings), stories ([{title, type, description, ac, size, priority, done, tags, deps}]). Stories get their own number from the same pool as features. Returns the new feature numbers.',
       parameters: {
         type: 'object',
         properties: {
@@ -396,7 +396,7 @@
     },
     {
       name: 'update_items',
-      description: 'Change features or stories. Each update: num (a feature number, or a story number to change that story instead — required), story (story id; the older way to reach a story, still accepted), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), tags (array of strings — replaces the list), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees, tags (array of strings), deps (story numbers this story depends on — stories link to stories, never to features). Use delete: true to remove the target.',
+      description: 'Change features or stories. Each update: num (a feature number, or a story number to change that story instead — required), story (story id; the older way to reach a story, still accepted), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Organization), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), tags (array of strings — replaces the list), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees, tags (array of strings), deps (story numbers this story depends on — stories link to stories, never to features). Use delete: true to remove the target.',
       parameters: {
         type: 'object',
         properties: {
@@ -425,7 +425,7 @@
     },
     {
       name: 'sync_jira',
-      description: 'Sync the project with Jira Cloud (needs the Jira connection on this machine and a project key in Setup → Jira; get_project summary shows jira.canSync). Creates issues for features (and stories, when that option is on) that have no Jira key, updates linked issues from Headway, adds "blocks" links for dependencies, and reads Done state back from Jira. Call with dryRun: true first to see what would change, and confirm with the user before applying. Adjust the mapping (epics, stories) through update_project on meta/jira, and issue types through meta/itemTypes.',
+      description: 'Sync the project with Jira Cloud (needs the Jira connection on this machine and a project key in Setup → Jira Integration; get_project summary shows jira.canSync). Creates issues for features (and stories, when that option is on) that have no Jira key, updates linked issues from Headway, adds "blocks" links for dependencies, and reads Done state back from Jira. Call with dryRun: true first to see what would change, and confirm with the user before applying. Adjust the mapping (epics, stories) through update_project on meta/jira, and issue types through meta/itemTypes.',
       parameters: { type: 'object', properties: { dryRun: { type: 'boolean', description: 'true = preview only' } } }
     },
     {
@@ -746,8 +746,8 @@
     if (!JR) throw new Error('the Jira module is not loaded');
     var creds = JR.loadCreds();
     var cfg = JR.cfgOf(state, creds);
-    if (!creds.site || !creds.email || !creds.token) throw new Error('Jira is not connected on this machine — the user sets site, email and API token in Setup → Jira');
-    if (!cfg.project) throw new Error('no Jira project key is mapped — set it in Setup → Jira (or update_project meta/jira/project)');
+    if (!creds.site || !creds.email || !creds.token) throw new Error('Jira is not connected on this machine — the user sets site, email and API token in Setup → Jira Integration');
+    if (!cfg.project) throw new Error('no Jira project key is mapped — set it in Setup → Jira Integration (or update_project meta/jira/project)');
     var client = JR.client(creds);
     var look = JR.discover ? JR.discover(client, state, cfg) : JR.fetchRemote(client, JR.keysOf(state, cfg)).then(function (remote) { return { remote: remote }; });
     return look.then(function (info) {
@@ -815,7 +815,7 @@
     '- When a request is ambiguous (which phase, which of two similar features), ask instead of picking.',
     '- Check the validation counts a write returns; if it introduced errors, fix or explain them.',
     '- Refer to features as #num. Keep answers short and concrete; use lists sparingly. You may also answer general project-management and planning questions (estimation, sequencing, risk, scope negotiation, sprint planning) from your own knowledge.',
-    '- Jira: when the summary says jira.canSync, sync_jira pushes features (and stories if enabled) to Jira Cloud and reads Done state back; preview with dryRun first and confirm before applying. Jira keys live on features/stories (jiraKey) and epics (epicJira); the mapping (project key, issue types, options) is meta/jira. The connection itself (site, email, token) is set by the user in Setup → Jira.',
+    '- Jira: when the summary says jira.canSync, sync_jira pushes features (and stories if enabled) to Jira Cloud and reads Done state back; preview with dryRun first and confirm before applying. Jira keys live on features/stories (jiraKey) and epics (epicJira); the mapping (project key, issue types, options) is meta/jira. The connection itself (site, email, token) is set by the user in Setup → Jira Integration.',
     '- You cannot open, save or export files, or change AI settings; tell the user how to do it in the UI instead.'
   ].join('\n');
 

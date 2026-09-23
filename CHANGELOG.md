@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Setup is regrouped into Project, Sprints, Organization, Sizing, Budgeting, Team, Scheduling and Custom columns, then Views and your Personal settings (this computer only); Capacity is now Scheduling, and Jira is Jira Integration.
 - Stories rate risk on their own scheme (none, Risk or Confidence), separate from features; older files keep what they had.
 - Sprints can be 3 weeks long, and the Sprinting tab now simply follows whether sprints are on.
 - Scheduling: each role now supplies one capacity type and its people take it; older files pick each role's most common type on open and say how many people moved.

@@ -585,7 +585,7 @@
         return client.get('/rest/api/3/field').then(function (fields) {
           var sf = JR.findStartField(fields, cfg.startField);
           if (sf) { info.startField = sf.id; info.startFieldName = sf.name; }
-          else info.notes.push('No “Start date” field in this Jira site — only due dates will be set. Enter the field id in Setup → Jira if it goes by another name.');
+          else info.notes.push('No “Start date” field in this Jira site — only due dates will be set. Enter the field id in Setup → Jira Integration if it goes by another name.');
         }, function (err) { info.notes.push('Could not list fields: ' + errText(err)); });
       })
       .then(function () {
@@ -1241,7 +1241,7 @@
       ck('jrSprints', d.sprints, 'Place issues in the board’s sprints by start date, creating missing sprints') +
       ck('jrAuto', d.auto, 'Sync automatically every 5 minutes once anything is linked to Jira') +
       '<h2 style="margin-top:18px">Issue types</h2>' +
-      '<div class="m-hint">Each Headway type becomes this Jira issue type. Types are defined in Setup → Hierarchy; the Jira name can be edited here or there.</div>' +
+      '<div class="m-hint">Each Headway type becomes this Jira issue type. Types are defined in Setup → Organization; the Jira name can be edited here or there.</div>' +
       '<table class="hol-table jr-types"><thead><tr><th>Headway type</th><th>Jira issue type</th><th>In project</th></tr></thead><tbody>' +
       RM.itemTypes(st).map(function (t) {
         var r = JR.lastTypes && JR.lastTypes.byKey && JR.lastTypes.byKey[t.key];

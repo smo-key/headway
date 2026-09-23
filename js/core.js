@@ -1406,7 +1406,7 @@
     // selection for the header rows is ignored
     delete m.capRowTypes;
     delete m.capLimit; delete m.capBasis; delete m.capUnit;
-    // apps switch (Setup → Apps): which header tabs this project shows. All
+    // apps switch (Setup → Views): which header tabs this project shows. All
     // on by default; Planning is the home view and can never go off.
     var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
     m.apps = {};

@@ -225,15 +225,19 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   window.HeadwayApp.ai.setView('planning');
 }
 
-// ---------------------------------------------------------------- Setup → Apps (per-project tab switch)
+// ---------------------------------------------------------------- Setup → Views (per-project tab switch)
 {
-  const openApps = () => { click(doc.querySelector('#btnSetup')); click(doc.querySelector('#setupView [data-sutab="apps"]')); };
+  const openApps = () => { click(doc.querySelector('#btnSetup')); click(doc.querySelector('#setupView [data-sutab="views"]')); };
   openApps();
   const tabs = [...doc.querySelectorAll('#setupView .su-tab')].map(b => b.dataset.sutab);
-  ok(tabs.indexOf('apps') === tabs.indexOf('timeline') + 1, 'Apps sits right after Timeline in the Project rail');
+  ok(tabs.indexOf('views') === tabs.indexOf('columns') + 1, 'Views sits right after the project sections');
   const boxes = doc.querySelectorAll('#setupView [data-suapp]');
-  ok(boxes.length === window.RM.APPS.length && [...boxes].every(b => b.checked), 'every app is listed and on by default');
-  ok(doc.querySelector('#setupView [data-suapp="planning"]').disabled, 'Planning cannot be switched off');
+  ok([...boxes].map(b => b.dataset.suapp).join() === 'scoping,prio,reports' && [...boxes].every(b => b.checked),
+    'Scoping, Prioritizing and Reporting have switches, on by default');
+  ok(!doc.querySelector('#setupView [data-suapp="planning"]') && /Always on/.test(doc.querySelector('#setupView [data-suview="planning"]').textContent),
+    'Planning cannot be switched off');
+  ok(/Follows Sprints/.test(doc.querySelector('#setupView [data-suview="sprints"]').textContent) &&
+    /Follows Budgeting/.test(doc.querySelector('#setupView [data-suview="budget"]').textContent), 'Sprinting and Budgeting follow their sections');
   const sc = doc.querySelector('#setupView [data-suapp="scoping"]');
   sc.checked = false; sc.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.apps.scoping === false, 'unchecking Scoping commits to the document');
@@ -242,8 +246,6 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   ok(window.HeadwayApp.ai.setView('scoping') === false && doc.body.dataset.view !== 'scoping', 'the AI cannot open a hidden app');
   window.HeadwayApp.ai.setView('sprints');
   ok(doc.body.dataset.view === 'sprints', 'Sprinting still opens while on');
-  openApps();
-  ok(doc.querySelector('#setupView [data-suapp="sprints"]').disabled, 'Sprinting has no switch: it follows sprints');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   ok(state().meta.apps.scoping === true && !doc.querySelector('#viewTabs [data-view="scoping"]').hidden,
     'undo restores the app and its tab');
@@ -538,14 +540,27 @@ click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 12 &&
-  doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 11 vertical tabs under Project + Personal sections');
-ok(doc.querySelectorAll('#setupView .su-card').length === 2 && !doc.querySelector('#suCapEnable'),
-  'Team tab keeps roles and the work week only');
-ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
+{
+  const keys = [...doc.querySelectorAll('#setupView .su-tab')].map(b => b.dataset.sutab);
+  ok(keys.join() === 'project,sprints,org,est,budget,team,scheduling,columns,views,appearance,prefs,ai,jira',
+    'Setup rail: eight sections, Views, then Personal');
+  ok(doc.querySelectorAll('#setupView .su-rail-hd').length === 1 &&
+    /this computer only/.test(doc.querySelector('#setupView .su-rail-hd').textContent), 'one group heading: Personal');
+  ok([...doc.querySelectorAll('#setupView .su-tab')].every(b => b.querySelector('i[data-lucide]')), 'every rail item has an icon');
+  ok(/Jira Integration/.test(doc.querySelector('#setupView [data-sutab="jira"]').textContent), 'Jira renamed');
+  ok(!!doc.querySelector('#setupView [data-sutab="sprints"] .su-pill'), 'Sprints shows its on/off pill');
+  window.HeadwayApp.openSetup('capacity');
+  ok(doc.querySelector('#setupView [data-sutab="scheduling"]').classList.contains('on'), 'old key capacity opens Scheduling');
+  ok(!/Capacity planning/.test(doc.querySelector('#setupView').textContent), 'no "Capacity planning" copy left');
+  suTab('sprints');
+  ok([...doc.querySelectorAll('#setupView [data-suwps]')].map(b => b.textContent).join() === 'Off,1 week,2 weeks,3 weeks,4 weeks',
+    'Sprints offers Off and 1–4 weeks');
+}
+suTab('budget');
+ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'Budgeting holds the roles and rate card');
 ok(!!doc.querySelector('#setupView [data-rcrate]') && !!doc.querySelector('#setupView [data-rccost]'),
   'rate card inputs per role');
+suTab('project');
 ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data-suwday]').length === 7 &&
   !!doc.querySelector('#suWeekStart'),
   'work week card offers full-time hours, Sun-Sat day checkboxes and a first-day select');
@@ -572,6 +587,7 @@ ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data
 }
 {
   // rate card commit + inheritance shows up in core helpers
+  suTab('budget');
   const rateInp = doc.querySelector('#setupView [data-rcrate]');
   const role0 = rateInp.dataset.rcrate;
   rateInp.value = '175';
@@ -584,6 +600,7 @@ ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data
 }
 {
   // work week commit
+  suTab('project');
   const wh = doc.querySelector('#suWeekHours');
   wh.value = '32';
   wh.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -613,7 +630,7 @@ ok(!!doc.querySelector('#setupView [data-pref="crit"]') &&
   cb2.checked = true;
   cb2.dispatchEvent(new window.Event('change', { bubbles: true }));
 }
-suTab('timeline');
+suTab('project');
 ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline start/end editable in setup');
 {
   const end = doc.querySelector('#suEnd');
@@ -626,7 +643,7 @@ ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline s
 }
 ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.holidayRanges.length &&
   state().meta.holidayRanges.length > 0,
-  'holidays listed as a removable named-range table (Timeline tab)');
+  'holidays listed as a removable named-range table (Project section)');
 {
   // add a named range and remove it again
   const before = state().meta.holidayRanges.length;
@@ -644,16 +661,16 @@ ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.hol
     state().meta.holidays.indexOf('2026-10-07') === -1,
     'removing the range removes its dates');
 }
-suTab('team');
+suTab('budget');
 {
   const inp = doc.querySelector('#suTypeAdd');
   inp.value = 'Data Scientist';
   click(doc.querySelector('#suTypeAddBtn'));
   ok(state().teamTypes.indexOf('Data Scientist') !== -1, 'setup adds a team type');
 }
-suTab('phases');
+suTab('org');
 ok(doc.querySelectorAll('#setupView [data-suphedit]').length === state().phases.length, 'phases listed with edit controls');
-suTab('workstreams');
+suTab('org');
 ok(doc.querySelectorAll('#setupView [data-suwsedit]').length > 0, 'workstreams listed with edit controls');
 
 // picking "Default gray" for a workstream with a seeded default must SURVIVE
@@ -676,7 +693,7 @@ ok(doc.querySelectorAll('#setupView .su-grip').length ===
 // drag the first phase's grip to the bottom of its list (jsdom rects are all
 // zero, so a large clientY resolves to "after the last row")
 {
-  suTab('phases');
+  suTab('org');
   const firstId = state().phases[0].id;
   const grip = doc.querySelector('#setupView [data-sulist="phase"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -688,7 +705,7 @@ ok(doc.querySelectorAll('#setupView .su-grip').length ===
 }
 // same machinery drives team types
 {
-  suTab('team');
+  suTab('budget');
   const firstType = state().teamTypes[0];
   const grip = doc.querySelector('#setupView [data-sulist="type"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -698,7 +715,7 @@ ok(doc.querySelectorAll('#setupView .su-grip').length ===
 }
 // and workstreams (order persists in state.wsOrder)
 {
-  suTab('workstreams');
+  suTab('org');
   const firstWs = doc.querySelector('#setupView [data-sulist="ws"] .su-row').dataset.key;
   const grip = doc.querySelector('#setupView [data-sulist="ws"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -1217,7 +1234,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- epics in Setup
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   ok(doc.querySelectorAll('#setupView [data-suepedit]').length > 0, 'Setup lists epics with edit controls');
   click(doc.querySelector('#setupView [data-suepedit]'));
   ok(!doc.querySelector('#modalHost').hidden, 'epic edit modal opens from Setup');
@@ -1228,7 +1245,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- hierarchy card in Setup
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
   ok(!!card, 'Hierarchy card renders in the Workstreams tab');
   const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
@@ -1263,7 +1280,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- level labels drive prominent UI strings
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const sl = doc.querySelector('input[data-suhlabel="story"]');
   sl.value = 'Task'; sl.dispatchEvent(new window.Event('change', { bubbles: true }));
   const fl = doc.querySelector('input[data-suhlabel="feature"]');
@@ -1279,7 +1296,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   // reset the labels back to their defaults through Setup, since the inputs
   // do not survive the view switch
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const fl2 = doc.querySelector('input[data-suhlabel="feature"]');
   fl2.value = 'Feature'; fl2.dispatchEvent(new window.Event('change', { bubbles: true }));
   const sl2 = doc.querySelector('input[data-suhlabel="story"]');
@@ -1316,7 +1333,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- capacity feature switch (Setup)
 {
   window.eval("document.querySelector('#btnSetup').click()");
-  suTab('capacity'); // the capacity switch lives on the Capacity tab
+  suTab('scheduling'); // the capacity switch lives on the Capacity tab
   const capChk = doc.querySelector('#suCapEnable');
   ok(capChk && capChk.checked, 'Setup capacity checkbox reflects the enabled fixture');
   capChk.checked = false;
@@ -1674,7 +1691,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 // ---------------------------------------------------------------- sizing approaches
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
+  suTab('est');
   ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
   click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
   ok(state().meta.sizeScheme === 'fibonacci' &&
@@ -1699,7 +1716,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // ---------------------------------------------------------------- workstream feature toggle
 {
-  suTab('workstreams');
+  suTab('org');
   const wsChk = doc.querySelector('#suWsEnable');
   ok(!!wsChk && wsChk.checked, 'Workstreams tab offers the feature switch (on by default)');
   wsChk.checked = false;
@@ -1708,7 +1725,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!doc.querySelector('#hdrSprints [data-col="workstream"]'), 'Scoping hides the Workstream column when off');
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const wsChk2 = doc.querySelector('#suWsEnable');
   wsChk2.checked = true;
   wsChk2.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -1859,7 +1876,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // default workstream: setup row + modal rename/recolor
 {
-  suTab('workstreams');
+  suTab('org');
   ok(!!doc.querySelector('#setupView .su-defws'), 'default workstream row leads the Workstreams tab');
   click(doc.querySelector('#setupView [data-sudefws]'));
   ok(!!doc.querySelector('#modalHost #dwsName'), 'default workstream modal opens');
@@ -1874,14 +1891,14 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // risk scheme card: switching to MoSCoW relabels the scoping column
 {
-  suTab('sizing');
+  suTab('est');
   const riskCards = doc.querySelectorAll('#setupView [data-surisk]');
   ok(riskCards.length === 4, 'four risk schemes offered (none, risk, auto, confidence)');
   click(Array.from(riskCards).find(b => b.dataset.surisk === 'confidence'));
   ok(state().meta.riskScheme === 'confidence', 'Confidence scheme commits');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   // scheme none removes the column
-  suTab('sizing');
+  suTab('est');
   click(Array.from(doc.querySelectorAll('#setupView [data-surisk]')).find(b => b.dataset.surisk === 'none'));
   ok(state().meta.riskScheme === 'none', 'scheme none commits');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
@@ -1891,7 +1908,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // role rename from Setup propagates everywhere
 {
-  suTab('team');
+  suTab('budget');
   const nameInp = doc.querySelector('#setupView [data-rcname]');
   ok(!!nameInp, 'role names are editable inputs');
   const oldRole = nameInp.dataset.rcname;
@@ -2288,7 +2305,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 }
 // ------------------------------------------------------- RICE priority scheme
 {
-  suTab('sizing');
+  suTab('est');
   const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
   ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
   ok(doc.querySelectorAll('#setupView [data-supri][data-kind="story"]').length === 3, 'stories offer three (no RICE)');
@@ -2343,7 +2360,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ---------------------------------------------------------------- batch 6: priority, story cells, columns tab
 {
   // priority column: enable MoSCoW in Setup, chip appears in Scoping
-  suTab('sizing');
+  suTab('est');
   const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
   ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
   click(Array.from(priCards).find(b => b.dataset.supri === 'moscow'));
@@ -2864,7 +2881,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 
   // the Workstream column follows the project-wide switch, like every other view
   click(doc.querySelector('#btnSetup'));
-  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  click(doc.querySelector('#setupView [data-sutab="org"]'));
   const plWsSw = doc.querySelector('#suWsEnable');
   plWsSw.checked = false;
   plWsSw.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -2872,7 +2889,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!doc.querySelector('#hlCols i[data-plcol="ws"]') && !doc.querySelector('#rows .row.item .r-ws-col'),
     'Workstreams off hides the column even though it is switched on');
   click(doc.querySelector('#btnSetup'));
-  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  click(doc.querySelector('#setupView [data-sutab="org"]'));
   const plWsSw2 = doc.querySelector('#suWsEnable');
   plWsSw2.checked = true;
   plWsSw2.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -4039,7 +4056,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
   // Setup → Sizing: "Roll up from stories" leads the feature list, never the story list
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
+  suTab('est');
   const featSchemes = [...doc.querySelectorAll('#setupView [data-suscheme]:not([data-kind="story"])')].map(b => b.dataset.suscheme);
   ok(featSchemes[0] === 'rollup' && !doc.querySelector('#setupView [data-suscheme="rollup"][data-kind="story"]'),
     'Roll up from stories is the first feature option and absent for stories');
@@ -4066,7 +4083,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   window.__headway.selectItem(hostF.id);
   ok(!!doc.querySelector('#panel .p-rollup') && !doc.querySelector('#panel [data-f="size"]'), 'the panel shows the rolled-up total instead of size buttons');
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
+  suTab('est');
   click(doc.querySelector('#setupView [data-suscheme="tshirt"]:not([data-kind="story"])'));
   ok(state().meta.sizeScheme === 'tshirt' && state().items.every(i => !i.size), 'back on T-shirt sizes the derived sizes are cleared');
   undo(); undo(); undo();
@@ -4081,7 +4098,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(state().capTypes.slice(0, 3).join(',') === 'Development,Design,QA', 'a document starts with the default capacity types');
   // Setup → Capacity: capacity types list (rename / add / remove / reorder) + planning level + capacity row options
   click(doc.querySelector('#btnSetup'));
-  suTab('capacity');
+  suTab('scheduling');
   ok(doc.querySelectorAll('#setupView [data-sulist="captype"] .su-row').length === state().capTypes.length &&
     !!doc.querySelector('#setupView [data-sulist="captype"] .su-grip'), 'the Capacity tab lists the capacity types with reorder grips');
   doc.querySelector('#suCapTypeAdd').value = 'Research';
@@ -4254,8 +4271,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const bucketPhases = window.HeadwayApp.ai.state().phases.filter((p) => p.bucket);
     ok(realPhases.every((p) => !!zapOf(p.id)), 'every real phase band has an Auto timeline button');
     ok(bucketPhases.every((p) => !zapOf(p.id)), 'a backlog bucket has none');
-    ok(realPhases.every((p) => zapOf(p.id).disabled && /capacity planning/.test(zapOf(p.id).getAttribute('title') || zapOf(p.id).dataset.tip || '')),
-      'with capacity planning off every button is disabled and says why');
+    ok(realPhases.every((p) => zapOf(p.id).disabled && /scheduling/.test(zapOf(p.id).getAttribute('title') || zapOf(p.id).dataset.tip || '')),
+      'with scheduling off every button is disabled and says why');
     ok(!!zapOf(realPhases[0].id).querySelector('[data-lucide="zap"], svg'), 'the button carries the zap icon');
     const ph0 = realPhases[0].id;
     let lockedId = null, lockedStart = null;
@@ -4706,7 +4723,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.RM.sizeOrderOf(state()).join(',') !== window.RM.sizeOrderOf(state(), 'story').join(','),
     'the story scale is separate from the feature scale');
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
+  suTab('est');
   ok(!!doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'), 'Setup → Sizing offers a story scale picker');
   click(doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'));
   ok(state().meta.storySizeScheme === 'tshirt' && state().meta.sizeScheme !== 'none' &&
@@ -4778,7 +4795,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#setupView [data-pref-snap="story:sprint"]'));
 
   // holidays edit in place
-  suTab('timeline');
+  suTab('project');
   {
     const nm = doc.querySelector('#setupView [data-suholname="0"]');
     ok(!!nm && !!doc.querySelector('#setupView [data-suholstart="0"]'), 'holiday rows expose name + date inputs');
@@ -4810,7 +4827,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const usedRole = state().teamTypes[0];
     ok(state().items.find(i => i.id === roleRow.dataset.id).teamType === usedRole, 'a feature now carries a role');
     click(doc.querySelector('#btnSetup'));
-    suTab('team');
+    suTab('budget');
     click(doc.querySelector('#setupView [data-suttrm="' + usedRole + '"]'));
     ok(state().teamTypes.indexOf(usedRole) === -1, 'an in-use role can be removed');
     ok(!state().team.some(m => m.type === usedRole) && !state().items.some(i => i.teamType === usedRole),
@@ -4922,7 +4939,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(window.RM.colorMode() === 'workstream', 'the prefs segment switches back');
     // Hierarchy card: a color input per type commits the type color
     click(doc.querySelector('#btnSetup'));
-    click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+    click(doc.querySelector('#setupView [data-sutab="org"]'));
     const cin = doc.querySelector('#setupView input[type="color"][data-suhtcolor="bug"]');
     ok(!!cin, 'Hierarchy types table has a color input per type');
     cin.value = '#112233';
