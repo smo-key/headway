@@ -10149,24 +10149,8 @@
   function setupBodies() {
     var m = state.meta;
 
-    // sizing approach picker + a fully editable option table (label → days);
-    // editing options flips the scheme to Custom
-    // features and stories each pick a scale; the story controls carry
-    // data-kind="story" and share the feature handlers
-    function schemeRowsFor(kind) {
-      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
-      var cur = m[RM.sizeKeys(kind).scheme];
-      return RM.sizeSchemesFor(kind).map(function (k) {
-        var sch = RM.SIZE_SCHEMES[k];
-        return '<button class="su-scheme' + (cur === k ? ' on' : '') + '" data-suscheme="' + k + '"' + kAttr + '>' +
-          '<span class="su-scheme-check"><i data-lucide="' + (cur === k ? 'circle-check' : 'circle') + '"></i></span>' +
-          '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
-          '</button>';
-      }).join('') + (cur === 'custom'
-        ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
-          '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
-        : '');
-    }
+    // the size option tables stay editable (label → days); editing options
+    // flips the scheme to Custom. Story controls carry data-kind="story".
     function sizeOptRowsFor(kind) {
       var kAttr = kind === 'story' ? ' data-kind="story"' : '';
       var days = m[RM.sizeKeys(kind).days] || {};
@@ -10199,32 +10183,19 @@
           '<div class="m-hint">Sizing is off — set durations directly ' + (kind === 'story' ? 'on stories' : 'on items') + ' when you need them.</div>' +
           '</section>';
     }
-    var schemeRows = schemeRowsFor('feature');
-    var storySchemeRows = schemeRowsFor('story');
-    var storySizingCards = sizingCardsFor('story');
-    var riskRows = RM.RISK_SCHEME_ORDER.map(function (k) {
-      var rs = RM.RISK_SCHEMES[k];
-      var on = RM.riskSchemeOf(state) === k;
-      return '<button class="su-scheme' + (on ? ' on' : '') + '" data-surisk="' + k + '">' +
-        '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-        '<span class="su-scheme-main"><b>' + esc(rs.name) + '</b><span>' + esc(rs.desc) + '</span></span>' +
-        '</button>';
-    }).join('');
-    function priRowsFor(kind) {
-      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
-      var list = kind === 'story' ? RM.STORY_PRIORITY_SCHEME_ORDER : RM.PRIORITY_SCHEME_ORDER;
-      return list.map(function (k) {
-        var ps = RM.PRIORITY_SCHEMES[k];
-        var on = RM.prioritySchemeOf(state, kind) === k;
-        return '<button class="su-scheme' + (on ? ' on' : '') + '" data-supri="' + k + '"' + kAttr + '>' +
-          '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-          '<span class="su-scheme-main"><b>' + esc(ps.name) + '</b><span>' + esc(ps.desc) + '</span></span>' +
-          '</button>';
-      }).join('');
+    // priority and risk ladders are fixed: shown as chips, not edited
+    function ladderCardFor(kind) {
+      function line(label, sch, order, labelFn) {
+        return '<div class="su-ladder"><label class="p-lab">' + esc(label) + '</label>' +
+          (order.length ? ladderChips(order, labelFn) : '<div class="m-hint">' + esc(sch.desc) + '</div>') + '</div>';
+      }
+      return '<section class="su-card"><h2>' + esc(lvl(kind) + ' priority & risk') + '</h2>' +
+        line('Priority', RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state, kind)], RM.priorityOrderOf(state, kind),
+          function (v) { return priorityValueLabel(v, kind); }) +
+        line(RM.riskColLabel(state, kind), RM.RISK_SCHEMES[RM.riskSchemeOf(state, kind)], RM.riskOrderOf(state, kind),
+          function (v) { return riskValueLabel(v, kind); }) +
+        '</section>';
     }
-    var priRows = priRowsFor('feature');
-    var storyPriRows = priRowsFor('story');
-    var sizingCards = sizingCardsFor('feature');
 
     // every range edits in place: name is free text, the dates open the calendar
     var holRows = (m.holidayRanges || []).map(function (r, i) {
@@ -10485,25 +10456,9 @@
           '</section>';
       })(),
       sizing:
-        '<section class="su-card"><h2>' + esc(lvl('feature') + ' sizing') + '</h2>' +
-        '<div class="su-schemes">' + schemeRows + '</div>' +
-        '</section>' + sizingCards +
-        '<section class="su-card"><h2>' + esc(lvl('story') + ' sizing') + '</h2>' +
-        '<div class="su-schemes">' + storySchemeRows + '</div>' +
-        '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
-        '</section>' + storySizingCards +
-        '<section class="su-card"><h2>Risk column</h2>' +
-        '<div class="su-schemes">' + riskRows + '</div>' +
-        '<div class="m-hint">Risk measures uncertainty, for features and stories alike. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
-        '</section>' +
-        '<section class="su-card"><h2>' + esc(lvl('feature') + ' priority') + '</h2>' +
-        '<div class="su-schemes">' + priRows + '</div>' +
-        '<div class="m-hint">Priority ranks importance — separate from risk.</div>' +
-        '</section>' +
-        '<section class="su-card"><h2>' + esc(lvl('story') + ' priority') + '</h2>' +
-        '<div class="su-schemes">' + storyPriRows + '</div>' +
-        '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
-        '</section>',
+        estGridHtml() +
+        sizingCardsFor('feature') + ladderCardFor('feature') +
+        sizingCardsFor('story') + ladderCardFor('story'),
       views:
         '<section class="su-card"><h2>Views</h2>' +
         '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning a view off hides its tab; its data stays in the document.</div>' +
@@ -10553,6 +10508,43 @@
     };
   }
   function sectionBody(key) { return setupBodies()[key] || ''; }
+  // Sizing, priority & risk: one select per field × level
+  function schemeSelect(what, level, cur, options) {
+    return '<select data-suscheme-kind="' + what + '" data-kind="' + level + '" aria-label="' + esc(lvl(level) + ' ' + what) + '">' +
+      options.map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+      }).join('') + '</select>';
+  }
+  function estGridHtml() {
+    var m = state.meta;
+    function sizeOpts(kind) {
+      var o = RM.sizeSchemesFor(kind).map(function (k) { return [k, RM.SIZE_SCHEMES[k].name]; });
+      if (m[RM.sizeKeys(kind).scheme] === 'custom') o.push(['custom', 'Custom']);
+      return o;
+    }
+    function prioOpts(kind) {
+      return (kind === 'story' ? RM.STORY_PRIORITY_SCHEME_ORDER : RM.PRIORITY_SCHEME_ORDER)
+        .map(function (k) { return [k, RM.PRIORITY_SCHEMES[k].name]; });
+    }
+    function riskOpts(kind) {
+      return RM.RISK_SCHEME_ORDER.filter(function (k) { return kind !== 'story' || RM.STORY_RISK_SCHEMES.indexOf(k) !== -1; })
+        .map(function (k) { return [k, RM.RISK_SCHEMES[k].name]; });
+    }
+    var rows = [
+      ['Size', 'Sets bar length', 'size', function (k) { return m[RM.sizeKeys(k).scheme]; }, sizeOpts],
+      ['Priority', 'Ranks the backlog', 'prio', function (k) { return RM.prioritySchemeOf(state, k); }, prioOpts],
+      ['Risk', 'Flags what may slip', 'risk', function (k) { return RM.riskSchemeOf(state, k); }, riskOpts]
+    ];
+    return '<section class="su-card"><div class="su-grid"><span></span><b>' + esc(lvl('feature')) + ' level</b><b>' + esc(lvl('story')) + ' level</b>' +
+      rows.map(function (r) {
+        return '<div><b>' + r[0] + '</b><div class="m-hint">' + r[1] + '</div></div>' +
+          schemeSelect(r[2], 'feature', r[3]('feature'), r[4]('feature')) +
+          schemeSelect(r[2], 'story', r[3]('story'), r[4]('story'));
+      }).join('') + '</div></section>';
+  }
+  function ladderChips(order, labelFn) {
+    return '<div class="su-chips">' + order.map(function (v) { return '<span class="su-chip">' + esc(labelFn(v)) + '</span>'; }).join('') + '</div>';
+  }
   // the rail's on/off note for sections that switch a feature
   function setupPill(key) {
     if (key === 'sprints') return RM.sprintsEnabled(state.meta) ? state.meta.weeksPerSprint + ' wk' : 'Off';
@@ -10641,6 +10633,21 @@
   });
 
   $('#setupView').addEventListener('change', function (e) {
+    var sk = e.target.closest('[data-suscheme-kind]');
+    if (sk) {
+      var skKind = sk.dataset.kind, skV = sk.value;
+      if (sk.dataset.suschemeKind === 'size') {
+        if (skV === state.meta[RM.sizeKeys(skKind).scheme]) return;
+        commit('sizing approach', function (s2) { RM.setSizeScheme(s2, skV, skKind); });
+      } else if (sk.dataset.suschemeKind === 'prio') {
+        if (skV === RM.prioritySchemeOf(state, skKind)) return;
+        commit('priority column', function (s2) { RM.setPriorityScheme(s2, skV, skKind); });
+      } else {
+        if (skV === RM.riskSchemeOf(state, skKind)) return;
+        commit('risk column', function (s2) { RM.setRiskScheme(s2, skV, skKind); });
+      }
+      return;
+    }
     if (e.target.id === 'suTitle') {
       var tv2 = e.target.value.trim() || 'Roadmap';
       commit('title', function (s2) { s2.meta.title = tv2; });
@@ -10833,24 +10840,6 @@
     if (holrm != null) {
       var holIdx = parseInt(holrm, 10);
       commit('holiday rm', function (s2) { RM.removeHolidayRange(s2.meta, holIdx); });
-      return;
-    }
-    if (t.dataset.suscheme) {
-      var schemeKey = t.dataset.suscheme, schemeKind = t.dataset.kind || 'feature';
-      if (schemeKey === state.meta[RM.sizeKeys(schemeKind).scheme]) return;
-      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey, schemeKind); });
-      return;
-    }
-    if (t.dataset.surisk) {
-      var riskKey = t.dataset.surisk;
-      if (riskKey === RM.riskSchemeOf(state)) return;
-      commit('risk column', function (s2) { RM.setRiskScheme(s2, riskKey); });
-      return;
-    }
-    if (t.dataset.supri) {
-      var priKey = t.dataset.supri, priKind = t.dataset.kind || 'feature';
-      if (priKey === RM.prioritySchemeOf(state, priKind)) return;
-      commit('priority column', function (s2) { RM.setPriorityScheme(s2, priKey, priKind); });
       return;
     }
     if (t.id === 'suSzAdd' || t.id === 'suSzAddStory') {

@@ -3513,3 +3513,11 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 /* Setup rail: on/off note for sections that switch a feature */
 .su-pill { margin-left: auto; font-size: 11px; color: var(--ink-2); background: var(--well); border-radius: 10px; padding: 2px 8px; }
 .su-tab.on .su-pill { color: var(--blue); background: var(--blue-soft); }
+
+/* Setup → Sizing, priority & risk: field × level grid, read-only ladders */
+.su-grid { display: grid; grid-template-columns: 1fr 1.6fr 1.6fr; gap: 10px 14px; align-items: center; }
+.su-grid > b { font-size: 11.5px; font-weight: 500; color: var(--ink-3); }
+.su-grid select { width: 100%; }
+.su-ladder + .su-ladder { margin-top: 10px; }
+.su-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.su-chip { font-size: 12px; background: var(--well); color: var(--ink-2); border-radius: 10px; padding: 3px 9px; }

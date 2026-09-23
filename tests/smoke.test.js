@@ -536,6 +536,14 @@ const suTab = (k) => {
   if (doc.body.dataset.view !== 'setup') click(doc.querySelector('#btnSetup'));
   click(doc.querySelector('#setupView [data-sutab="' + k + '"]'));
 };
+// Setup → Sizing, priority & risk: one select per field × level
+const schemeSel = (what, level) => doc.querySelector('#setupView select[data-suscheme-kind="' + what + '"][data-kind="' + level + '"]');
+const schemeOpts = (what, level) => [...schemeSel(what, level).options].map(o => o.value);
+const pickScheme = (what, level, v) => {
+  const sel = schemeSel(what, level);
+  sel.value = v;
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+};
 click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
@@ -1692,8 +1700,8 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 {
   click(doc.querySelector('#btnSetup'));
   suTab('est');
-  ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
-  click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
+  ok(schemeOpts('size', 'feature').length >= 4, 'Sizing offers approach presets');
+  pickScheme('size', 'feature', 'fibonacci');
   ok(state().meta.sizeScheme === 'fibonacci' &&
     state().meta.sizeOrder.join(',') === '0.5,1,2,3,5,8,13',
     'Story points preset applies its scale');
@@ -1704,14 +1712,28 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   lblInp.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.sizeScheme === 'custom' && state().meta.sizeOrder.indexOf('21') !== -1,
     'editing options flips the approach to Custom');
-  click(doc.querySelector('#setupView [data-suscheme="none"]'));
+  pickScheme('size', 'feature', 'none');
   ok(state().meta.sizeScheme === 'none' && state().meta.sizeOrder.length === 0, 'No sizing empties the scale');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   ok(!doc.querySelector('#rows .row.item [data-act="size"]'), 'no size chips while sizing is off');
   ok(doc.body.classList.contains('no-size'), 'body carries the no-size flag');
   click(doc.querySelector('#btnSetup'));
-  click(doc.querySelector('#setupView [data-suscheme="tshirt"]'));
+  pickScheme('size', 'feature', 'tshirt');
   ok(state().meta.sizeOrder.join(',') === 'XS,S,M,L,XL', 'T-shirt preset restores the classic scale');
+}
+{
+  suTab('est');
+  const cells = doc.querySelectorAll('#setupView .su-grid select[data-suscheme-kind]');
+  ok(cells.length === 6, 'grid: size, priority, risk × feature, story');
+  ok(schemeOpts('prio', 'story').indexOf('rice') === -1, 'RICE is not offered for stories');
+  ok(schemeOpts('risk', 'story').indexOf('auto') === -1, 'Risk (auto) is not offered for stories');
+  const riskBefore = state().meta.storyRiskScheme;
+  pickScheme('risk', 'story', 'confidence');
+  ok(state().meta.storyRiskScheme === 'confidence', 'story risk scheme is set from the grid');
+  ok(doc.querySelectorAll('#setupView .su-chip').length > 0, 'priority / risk levels show as read-only chips');
+  ok(!doc.querySelector('#setupView .su-chip input'), 'chips are not editable');
+  ok(!!doc.querySelector('#setupView [data-susz]'), 'size options stay editable');
+  pickScheme('risk', 'story', riskBefore);
 }
 
 // ---------------------------------------------------------------- workstream feature toggle
@@ -1892,14 +1914,13 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 // risk scheme card: switching to MoSCoW relabels the scoping column
 {
   suTab('est');
-  const riskCards = doc.querySelectorAll('#setupView [data-surisk]');
-  ok(riskCards.length === 4, 'four risk schemes offered (none, risk, auto, confidence)');
-  click(Array.from(riskCards).find(b => b.dataset.surisk === 'confidence'));
+  ok(schemeOpts('risk', 'feature').length === 4, 'four risk schemes offered (none, risk, auto, confidence)');
+  pickScheme('risk', 'feature', 'confidence');
   ok(state().meta.riskScheme === 'confidence', 'Confidence scheme commits');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   // scheme none removes the column
   suTab('est');
-  click(Array.from(doc.querySelectorAll('#setupView [data-surisk]')).find(b => b.dataset.surisk === 'none'));
+  pickScheme('risk', 'feature', 'none');
   ok(state().meta.riskScheme === 'none', 'scheme none commits');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!doc.querySelector('#rows .row.item .r-risk'), 'no assessment chips when the scheme is none');
@@ -2306,10 +2327,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ------------------------------------------------------- RICE priority scheme
 {
   suTab('est');
-  const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
-  ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
-  ok(doc.querySelectorAll('#setupView [data-supri][data-kind="story"]').length === 3, 'stories offer three (no RICE)');
-  click(Array.from(priCards).find(b => b.dataset.supri === 'rice'));
+  ok(schemeOpts('prio', 'feature').length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
+  ok(schemeOpts('prio', 'story').length === 3, 'stories offer three (no RICE)');
+  pickScheme('prio', 'feature', 'rice');
   ok(state().meta.priorityScheme === 'rice', 'RICE scheme commits');
   // prio cards now carry the priority chip; clicking it opens RICE dropdowns
   click(doc.querySelector('#viewTabs [data-view="prio"]'));
@@ -2361,9 +2381,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 {
   // priority column: enable MoSCoW in Setup, chip appears in Scoping
   suTab('est');
-  const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
-  ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
-  click(Array.from(priCards).find(b => b.dataset.supri === 'moscow'));
+  ok(schemeOpts('prio', 'feature').length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
+  pickScheme('prio', 'feature', 'moscow');
   ok(state().meta.priorityScheme === 'moscow', 'MoSCoW priority commits');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!!doc.querySelector('#hdrSprints [data-col="priority"]'), 'Priority column renders when enabled');
@@ -4057,11 +4076,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // Setup → Sizing: "Roll up from stories" leads the feature list, never the story list
   click(doc.querySelector('#btnSetup'));
   suTab('est');
-  const featSchemes = [...doc.querySelectorAll('#setupView [data-suscheme]:not([data-kind="story"])')].map(b => b.dataset.suscheme);
-  ok(featSchemes[0] === 'rollup' && !doc.querySelector('#setupView [data-suscheme="rollup"][data-kind="story"]'),
+  const featSchemes = schemeOpts('size', 'feature');
+  ok(featSchemes[0] === 'rollup' && schemeOpts('size', 'story').indexOf('rollup') === -1,
     'Roll up from stories is the first feature option and absent for stories');
   ok(state().meta.sizeScheme === 'tshirt', 'T-shirt sizes stay the default');
-  click(doc.querySelector('#setupView [data-suscheme="rollup"]'));
+  pickScheme('size', 'feature', 'rollup');
   ok(state().meta.sizeScheme === 'rollup' && !!doc.querySelector('#setupView .m-hint') && !doc.querySelector('#setupView [data-susz]:not([data-kind="story"])'),
     'picking it explains the rollup instead of a size-options table');
   window.HeadwayApp.ai.commit('size stories', (s) => {
@@ -4084,7 +4103,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(!!doc.querySelector('#panel .p-rollup') && !doc.querySelector('#panel [data-f="size"]'), 'the panel shows the rolled-up total instead of size buttons');
   click(doc.querySelector('#btnSetup'));
   suTab('est');
-  click(doc.querySelector('#setupView [data-suscheme="tshirt"]:not([data-kind="story"])'));
+  pickScheme('size', 'feature', 'tshirt');
   ok(state().meta.sizeScheme === 'tshirt' && state().items.every(i => !i.size), 'back on T-shirt sizes the derived sizes are cleared');
   undo(); undo(); undo();
   ok(state().meta.sizeScheme === 'tshirt' && state().items.some(i => i.size), 'undo restores the hand-picked sizes');
@@ -4724,11 +4743,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     'the story scale is separate from the feature scale');
   click(doc.querySelector('#btnSetup'));
   suTab('est');
-  ok(!!doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'), 'Setup → Sizing offers a story scale picker');
-  click(doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'));
+  ok(schemeOpts('size', 'story').indexOf('tshirt') !== -1, 'Setup → Sizing offers a story scale picker');
+  pickScheme('size', 'story', 'tshirt');
   ok(state().meta.storySizeScheme === 'tshirt' && state().meta.sizeScheme !== 'none' &&
     window.RM.sizeOrderOf(state(), 'story').indexOf('XL') !== -1, 'picking a story scale leaves the feature scale alone');
-  click(doc.querySelector('#setupView [data-supri="moscow"][data-kind="story"]'));
+  pickScheme('prio', 'story', 'moscow');
   ok(state().meta.storyPriorityScheme === 'moscow' && state().meta.priorityScheme !== 'moscow',
     'story priority scheme is independent of the feature scheme');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
