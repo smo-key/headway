@@ -8802,7 +8802,21 @@
   }
 
   // menu bar (File / Edit / View)
+  // while the new-project wizard is up every menu item is inert (the wizard
+  // has its own Back / Continue / Close)
   function menuItems(name) {
+    var items = menuItemsFor(name);
+    if (!wz) return items;
+    return items.map(function (m) {
+      if (m.sep) return m;
+      var c = {};
+      Object.keys(m).forEach(function (k) { c[k] = m[k]; });
+      c.disabled = true;
+      c.fn = function () {};
+      return c;
+    });
+  }
+  function menuItemsFor(name) {
     var isMacDesktop = !!window.HeadwayDesktop && navigator.platform.indexOf('Mac') === 0;
     function openProject() {
       if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
@@ -10774,10 +10788,14 @@
   function localStorageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function openWizard() {
     if (wz || readOnly) return;
+    flushPanelEdit(); // a half-typed panel field belongs to the open document
     closePopover();
     wz = { step: 'project', dirty: false, welcomed: false, stash: {
       state: state, undo: undoStack.slice(), redo: redoStack.slice(),
-      docSaved: docSaved, sessionEdited: sessionEdited, view: view } };
+      docSaved: docSaved, sessionEdited: sessionEdited, view: view, reloaded: false,
+      start: document.body.classList.contains('start') } };
+    // the start page hides the top bar; the wizard needs it (drag, close)
+    document.body.classList.remove('start');
     state = blankState();
     undoStack.length = 0; redoStack.length = 0;
     // the first project on this machine starts with a Welcome (name + theme)
@@ -10795,6 +10813,35 @@
     $('#docTitle').value = 'New project';
     $('#wizard').hidden = false;
     renderWizard();
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
+  }
+  // the desktop watcher reloaded the open file while the wizard is up: the
+  // stash takes it, and closing adopts it the way any reload does
+  function wizardStashReload(next) {
+    wz.stash.state = next;
+    wz.stash.docSaved = true;
+    wz.stash.reloaded = true;
+  }
+  // AI / Jira hooks act on the open document even while the wizard is up:
+  // run fn with the stash swapped in, then put the draft back
+  function withStash(fn) {
+    var w = wz, draft = state, du = undoStack.slice(), dr = redoStack.slice();
+    state = w.stash.state;
+    undoStack.length = 0; Array.prototype.push.apply(undoStack, w.stash.undo);
+    redoStack.length = 0; Array.prototype.push.apply(redoStack, w.stash.redo);
+    wz = null;
+    try { return fn(); } finally {
+      w.stash.state = state;
+      w.stash.undo = undoStack.slice(); w.stash.redo = redoStack.slice();
+      w.stash.docSaved = docSaved; w.stash.sessionEdited = sessionEdited;
+      state = draft;
+      undoStack.length = 0; Array.prototype.push.apply(undoStack, du);
+      redoStack.length = 0; Array.prototype.push.apply(redoStack, dr);
+      wz = w;
+      $('#setupView').innerHTML = ''; // one copy of the section controls on screen
+      document.body.classList.remove('start');
+      renderWizard();
+    }
   }
   // discard: true drops the draft; false hands it back (Create)
   function closeWizard(discard) {
@@ -10805,6 +10852,7 @@
     redoStack.length = 0; Array.prototype.push.apply(redoStack, st.redo);
     docSaved = st.docSaved; sessionEdited = st.sessionEdited; view = st.view;
     wz = null;
+    if (st.start) document.body.classList.add('start');
     teamNewRoleFor = null;
     closePopover();
     document.body.classList.remove('wizard-open');
@@ -10813,10 +10861,18 @@
     $('#wizard').hidden = true;
     $('#wizard').innerHTML = '';
     stateRev += 1;
-    validation = RM.validate(state);
-    render();
+    if (st.reloaded) {
+      // a reload while the wizard was up: adopt it now (fresh undo, auto-order)
+      if (selectedId && !RM.itemById(state, selectedId)) { selectedId = null; selStory = null; }
+      reloadingDoc = true;
+      try { adoptState(state); } finally { reloadingDoc = false; }
+    } else {
+      validation = RM.validate(state);
+      render();
+    }
     updateSaveBtn();
     if (!docSaved) scheduleAutoSave(); // an autosave the wizard held back
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
     return discard ? null : draft;
   }
   function wizardTryClose() {
@@ -10826,14 +10882,27 @@
       function () { closeWizard(true); }, true);
   }
   function wizardCreate() {
+    var keep = wz && { welcomed: wz.welcomed, expandWorkWeek: wz.expandWorkWeek };
     var draft = closeWizard(false);
     if (!draft) return;
-    try { localStorage.setItem(ONBOARDED_KEY, '1'); } catch (e) { /* storage optional */ }
+    var saved = RM.clone(draft);
+    // a canceled Save dialog or a failed export must not lose the setup:
+    // reopen the wizard at Review with the draft
+    function reopen() {
+      openWizard();
+      if (!wz) return;
+      state = saved;
+      wz.step = 'review'; wz.dirty = true;
+      wz.welcomed = keep.welcomed; wz.expandWorkWeek = keep.expandWorkWeek;
+      renderWizard();
+    }
+    function done() { try { localStorage.setItem(ONBOARDED_KEY, '1'); } catch (e) { /* storage optional */ } }
     // flush pending edits to the currently-open file before the paths
     // switch, so the last few seconds of work can't land in the wrong file
     var flush = (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath())
       ? (doSave(false, true) || Promise.resolve()) : Promise.resolve();
-    flush.then(function () { createProjectOnDisk(draft); }, function () { createProjectOnDisk(draft); });
+    var go = function () { createProjectOnDisk(draft, { onDone: done, onFail: reopen }); };
+    flush.then(go, go);
   }
   function wizardGo(k) {
     if (!wz) return;
@@ -12395,16 +12464,20 @@
     enterEditor();
   }
 
-  function createProjectOnDisk(st) {
+  // opts.onDone after the project is adopted; opts.onFail when no file was
+  // chosen or the export failed (the wizard reopens with its draft)
+  function createProjectOnDisk(st, opts) {
+    opts = opts || {};
     var fname = ((st.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.xlsx';
     RMExcel.exportWorkbook(st, uiSnapshot()).then(function (blob) {
       if (window.HeadwayDesktop) {
         // the file must exist before the project does — Save dialog first
         return HeadwayDesktop.saveBlob(blob, fname, true).then(function (path) {
-          if (!path) { toast('Project not created — no file chosen'); return; }
+          if (!path) { toast('Project not created — no file chosen'); if (opts.onFail) opts.onFail(); return; }
           // the dialog may have picked a different name — the filename wins
           st.meta.title = titleFromFileName(HeadwayDesktop.basename(path));
           adoptProject(st, path);
+          if (opts.onDone) opts.onDone();
           toast('Created “' + st.meta.title + '” — ' + HeadwayDesktop.basename(path));
         });
       }
@@ -12414,9 +12487,11 @@
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
       adoptProject(st, null);
+      if (opts.onDone) opts.onDone();
       toast('Created “' + st.meta.title + '” — saved ' + fname + ' to your downloads');
     }).catch(function (err) {
       toast('Could not create the project: ' + (err && err.message || err), 'err');
+      if (opts.onFail) opts.onFail();
     });
   }
 
@@ -12488,6 +12563,14 @@
   // another project — runs through here first.
   function unsavedNow() { return sessionEdited && !docSaved; }
   function guardUnsaved(proceed) {
+    // the new-project wizard goes first (its draft is never saved anywhere);
+    // then the open document gets the usual question
+    if (wz) {
+      if (!wz.dirty) { closeWizard(true); guardUnsaved(proceed); return; }
+      confirmBox('Discard this new project?', 'The settings you picked are not saved anywhere yet.', 'Discard',
+        function () { closeWizard(true); guardUnsaved(proceed); }, true);
+      return;
+    }
     flushPanelEdit(); // typing still in the field counts as an edit too
     if (!unsavedNow()) { proceed(); return; }
     // autosave already owns this doc's file: flush the pending write instead
@@ -12540,7 +12623,7 @@
       if (name) r.state.meta.title = titleFromFileName(name);
       // the wizard holds a draft: a reload of the open file updates the
       // document stashed behind it; opening another file ends the wizard
-      if (wz && reload) { wz.stash.state = r.state; wz.stash.docSaved = true; return; }
+      if (wz && reload) { wizardStashReload(r.state); return; }
       if (wz) closeWizard(true);
       if (reload) {
         // keep whatever selection still exists in the new document
@@ -12607,15 +12690,16 @@
       create: wizardCreate,
       close: closeWizard,
       isOpen: function () { return !!wz; },
-      reloadForTest: function (st) { if (wz) { wz.stash.state = RM.normalizeState(st); wz.stash.docSaved = true; } }
+      reloadForTest: function (st) { if (wz) wizardStashReload(RM.normalizeState(st)); }
     },
     // hooks for the AI assistant (js/ai.js): reads are clones, every write
     // goes through commit() so it lands in undo + Version history (as
     // "<name> · AI")
     ai: {
-      state: function () { return RM.clone(state); },
+      state: function () { return RM.clone(wz ? wz.stash.state : state); },
       hasDoc: function () { return !!state && !document.body.classList.contains('start'); },
       commit: function (label, mutate) {
+        if (wz) { withStash(function () { aiActor = true; try { commit(label, mutate); } finally { aiActor = false; } }); return; }
         aiActor = true;
         try { commit(label, mutate); } finally { aiActor = false; }
       },

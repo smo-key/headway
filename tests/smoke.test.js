@@ -886,6 +886,51 @@ ok(state().team.length === 1, 'role added via the blank add row');
   if (savedTheme) window.localStorage.setItem('headway-theme-v1', savedTheme); else window.localStorage.removeItem('headway-theme-v1');
   window.localStorage.setItem('headway-onboarded-v1', '1');
 }
+// ---------------------------------------------------------------- wizard: the open document is safe while it is up
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.localStorage.setItem('headway-onboarded-v1', '1');
+  const realTitle = state().meta.title;
+  // a half-typed panel field lands in the open document, not the draft
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const it0 = state().items.find((i) => !i.milestone);
+  window.__headway.selectItem(it0.id);
+  const nameTa = doc.querySelector('#panel textarea[data-f="feature"]');
+  nameTa.focus(); nameTa.value = 'Typed before the wizard';
+  window.HeadwayApp.wizard.open();
+  window.HeadwayApp.wizard.close(true);
+  ok(state().items.find((i) => i.id === it0.id).feature === 'Typed before the wizard', 'an in-progress panel edit is kept when the wizard opens');
+  undo();
+  // the AI / Jira hooks act on the open document, never the draft
+  window.HeadwayApp.wizard.open();
+  const draftTitle = state().meta.title;
+  ok(window.HeadwayApp.ai.state().meta.title === realTitle, 'ai.state() reads the open document while the wizard is up');
+  window.HeadwayApp.ai.commit('ai edit under wizard', (s) => { s.meta.vision = 'From the assistant'; });
+  ok(state().meta.title === draftTitle && state().meta.vision !== 'From the assistant', 'ai.commit leaves the draft alone');
+  // native menus are inert while the wizard is up
+  ok(['macApp', 'edit', 'view'].every((n) => window.HeadwayApp.menuItems(n).every((m) => m.sep || m.disabled)), 'every native menu item is disabled');
+  // closing the window / switching documents asks about the wizard first
+  const ti = doc.querySelector('#wizard #suTitle'); ti.value = 'Draft to discard'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  let proceeded = false;
+  window.HeadwayApp.guardUnsaved(() => { proceeded = true; });
+  ok(/Discard this new project/.test(doc.querySelector('#modalHost').textContent), 'guardUnsaved asks about the wizard draft first');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+  ok(!window.HeadwayApp.wizard.isOpen(), 'discarding closes the wizard');
+  if (!proceeded) {
+    ok(new RegExp(realTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(doc.querySelector('#modalHost').textContent), 'then the unsaved-changes question names the open document');
+    click(doc.querySelector('#modalHost [data-m="cancel"]'));
+  }
+  ok(state().meta.vision === 'From the assistant', 'the assistant\'s edit landed in the open document');
+  undo();
+  ok(state().meta.vision !== 'From the assistant', 'and it undoes like any edit');
+  // from the start page the wizard still gets the app top bar
+  doc.body.classList.add('start');
+  window.HeadwayApp.wizard.open();
+  ok(!doc.body.classList.contains('start'), 'opened from the start page, the wizard keeps the top bar (start page class lifted)');
+  window.HeadwayApp.wizard.close(true);
+  ok(doc.body.classList.contains('start'), 'closing returns to the start page');
+  doc.body.classList.remove('start');
+}
 // ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
 {
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
@@ -6036,6 +6081,40 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) === 0, 'a second pass over a laid-out phase moves nothing');
       ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
     });
+}).then(() => {
+  // a reload under the wizard is a real reload: no undo back into the old copy
+  window.HeadwayApp.ai.commit('local edit', (s) => { s.meta.vision = 'LOCAL'; });
+  const onDisk = window.RM.clone(state());
+  onDisk.meta.vision = 'REMOTE';
+  window.HeadwayApp.wizard.open();
+  return window.RMExcel.exportWorkbook(onDisk)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), state().meta.title + '.xlsx', true))
+    .then(() => {
+      window.HeadwayApp.wizard.close(true);
+      ok(state().meta.vision === 'REMOTE', 'the reloaded document comes back');
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+      ok(state().meta.vision === 'REMOTE', 'and Undo cannot step back past the reload');
+    });
+}).then(() => {
+  // Create that fails (or a canceled Save dialog) keeps the draft: back at Review
+  window.localStorage.removeItem('headway-onboarded-v1');
+  window.localStorage.setItem('headway-user-v1', 'Probe');
+  const realExport = window.RMExcel.exportWorkbook;
+  window.RMExcel.exportWorkbook = () => Promise.reject(new Error('disk full'));
+  window.HeadwayApp.wizard.open();
+  const t = doc.querySelector('#wizard #suTitle'); t.value = 'Keep me on failure'; t.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wzpreset="minimal"]'));
+  window.HeadwayApp.wizard.go('review');
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  return new Promise((res) => setTimeout(res, 50)).then(() => {
+    window.RMExcel.exportWorkbook = realExport;
+    ok(window.HeadwayApp.wizard.isOpen() && state().meta.title === 'Keep me on failure' && state().meta.preset === 'minimal' &&
+      doc.querySelector('#wizard .wz-step.on').dataset.wzgo === 'review', 'a failed Create reopens the wizard at Review with the draft');
+    ok(!window.localStorage.getItem('headway-onboarded-v1'), 'and does not mark onboarding done');
+    window.HeadwayApp.wizard.close(true);
+    window.localStorage.setItem('headway-onboarded-v1', '1');
+  });
 }).then(() => {
   // Create: the draft becomes the open project (browser path: a download)
   if (!window.URL.createObjectURL) window.URL.createObjectURL = () => 'blob:probe';
