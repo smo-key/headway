@@ -825,6 +825,33 @@ ok(RM.appEnabled(sp, 'sprints') && !('sprints' in sp.meta.apps), 'Sprinting foll
 sp.meta.weeksPerSprint = 0;
 ok(!RM.appEnabled(sp, 'sprints'), 'sprints off hides Sprinting');
 
+// ------------------------------------------------------------- presets
+section('presets');
+function blankish() {
+  return RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, title: 'Keep me' }, phases: [{ id: 'p1', name: 'Build' }], items: [] });
+}
+var want = {
+  scrum:   { sizeScheme: 'none',   storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'moscow', riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
+  ascrum:  { sizeScheme: 'tshirt', storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'moscow', riskScheme: 'risk', storyRiskScheme: 'risk', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
+  rapid:   { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: true,  planLevel: 'feature', capMode: 'person' },
+  minimal: { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: false }
+};
+Object.keys(want).forEach(function (k) {
+  var s = blankish();
+  ok(RM.applyPreset(s, k), k + ' applies');
+  var m = s.meta, w = want[k];
+  var got = { sizeScheme: m.sizeScheme, storySizeScheme: m.storySizeScheme, priorityScheme: m.priorityScheme,
+    storyPriorityScheme: m.storyPriorityScheme, riskScheme: m.riskScheme, storyRiskScheme: m.storyRiskScheme,
+    weeksPerSprint: m.weeksPerSprint, budget: m.apps.budget, capacityEnabled: m.capacityEnabled };
+  if ('planLevel' in w) { got.planLevel = m.planLevel; got.capMode = m.capMode; }
+  eq(got, w, k + ' writes exactly its settings');
+  eq([m.title, s.phases[0].name], ['Keep me', 'Build'], k + ' leaves name and phases alone');
+});
+ok(!RM.applyPreset(blankish(), 'nope'), 'unknown preset is refused');
+var sSw = blankish(); RM.applyPreset(sSw, 'ascrum'); RM.applyPreset(sSw, 'minimal');
+eq([sSw.meta.riskScheme, sSw.meta.weeksPerSprint], ['none', 0], 'switching presets overwrites the preset-owned fields');
+eq(RM.normalizeState(RM.clone(sSw)).meta.sizeScheme, 'tshirt', 'a preset survives normalize');
+
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
 // total calendar helpers

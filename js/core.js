@@ -289,6 +289,41 @@
     ['budget', 'Budgeting', 'wallet', 'Rates, costs and role hours'],
     ['reports', 'Reporting', 'chart-pie', 'Project reporting dashboard']
   ];
+  // Onboarding presets: each writes ONLY these fields (schemes, sprints,
+  // budget, scheduling). Name, dates, phases, people and columns are never
+  // touched, so switching presets is safe after later steps were edited.
+  RM.PRESETS = [
+    { key: 'scrum', name: 'Scrum', sprints: true,
+      desc: 'Stories carry the points; a feature is the span of its stories. Work is scheduled into 2-week sprints by story points, with budget tracking.',
+      v: { size: ['none', 'fibonacci'], prio: ['levels', 'moscow'], risk: ['none', 'none'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
+    { key: 'ascrum', name: 'Advanced Scrum', sprints: true,
+      desc: 'Scrum plus a size on every feature, and priority and risk on both features and stories.',
+      v: { size: ['tshirt', 'fibonacci'], prio: ['levels', 'moscow'], risk: ['risk', 'risk'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
+    { key: 'rapid', name: 'Rapid Delivery', sprints: false,
+      desc: 'T-shirt sizes on features, no sprints. Each feature takes a person, and Auto timeline packs features in as people free up.',
+      v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: true, plan: 'feature', mode: 'person' } } },
+    { key: 'minimal', name: 'Minimal', sprints: false,
+      desc: 'Just features on a timeline with T-shirt sizes. You place and stretch the bars yourself.',
+      v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: false } } }
+  ];
+  RM.applyPreset = function (state, key) {
+    var p = RM.PRESETS.filter(function (x) { return x.key === key; })[0];
+    if (!p) return false;
+    var v = p.v, m = state.meta;
+    RM.setSizeScheme(state, v.size[0], 'feature');
+    RM.setSizeScheme(state, v.size[1], 'story');
+    RM.setPriorityScheme(state, v.prio[0], 'feature');
+    RM.setPriorityScheme(state, v.prio[1], 'story');
+    RM.setRiskScheme(state, v.risk[0], 'feature');
+    RM.setRiskScheme(state, v.risk[1], 'story');
+    m.weeksPerSprint = v.wps;
+    m.apps = m.apps || {};
+    m.apps.budget = v.budget;
+    m.capacityEnabled = !!v.cap.on;
+    if (v.cap.on) { m.planLevel = v.cap.plan; m.capMode = v.cap.mode; }
+    m.preset = key;
+    return true;
+  };
   RM.appEnabled = function (state, key) {
     var a = state && state.meta && state.meta.apps;
     if (key === 'planning') return true;
@@ -1397,6 +1432,8 @@
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    // the onboarding preset the project started from (informational)
+    m.preset = typeof m.preset === 'string' ? m.preset : '';
     m.planLevel = m.planLevel === 'story' ? 'story' : 'feature';
     // demand model: a unit in flight costs one person (× its multiplier) or
     // its story points spread over its weeks against each person's points
