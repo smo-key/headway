@@ -10394,7 +10394,7 @@
       capacity:
         '<section class="su-card"><h2>Schedule against capacity</h2>' +
         '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Schedule against capacity</label>' +
-        '<div class="m-hint">People, their capacity type and weekly hours live in the Resources panel under the timeline. Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
+        '<div class="m-hint">People and their weekly hours live in Setup \u203a Team and the Resources panel; each person supplies their role\u2019s capacity type (Roles, below). Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Planning level</h2><div class="su-schemes">' +
         [['feature', esc(lvl('feature', true)), 'Capacity follows the ' + esc(lvl('feature', true).toLowerCase()) + ' and their capacity type; ' + esc(lvl('story', true).toLowerCase()) + ' need no details'],
@@ -10480,7 +10480,7 @@
             ? '<span class="su-pill">' + fixedPill + '</span>'
             : '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + '> ';
           return '<label class="p-check su-app' + (fixedPill ? ' fixed' : '') + '" data-suview="' + a[0] + '" title="' + esc(a[3]) + '">' +
-            (fixedPill ? '' : ctl) +
+            (fixedPill ? '<span class="su-app-sp"></span>' : ctl) +
             '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span>' +
             (fixedPill ? ctl : '') + '</label>';
         }).join('') +
@@ -10529,7 +10529,6 @@
     var pts = cap && state.meta.capMode === 'points';
     var bud = RM.appEnabled(state, 'budget');
     var wsOn = !!state.meta.workstreamsEnabled;
-    var wsList = wsOn ? allWorkstreams() : [];
     var head = ['Name', 'Title', 'Role'].concat(cap ? ['Capacity type'] : [], wsOn ? ['Workstreams'] : [], ['Allocation'],
       pts ? ['Points / sprint'] : [], bud ? ['Rate/h', 'Cost/h'] : [], ['']);
     function roleOpts(cur) {
@@ -10542,7 +10541,7 @@
       return '<div class="m-hint">No one yet \u2014 add the people who work on this project.</div>' +
         '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>';
     }
-    return '<table class="hol-table su-team"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' +
+    return '<div class="su-team-wrap"><table class="hol-table su-team"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' +
       state.team.map(function (m) {
         var id = ' data-mid="' + esc(m.id) + '"';
         var card = rc[m.type] || {};
@@ -10555,16 +10554,14 @@
           '<td>' + roleCell + '</td>' +
           (cap ? '<td class="su-tm-cap" title="' + (m.type ? 'From the role \u2014 change it in Setup \u203a Scheduling' : 'Pick a role to set it') + '">' +
             esc(m.capType || '\u2014') + '</td>' : '') +
-          (wsOn ? '<td class="su-tm-ws">' + wsList.map(function (w) {
-            var on = (m.workstreams || []).indexOf(w) !== -1;
-            return '<button class="su-wsdot' + (on ? ' on' : '') + '" data-sutmws="' + esc(w) + '"' + id + ' title="' + esc(w) + '">' + esc(shorten(w, 12)) + '</button>';
-          }).join('') + '</td>' : '') +
+          (wsOn ? '<td class="su-tm-ws"><button class="su-tm-wsbtn' + (RM.memberWorkstreams(m).length ? '' : ' empty') + '" data-sutmws' + id +
+            ' title="Workstreams">' + esc(RM.memberWorkstreams(m).join(', ') || '\u2014') + '</button></td>' : '') +
           '<td class="su-tm-num"><input type="number" min="0" step="5" data-sutm="capacity"' + id + ' value="' + Math.round((m.capacity != null ? m.capacity : 1) * 100) + '" aria-label="Allocation percent"> %</td>' +
           (pts ? '<td class="su-tm-num"><input type="number" min="0" data-sutm="points"' + id + ' value="' + (m.points == null ? '' : m.points) + '" placeholder="' + state.meta.defaultPoints + '" aria-label="Points per sprint"></td>' : '') +
           (bud ? '<td class="su-tm-num"><input type="number" min="0" data-sutm="rate"' + id + ' value="' + (m.rate || '') + '" placeholder="' + (card.rate || '') + '" aria-label="Hourly rate"></td>' +
                  '<td class="su-tm-num"><input type="number" min="0" data-sutm="cost"' + id + ' value="' + (m.cost || '') + '" placeholder="' + (card.cost || '') + '" aria-label="Hourly cost"></td>' : '') +
           '<td class="hol-x"><button data-sutmdel="' + esc(m.id) + '" title="Remove person"><i data-lucide="x"></i></button></td></tr>';
-      }).join('') + '</tbody></table>' +
+      }).join('') + '</tbody></table></div>' +
       '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>' +
       '<div class="m-hint">Allocation here is each person\u2019s default. You can change allocation and hours week by week later in the Resources panel under the timeline.</div>';
   }
@@ -10956,19 +10953,8 @@
       });
       return;
     }
-    if (t.dataset.sutmws != null) {
-      var twId = t.dataset.mid, twWs = t.dataset.sutmws;
-      commit('team workstream', function (s2) {
-        s2.team.forEach(function (x) {
-          if (x.id !== twId) return;
-          var wl = (x.workstreams || []).slice(), wi = wl.indexOf(twWs);
-          if (wi === -1) wl.push(twWs); else wl.splice(wi, 1);
-          x.workstreams = wl;
-          x.workstream = wl[0] || '';
-        });
-      });
-      return;
-    }
+    // workstreams: the same multi-pick menu as the Budgeting / Resources rows
+    if (t.dataset.sutmws != null) { openMemberWsDropdown(t, t.dataset.mid); return; }
     if (t.dataset.sutmdel != null) {
       var tdId = t.dataset.sutmdel;
       commit('remove person', function (s2) { s2.team = s2.team.filter(function (x) { return x.id !== tdId; }); });

@@ -1206,6 +1206,8 @@ textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12
 .su-app .su-app-desc { margin-left: auto; font-size: 12px; color: var(--ink-3); }
 .su-app.fixed { cursor: default; }
 .su-app.fixed input { opacity: .5; }
+.su-app .su-app-sp { width: 16px; flex: none; }
+.su-app .su-pill { margin-left: 12px; flex: none; }
 
 /* shadcn-style checkbox — full-size box, blue fill with a white check */
 input[type="checkbox"] {
@@ -3522,13 +3524,20 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .su-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .su-chip { font-size: 12px; background: var(--well); color: var(--ink-2); border-radius: 10px; padding: 3px 9px; }
 
-/* Setup → Team: one editable row per person */
-.su-team input, .su-team select { width: 100%; min-width: 0; }
-.su-team td { padding: 4px 6px; }
+/* Setup → Team: one editable row per person; scrolls sideways when narrow */
+.su-team-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+.su-team { width: 100%; }
+.su-team th { white-space: nowrap; }
+.su-team td { padding: 4px 4px; vertical-align: middle; }
+.su-team input, .su-team select { width: 100%; }
+.su-team [data-sutm="name"] { min-width: 130px; }
+.su-team [data-sutm="role"] { min-width: 100px; }
+.su-team [data-sutm="type"], .su-team [data-sutmnewrole] { min-width: 120px; }
+.su-team .su-tm-num { white-space: nowrap; }
 .su-team .su-tm-num input { width: 64px; }
 .su-team .su-tm-cap { color: var(--ink-3); white-space: nowrap; }
-.su-wsdot { font-size: 11px; padding: 1px 6px; margin: 1px; border-radius: 8px; box-shadow: none; }
-.su-wsdot.on { background: var(--blue-soft); color: var(--blue); }
+.su-tm-wsbtn { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.su-tm-wsbtn.empty { color: var(--ink-3); }
 
 /* Setup → Scheduling: supply vs demand explainer */
 .su-roletypes select { width: 100%; }

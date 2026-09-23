@@ -767,7 +767,13 @@ ok(state().team.length === 1, 'role added via the blank add row');
   name.value = 'Renamed'; name.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().team[0].name === 'Renamed', 'name is editable');
   ok(!doc.querySelector('#setupView [data-sutm="capType"]'), 'capacity type is not editable here');
-  ok(!/Paste/.test(doc.querySelector('#setupView .su-team').parentNode.textContent), 'no paste-from-spreadsheet');
+  ok(!/Paste/.test(doc.querySelector('#setupView .su-team').closest('.su-card').textContent), 'no paste-from-spreadsheet');
+  const wsBtn = doc.querySelector('#setupView [data-sutmws][data-mid="' + m0.id + '"]');
+  if (wsBtn) {
+    click(wsBtn);
+    ok([...doc.querySelectorAll('#popover .menu-list button')].length > 1, 'the Workstreams cell opens the multi-pick menu');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
   // a role picked here brings its capacity type along
   const r0 = state().teamTypes[0];
   window.HeadwayApp.ai.commit('map role', (s) => { window.RM.setRoleCapType(s, r0, s.capTypes[0]); });
