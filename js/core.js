@@ -31,7 +31,7 @@
     },
     tshirt: {
       name: 'T-shirt sizes',
-      hint: 'XS–XL relative buckets — quick gut-feel estimates',
+      hint: 'XS-XL relative buckets — quick gut-feel estimates',
       sizes: ['XS', 'S', 'M', 'L', 'XL'],
       days: { XS: 2, S: 5, M: 10, L: 20, XL: 40 }
     },
@@ -45,7 +45,7 @@
       storyOnly: ['0']
     },
     points5: {
-      name: 'Points 1–5',
+      name: 'Points 1-5',
       hint: 'Simple five-step scale',
       sizes: ['1', '2', '3', '4', '5'],
       days: { 1: 2, 2: 5, 3: 10, 4: 20, 5: 40 }
@@ -299,20 +299,26 @@
     ['reports', 'Reporting', 'chart-pie', 'Project reporting dashboard']
   ];
   // Onboarding presets: each writes ONLY these fields (schemes, sprints,
-  // budget, scheduling). Name, dates, phases, people and columns are never
-  // touched, so switching presets is safe after later steps were edited.
+  // budget, scheduling, and the item types + hierarchy named by `hier`).
+  // Name, dates, phases, epics, people and columns are never touched.
   RM.PRESETS = [
-    { key: 'scrum', name: 'Scrum', sprints: true,
-      desc: 'Stories carry the points; a feature is the span of its stories. Work is scheduled into 2-week sprints by story points, with budget tracking.',
-      v: { size: ['none', 'fibonacci'], prio: ['levels', 'moscow'], risk: ['none', 'none'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
-    { key: 'ascrum', name: 'Advanced Scrum', sprints: true,
-      desc: 'Scrum plus a size on every feature, and priority and risk on both features and stories.',
-      v: { size: ['tshirt', 'fibonacci'], prio: ['levels', 'moscow'], risk: ['risk', 'risk'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
-    { key: 'rapid', name: 'Rapid Delivery', sprints: false,
-      desc: 'T-shirt sizes on features, no sprints. Each feature takes a person, and Auto timeline packs features in as people free up.',
-      v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: true, plan: 'feature', mode: 'person' } } },
-    { key: 'minimal', name: 'Minimal', sprints: false,
-      desc: 'Just features on a timeline with T-shirt sizes. You place and stretch the bars yourself.',
+    { key: 'scrum', hier: 'scrum', name: 'Scrum', sprints: true,
+      desc: 'For most teams. Stories carry the points. Work is scheduled into 2-week sprints by story points, with budget tracking.',
+      v: { size: ['none', 'fibonacci'], prio: ['levels', 'levels'], risk: ['none', 'none'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
+    { key: 'ascrum', hier: 'scrum', name: 'Advanced Scrum', sprints: true,
+      desc: 'For Scrum teams with more complex planning needs. Scrum plus feature sizing and risk tracking.',
+      v: { size: ['tshirt', 'fibonacci'], prio: ['moscow', 'levels'], risk: ['risk', 'risk'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
+    { key: 'rapid', hier: 'feature', name: 'Rapid Delivery', sprints: false,
+      desc: 'For teams that track work at the feature level. Instead of sprints, work is scheduled weekly based on the feature capacity of each person.',
+      v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: true, cap: { on: true, plan: 'feature', mode: 'person' } } },
+    { key: 'contract', hier: 'feature', name: 'Contract Negotiation', sprints: false,
+      desc: 'For teams that need to agree on scope before signing. Rapid Delivery plus MoSCoW priority and a manual risk rating on every feature.',
+      v: { size: ['tshirt', 'none'], prio: ['moscow', 'none'], risk: ['risk', 'none'], wps: 0, budget: true, cap: { on: true, plan: 'feature', mode: 'person' } } },
+    { key: 'innovation', hier: 'feature', name: 'Innovation', sprints: false,
+      desc: 'For innovation-focused teams at the early project stage. Features are ranked by RICE score. Great for priority negotiation.',
+      v: { size: ['none', 'none'], prio: ['rice', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: true, plan: 'feature', mode: 'person' } } },
+    { key: 'minimal', hier: 'feature', name: 'Minimal', sprints: false,
+      desc: 'Minimal setup. Just features on a timeline with T-shirt sizes.',
       v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: false } } }
   ];
   RM.applyPreset = function (state, key) {
@@ -330,6 +336,7 @@
     m.apps.budget = v.budget;
     m.capacityEnabled = !!v.cap.on;
     if (v.cap.on) { m.planLevel = v.cap.plan; m.capMode = v.cap.mode; }
+    RM.applyHierarchySet(state, p.hier);
     m.preset = key;
     return true;
   };
@@ -344,14 +351,14 @@
   // Priority is its own column (risk measures uncertainty; priority ranks
   // importance): MoSCoW or Critical/High/Medium/Low ladders.
   RM.PRIORITY_SCHEMES = {
-    none: { name: 'None', label: 'Priority', desc: 'No priority column.' },
+    none: { name: 'None', label: 'Priority', desc: 'No priority column' },
     moscow: { name: 'MoSCoW', label: 'Priority', order: ['M', 'S', 'C', 'W'],
-      desc: 'Must / Should / Could / Won’t — classic scope-negotiation priority.' },
+      desc: 'Scope-negotiation priority: Must / Should / Could / Won’t' },
     levels: { name: 'Critical / High / Medium / Low', label: 'Priority', order: ['C', 'H', 'M', 'L'],
-      desc: 'A severity ladder — Critical, High, Medium, Low.' },
+      desc: 'A severity ladder: Critical, High, Medium, Low' },
     // computed from the item's four RICE inputs; there is no picked value
     rice: { name: 'RICE score', label: 'RICE', computed: true,
-      desc: 'Reach × Impact × Confidence ÷ Effort — evidence-based scoring.' }
+      desc: 'Reach × Impact × Confidence ÷ Effort' }
   };
   RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels', 'rice'];
   // stories carry no RICE inputs, so their scheme list stops at the ladders
@@ -427,7 +434,7 @@
   RM.DEFAULT_TEAM_TYPES = ['Project Manager', 'Product Manager', 'Software Engineer', 'Product Designer', 'QA Engineer', 'Data Scientist'];
   // capacity types: what kind of capacity a story drains and which people can
   // take it (a person's capacity type says what they supply)
-  RM.DEFAULT_CAP_TYPES = ['Development', 'Design', 'QA', 'Product', 'Data'];
+  RM.DEFAULT_CAP_TYPES = ['Development'];
   RM.capTypesOf = function (state) { return state.capTypes || []; };
   // story points a person supplies per sprint; null falls back to the document default
   RM.memberPoints = function (state, m) {
@@ -528,25 +535,32 @@
     return RM.MS_STYLES.indexOf(it && it.msStyle) > 0 ? it.msStyle : 'diamond';
   };
   // ---- item types & hierarchy. Three fixed storage levels (epic tag →
-  // item → story); each level lists the types it accepts. A type is a
-  // label + icon + Jira issue type name; behavior always follows the level.
+  // item → story); each type lives at exactly ONE level, and a level's
+  // children are the types of the level below. A type is a label + icon +
+  // Jira issue type name; behavior always follows the level.
   RM.LEVEL_KEYS = ['epic', 'feature', 'story'];
-  RM.DEFAULT_ITEM_TYPES = [
-    { key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' },
-    { key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' },
-    { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' },
-    { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
-    { key: 'story', label: 'Story', icon: 'bookmark', jira: 'Sub-task' },
-    { key: 'subtask', label: 'Subtask', icon: 'corner-down-right', jira: 'Sub-task' }
-  ];
+  // every built-in type record; a document carries a subset of them
+  RM.TYPE_CATALOG = {
+    epic: { key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' },
+    feature: { key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' },
+    story: { key: 'story', label: 'Story', icon: 'bookmark', jira: 'Sub-task' },
+    task: { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
+    bug: { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' },
+    issue: { key: 'issue', label: 'Issue', icon: 'circle-dot', jira: 'Task' }
+  };
+  // [level labels, type keys per level]; presets pick one by `hier`
+  RM.HIERARCHY_SETS = {
+    standard: { labels: ['Epic', 'Feature', 'Story'], levels: [['epic'], ['feature'], ['story', 'task']] },
+    scrum: { labels: ['Epic', 'Feature', 'Story'], levels: [['epic'], ['feature'], ['story', 'task', 'bug']] },
+    feature: { labels: ['Epic', 'Feature', 'Task'], levels: [['epic'], ['feature', 'issue'], ['task']] }
+  };
+  RM.DEFAULT_ITEM_TYPES = ['epic', 'feature', 'story', 'task'].map(function (k) { return RM.TYPE_CATALOG[k]; });
   // icons the first release shipped as defaults; stored documents still on
   // them pick up the new default glyphs
   RM.LEGACY_TYPE_ICONS = { feature: 'rows-3', story: 'list-tree' };
-  RM.DEFAULT_HIERARCHY_LEVELS = [
-    { key: 'epic', label: 'Epic', types: ['epic'] },
-    { key: 'feature', label: 'Feature', types: ['feature', 'bug', 'task'] },
-    { key: 'story', label: 'Story', types: ['story', 'subtask', 'bug'] }
-  ];
+  RM.DEFAULT_HIERARCHY_LEVELS = RM.LEVEL_KEYS.map(function (k, i) {
+    return { key: k, label: RM.HIERARCHY_SETS.standard.labels[i], types: RM.HIERARCHY_SETS.standard.levels[i] };
+  });
   RM.itemTypes = function (state) {
     var m = state && state.meta;
     return (m && Array.isArray(m.itemTypes) && m.itemTypes.length) ? m.itemTypes : RM.DEFAULT_ITEM_TYPES;
@@ -570,13 +584,14 @@
     if (/y$/i.test(lbl)) return lbl.slice(0, -1) + 'ies';
     return lbl + 's';
   };
-  RM.anyTypeAnyLevel = function (state) {
-    var h = state && state.meta && state.meta.hierarchy;
-    return !!(h && h.anyTypeAnyLevel);
+  // the level key a type lives at, or null
+  RM.typeLevel = function (state, key) {
+    for (var i = 0; i < RM.LEVEL_KEYS.length; i++) {
+      if ((RM.levelOf(state, RM.LEVEL_KEYS[i]).types || []).indexOf(key) !== -1) return RM.LEVEL_KEYS[i];
+    }
+    return null;
   };
   RM.typesFor = function (state, kind) {
-    var all = RM.itemTypes(state);
-    if (RM.anyTypeAnyLevel(state)) return all.slice();
     var keys = RM.levelOf(state, kind).types || [];
     return keys.map(function (k) { return RM.itemType(state, k); }).filter(Boolean);
   };
@@ -626,16 +641,36 @@
     var h = m.hierarchy && typeof m.hierarchy === 'object' ? m.hierarchy : {};
     var given = {};
     (Array.isArray(h.levels) ? h.levels : []).forEach(function (l) { if (l && l.key) given[l.key] = l; });
-    m.hierarchy = {
-      levels: RM.DEFAULT_HIERARCHY_LEVELS.map(function (d) {
-        var g = given[d.key] || {};
-        var list = (Array.isArray(g.types) ? g.types : []).filter(function (k) { return !!seenKey[k]; });
-        if (!list.length) list = d.types.filter(function (k) { return !!seenKey[k]; });
-        if (!list.length) list = [types[0].key];
-        return { key: d.key, label: String(g.label || d.label), types: list };
-      }),
-      anyTypeAnyLevel: !!h.anyTypeAnyLevel
-    };
+    // one level per type: walking top-down, a type already placed is
+    // dropped from later levels
+    var placed = {};
+    function claim(list) {
+      return list.filter(function (k) {
+        if (!seenKey[k] || placed[k]) return false;
+        placed[k] = true;
+        return true;
+      });
+    }
+    var levels = RM.DEFAULT_HIERARCHY_LEVELS.map(function (d) {
+      var g = given[d.key] || {};
+      return { key: d.key, label: String(g.label || d.label), types: claim(Array.isArray(g.types) ? g.types : []) };
+    });
+    // an empty level takes its default types that are still free
+    levels.forEach(function (lv, i) {
+      if (!lv.types.length) lv.types = claim(RM.DEFAULT_HIERARCHY_LEVELS[i].types);
+    });
+    // types on no level join the middle level
+    types.forEach(function (t) { if (!placed[t.key]) { placed[t.key] = true; levels[1].types.push(t.key); } });
+    // still empty (its defaults sit elsewhere): add a fresh canonical type
+    levels.forEach(function (lv, i) {
+      if (lv.types.length) return;
+      var base = RM.TYPE_CATALOG[RM.DEFAULT_HIERARCHY_LEVELS[i].types[0]], key = base.key, sfx = 2;
+      while (seenKey[key]) key = base.key + '-' + (sfx++);
+      seenKey[key] = true;
+      types.push({ key: key, label: base.label, icon: base.icon, jira: base.jira, color: RM.HASH_PALETTE[types.length % RM.HASH_PALETTE.length] });
+      lv.types = [key];
+    });
+    m.hierarchy = { levels: levels };
     var et = {};
     if (state.epicTypes && typeof state.epicTypes === 'object') {
       Object.keys(state.epicTypes).forEach(function (name) { if (seenKey[state.epicTypes[name]]) et[name] = state.epicTypes[name]; });
@@ -645,12 +680,13 @@
   function typeSlug(label) {
     return String(label || 'type').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'type';
   }
-  RM.addItemType = function (state, label, icon, jira) {
+  RM.addItemType = function (state, label, icon, jira, kind) {
     RM.normalizeTypes(state);
     var base = typeSlug(label), key = base, sfx = 2;
     while (RM.itemType(state, key)) key = base + '-' + (sfx++);
     var n = state.meta.itemTypes.length;
     state.meta.itemTypes.push({ key: key, label: String(label || 'New type'), icon: String(icon || 'tag'), jira: String(jira || ''), color: RM.HASH_PALETTE[n % RM.HASH_PALETTE.length] });
+    RM.levelOf(state, RM.LEVEL_KEYS.indexOf(kind) !== -1 ? kind : 'feature').types.push(key);
     return key;
   };
   RM.renameItemType = function (state, key, label) {
@@ -679,20 +715,35 @@
     var lv = RM.levelOf(state, kind);
     if (String(label || '').trim()) lv.label = String(label).trim();
   };
-  RM.setAnyTypeAnyLevel = function (state, on) {
+  // move a type to another level; refuses to empty the level it leaves
+  RM.setTypeLevel = function (state, key, kind) {
     RM.normalizeTypes(state);
-    state.meta.hierarchy.anyTypeAnyLevel = !!on;
+    if (!RM.itemType(state, key) || RM.LEVEL_KEYS.indexOf(kind) === -1) return false;
+    var from = RM.levelOf(state, RM.typeLevel(state, key));
+    if (from.key === kind) return true;
+    if (from.types.length === 1) return false;
+    from.types.splice(from.types.indexOf(key), 1);
+    RM.levelOf(state, kind).types.push(key);
+    return true;
   };
-  // allow / disallow a type at a level; refuses to empty a level
-  RM.setTypeAllowed = function (state, kind, key, on) {
+  // replace the document's types and hierarchy with a named set (presets);
+  // items whose type left the document fall back to their level default
+  RM.applyHierarchySet = function (state, name) {
+    var set = RM.HIERARCHY_SETS[name];
+    if (!set) return false;
+    var m = state.meta, old = {};
+    (m.itemTypes || []).forEach(function (t) { old[t.key] = t; });
+    m.itemTypes = [].concat.apply([], set.levels).map(function (k) {
+      var c = RM.TYPE_CATALOG[k];
+      return { key: k, label: c.label, icon: c.icon, jira: old[k] ? old[k].jira : c.jira, color: '' };
+    });
+    m.hierarchy = { levels: RM.LEVEL_KEYS.map(function (k, i) { return { key: k, label: set.labels[i], types: set.levels[i].slice() }; }) };
     RM.normalizeTypes(state);
-    if (!RM.itemType(state, key)) return false;
-    var lv = RM.levelOf(state, kind);
-    var i = lv.types.indexOf(key);
-    if (on) { if (i === -1) lv.types.push(key); return true; }
-    if (i === -1) return true;
-    if (lv.types.length === 1) return false;
-    lv.types.splice(i, 1);
+    var fF = RM.defaultTypeFor(state, 'feature'), fS = RM.defaultTypeFor(state, 'story');
+    (state.items || []).forEach(function (it) {
+      if (!RM.itemType(state, it.type)) it.type = fF;
+      (it.stories || []).forEach(function (st) { if (!RM.itemType(state, st.type)) st.type = fS; });
+    });
     return true;
   };
   // remove a type: refused while it is the only type of some level;
@@ -727,6 +778,17 @@
     '2026-09-04', '2026-09-07',
     '2026-11-25', '2026-11-26', '2026-11-27',
     '2026-12-24', '2026-12-25', '2027-01-01'
+  ];
+  // 2027, same observances (New Year's Day is in the 2026 table). Weekend
+  // holidays move to the nearest weekday: Juneteenth (Sat) → Fri 6/18,
+  // July 4 (Sun) → Mon 7/5, Christmas (Sat) → Thu 12/23 + Fri 12/24,
+  // New Year's 2028 (Sat) → Fri 12/31. Merged once (meta.holidaysV2027) as
+  // ranges, so saved documents gain it without reviving deleted holidays.
+  RM.US_HOLIDAYS_2027 = [
+    '2027-01-18', '2027-02-15', '2027-05-28', '2027-05-31',
+    '2027-06-18', '2027-07-05', '2027-09-03', '2027-09-06',
+    '2027-11-24', '2027-11-25', '2027-11-26',
+    '2027-12-23', '2027-12-24', '2027-12-31'
   ];
 
   // Categorical bar palette (CVD-validated): product blue / data orange /
@@ -1176,7 +1238,11 @@
     '2026-01-01': 'New Year’s', '2026-01-19': 'MLK Day', '2026-02-16': 'Presidents’ Day',
     '2026-05-22': 'Memorial Day', '2026-05-25': 'Memorial Day', '2026-06-19': 'Juneteenth',
     '2026-07-03': 'Independence Day', '2026-09-04': 'Labor Day', '2026-09-07': 'Labor Day',
-    '2026-11-25': 'Thanksgiving', '2026-12-24': 'Christmas', '2027-01-01': 'New Year’s'
+    '2026-11-25': 'Thanksgiving', '2026-12-24': 'Christmas', '2027-01-01': 'New Year’s',
+    '2027-01-18': 'MLK Day', '2027-02-15': 'Presidents’ Day', '2027-05-28': 'Memorial Day',
+    '2027-05-31': 'Memorial Day', '2027-06-18': 'Juneteenth', '2027-07-05': 'Independence Day',
+    '2027-09-03': 'Labor Day', '2027-09-06': 'Labor Day', '2027-11-24': 'Thanksgiving',
+    '2027-12-23': 'Christmas', '2027-12-31': 'New Year’s'
   };
   function addDaysIso(iso, n) {
     var d = RM.parseISO(iso);
@@ -1506,8 +1572,15 @@
         var rEnd = typeof r.end === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.end) && r.end >= r.start ? r.end : r.start;
         return { name: typeof r.name === 'string' ? r.name : '', start: r.start, end: rEnd };
       })
-      .filter(Boolean)
-      .sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+      .filter(Boolean);
+    if (!m.holidaysV2027) {
+      var hol27 = RM.US_HOLIDAYS_2027.filter(function (iso) {
+        return !m.holidayRanges.some(function (r) { return r.start <= iso && iso <= r.end; });
+      });
+      m.holidayRanges = m.holidayRanges.concat(RM.rangesFromDates(hol27));
+      m.holidaysV2027 = true;
+    }
+    m.holidayRanges.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
     RM.syncHolidayDates(m);
     m.sprintAnchor = m.sprintAnchor || m.timelineStart;
     m.sprintAnchorNum = m.sprintAnchorNum != null && isFinite(m.sprintAnchorNum) ? m.sprintAnchorNum : 1;
@@ -2981,7 +3054,7 @@
       if (it.deps.indexOf(it.num) !== -1) add(it, 'warn', 'SELF_DEP', 'Depends on itself (ignored)');
       if (!it.feature.trim()) add(it, 'warn', 'NO_TITLE', 'Feature has no title');
 
-      if (!RM.anyTypeAnyLevel(state)) {
+      {
         var okTypes = RM.levelOf(state, 'feature').types;
         if (okTypes.indexOf(RM.typeOf(state, it, 'feature').key) === -1) {
           add(it, 'warn', 'TYPE_LEVEL', RM.levelLabel(state, 'feature') + ' #' + it.num + ' is a ' + RM.typeOf(state, it, 'feature').label +
@@ -3056,7 +3129,7 @@
       });
     });
 
-    if (!RM.anyTypeAnyLevel(state)) {
+    {
       var okEpic = RM.levelOf(state, 'epic').types;
       Object.keys(state.epicTypes || {}).forEach(function (name) {
         if (okEpic.indexOf(RM.typeOf(state, name, 'epic').key) === -1) {

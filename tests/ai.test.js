@@ -20,7 +20,12 @@ function throws(fn, re, name) {
 
 function freshState() {
   return RM.normalizeState({
-    meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 20, priorityScheme: 'levels', riskScheme: 'lmh' },
+    meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 20, priorityScheme: 'levels', riskScheme: 'lmh',
+    // a project saved with the older type set (Bug and Subtask at the story level)
+    itemTypes: [{ key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' }, { key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' },
+      { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' }, { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
+      { key: 'story', label: 'Story', icon: 'bookmark', jira: 'Sub-task' }, { key: 'subtask', label: 'Subtask', icon: 'corner-down-right', jira: 'Sub-task' }],
+    hierarchy: { levels: [{ key: 'epic', types: ['epic'] }, { key: 'feature', types: ['feature', 'task'] }, { key: 'story', types: ['story', 'subtask', 'bug'] }] } },
     phases: [{ id: 'p1', name: 'Pilot' }, { id: 'p2', name: 'Scale', bucket: true }],
     team: [{ id: 't1', name: 'Ada', type: 'Engineer', rate: 100, cost: 60 }],
     items: [

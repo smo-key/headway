@@ -10366,41 +10366,46 @@
         '</div>';
     }).join('');
 
-    var hier = m.hierarchy, anyLvl = RM.anyTypeAnyLevel(state);
-    var levelRows = hier.levels.map(function (lv) {
-      var chips = anyLvl ? '' : RM.itemTypes(state).map(function (t) {
-        var on = lv.types.indexOf(t.key) !== -1;
-        return '<button class="su-hchip' + (on ? ' on' : '') + '" data-suhtype="' + esc(lv.key + ':' + t.key) + '" title="' + (on ? 'Allowed' : 'Not allowed') + ' at this level">' +
-          '<i data-lucide="' + esc(t.icon) + '"></i>' + esc(t.label) + '</button>';
+    // Hierarchy: one block per level, top to bottom; each type is listed
+    // once, under the level it lives at
+    var hier = m.hierarchy;
+    var levelBlocks = hier.levels.map(function (lv, li) {
+      var only = lv.types.length === 1;
+      var rows = lv.types.map(function (k, ti) {
+        var t = RM.itemType(state, k);
+        if (!t) return '';
+        return '<tr><td><button class="su-hicon" data-suhticon="' + esc(t.key) + '" title="Icon"><i data-lucide="' + esc(t.icon) + '"></i></button>' +
+          '<input type="color" class="su-hcolor" data-suhtcolor="' + esc(t.key) + '" value="#' + esc(t.color) + '" title="Color (Color by item type)"></td>' +
+          '<td><div class="su-hname"><input data-suhtlabel="' + esc(t.key) + '" value="' + esc(t.label) + '" aria-label="Type label">' +
+          (ti === 0 ? '<span class="su-hdef" title="New ' + esc(lv.label.toLowerCase()) + ' items start as this type">default</span>' : '') + '</div></td>' +
+          '<td><input data-suhtjira="' + esc(t.key) + '" value="' + esc(t.jira) + '" placeholder="Jira issue type" aria-label="Jira issue type"></td>' +
+          '<td><select data-suhtlevel="' + esc(t.key) + '" aria-label="Level"' + (only ? ' disabled title="The only type at this level"' : '') + '>' +
+          hier.levels.map(function (o) { return '<option value="' + o.key + '"' + (o.key === lv.key ? ' selected' : '') + '>' + esc(o.label) + '</option>'; }).join('') +
+          '</select></td>' +
+          '<td class="hol-x"><button data-suhtrm="' + esc(t.key) + '"' + (only ? ' disabled title="The only type at this level"' : ' title="Remove type"') + '><i data-lucide="x"></i></button></td></tr>';
       }).join('');
-      return '<div class="su-hlevel"><input data-suhlabel="' + lv.key + '" value="' + esc(lv.label) + '" aria-label="Level label">' +
-        '<div class="su-hchips">' + chips + '</div></div>';
-    }).join('');
-    var typeRows2 = RM.itemTypes(state).map(function (t) {
-      return '<tr><td><button class="su-hicon" data-suhticon="' + esc(t.key) + '" title="Icon"><i data-lucide="' + esc(t.icon) + '"></i></button>' +
-        '<input type="color" class="su-hcolor" data-suhtcolor="' + esc(t.key) + '" value="#' + esc(t.color) + '" title="Color (Color by item type)"></td>' +
-        '<td><input data-suhtlabel="' + esc(t.key) + '" value="' + esc(t.label) + '" aria-label="Type label"></td>' +
-        '<td><input data-suhtjira="' + esc(t.key) + '" value="' + esc(t.jira) + '" placeholder="Jira issue type" aria-label="Jira issue type"></td>' +
-        '<td class="hol-x"><button data-suhtrm="' + esc(t.key) + '" title="Remove type"><i data-lucide="x"></i></button></td></tr>';
+      return '<div class="su-hlv" data-suhlevel="' + lv.key + '">' +
+        '<div class="su-hlv-head"><span class="su-hlv-n">Level ' + (li + 1) + '</span>' +
+        '<input data-suhlabel="' + lv.key + '" value="' + esc(lv.label) + '" aria-label="Level ' + (li + 1) + ' name">' +
+        (li ? '<span class="m-hint">under ' + esc(hier.levels[li - 1].label) + '</span>' : '') + '</div>' +
+        '<table class="hol-table su-htypes">' + (li ? '' : '<thead><tr><th></th><th>Type</th><th>Jira issue type</th><th>Level</th><th></th></tr></thead>') +
+        '<tbody>' + rows + '</tbody></table>' +
+        '<button class="su-hadd" data-suhadd="' + lv.key + '"><i data-lucide="plus"></i> Add ' + esc(lv.label.toLowerCase()) + ' type</button></div>';
     }).join('');
     var hierCard =
       '<section class="su-card"><h2>Hierarchy</h2>' +
-      '<div class="m-hint">Three levels, top to bottom. Name each level and pick which types it accepts; the first allowed type is the default for new items.</div>' +
-      '<div class="su-hlevels">' + levelRows + '</div>' +
-      (anyLvl ? '<div class="m-hint">Every type is allowed at every level.</div>' : '') +
-      '<label class="p-check" style="margin-top:10px"><input type="checkbox" id="suHierAny"' + (anyLvl ? ' checked' : '') + '> Allow any type at any level</label>' +
-      '<h3 class="su-sub">Types</h3>' +
-      '<table class="hol-table su-htypes"><thead><tr><th></th><th>Label</th><th>Jira issue type</th><th></th></tr></thead><tbody>' + typeRows2 + '</tbody></table>' +
-      '<button id="suHierAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add type</button>' +
-      '<div class="m-hint">Behavior follows the level, not the type: a Bug at the ' + esc(RM.levelLabel(state, 'feature')) + ' level is a bar on the timeline like any other. The Jira name is what sync and the CSV export use.</div>' +
+      '<div class="m-hint">Each item type lives at one level, and items hold children from the level below. The first type at a level is the default for new items.</div>' +
+      '<div class="su-hlvs">' + levelBlocks + '</div>' +
+      '<div class="m-hint">Behavior follows the level, not the type. The Jira issue type is what sync and the CSV export use.</div>' +
       '</section>';
 
     // the cards, then grouped into sections below
     var parts = {
       timeline:
         '<section class="su-card"><h2>Project</h2>' +
-        '<label class="p-lab">Name</label>' +
-        '<input id="suTitle" style="width:100%" maxlength="120" value="' + esc(m.title || '') + '" placeholder="Roadmap name">' +
+        '<label class="p-lab" for="suTitle">Name' + (wz ? ' <span class="req" aria-hidden="true">*</span>' : '') + '</label>' +
+        '<input id="suTitle" style="width:100%" maxlength="120" value="' + esc(m.title || '') + '" placeholder="' + (wz ? 'e.g. Mobile app launch' : 'Roadmap name') + '"' +
+        (wz ? ' required aria-required="true"' : '') + '>' +
         '</section>' +
         '<section class="su-card"><h2>Timeline</h2>' +
         '<div class="p-grid2">' +
@@ -10591,8 +10596,7 @@
       budget: '<section class="su-card">' +
         '<label class="p-check"><input type="checkbox" data-subudget' + (RM.appEnabled(state, 'budget') ? ' checked' : '') + '> Track budget</label>' +
         '<div class="m-hint">Adds the Budgeting tab: hours and cost by role, week and phase.</div></section>' +
-        (RM.appEnabled(state, 'budget') ? parts.team
-          : '<section class="su-card"><div class="m-hint">Roles are named on the Team section as you add people.</div></section>'),
+        (RM.appEnabled(state, 'budget') ? parts.team : ''),
       team: '<section class="su-card">' + teamTableHtml() + '</section>',
       scheduling: parts.capacity,
       columns: parts.columns,
@@ -10711,6 +10715,10 @@
       pcStory(27, 18, 46, '2 L') + pcFeat(40, 56, 66, 'Search · XL · Should') + pcRisk(93, 70) + pcStory(40, 22, 86, '8 M') + pcStory(63, 16, 86, '3 L'),
     rapid: pcMonths() + pcFeat(1, 30, 26, 'Login · M') + pcFeat(32, 44, 26, 'Billing · L') + pcFeat(1, 18, 48, 'Export · S') +
       pcFeat(20, 30, 48, 'Search · M') + pcFeat(51, 26, 48, 'Alerts · M') + pcFeat(78, 20, 70, 'Admin · S'),
+    contract: pcMonths() + pcFeat(1, 30, 26, 'Login · M · Must') + pcFeat(32, 44, 26, 'Billing · L · Must') + pcRisk(73, 30) +
+      pcFeat(1, 30, 48, 'Export · S · Could') + pcFeat(32, 34, 48, 'Alerts · M · Should') + pcRisk(63, 52) + pcFeat(67, 31, 70, 'Admin · S · Won’t'),
+    innovation: pcMonths() + pcFeat(1, 30, 26, 'Pilot · RICE 84') + pcRisk(28, 30) + pcFeat(32, 40, 26, 'Chat assist · RICE 61') +
+      pcFeat(1, 36, 48, 'Voice · RICE 40') + pcRisk(34, 52) + pcFeat(38, 30, 48, 'Offline · RICE 22') + pcFeat(69, 29, 70, 'AR view · RICE 9'),
     minimal: pcMonths() + pcFeat(1, 30, 26, 'Login · M') + pcFeat(24, 44, 46, 'Billing · L') + pcFeat(8, 18, 66, 'Export · S') +
       pcFeat(60, 36, 86, 'Search · M')
   };
@@ -10882,24 +10890,26 @@
     // the start page hides the top bar; the wizard needs it (drag, close)
     document.body.classList.remove('start');
     state = blankState();
+    state.meta.title = ''; // required: the user names the project
     undoStack.length = 0; redoStack.length = 0;
     // the first project on this machine starts with a Welcome (name + theme)
-    if (!userName() && !localStorageGet(ONBOARDED_KEY)) wz.step = 'welcome';
+    if (!userName() && !localStorageGet(ONBOARDED_KEY)) { wz.step = 'welcome'; wz.hasWelcome = true; }
     $('#setupView').innerHTML = ''; // one copy of the section controls on screen
     document.body.classList.add('wizard-open');
     var tb = $('#topbar');
-    document.documentElement.style.setProperty('--topbar-h', (tb.offsetHeight || 46) + 'px');
     var x = document.createElement('button');
     x.id = 'wzClose';
     x.title = 'Close';
     x.setAttribute('aria-label', 'Close');
     x.innerHTML = '<i data-lucide="x"></i>';
     tb.insertBefore(x, $('.win-caption', tb) || null);
-    var stepLbl = document.createElement('span');
-    stepLbl.id = 'wzTopStep';
-    stepLbl.className = 'wz-topstep';
-    $('#docTitle').insertAdjacentElement('afterend', stepLbl);
+    // measured with the close button in place (it sets the bar's height),
+    // so the wizard — and its progress bar — start right below it
+    document.documentElement.style.setProperty('--topbar-h', (tb.offsetHeight || 46) + 'px');
     $('#docTitle').value = 'New project';
+    // the progress bar stays put under the top bar; only its fill moves
+    $('#wizard').innerHTML = '<div class="wz-progress" id="wzProgress" role="progressbar" aria-label="New project progress" aria-valuemin="0" aria-valuemax="100">' +
+      '<i></i></div><div class="wz-body"></div>';
     $('#wizard').hidden = false;
     renderWizard();
     if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
@@ -10947,8 +10957,6 @@
     document.body.classList.remove('wizard-open');
     var x = $('#wzClose');
     if (x) x.remove();
-    var stepLbl = $('#wzTopStep');
-    if (stepLbl) stepLbl.remove();
     $('#wizard').hidden = true;
     $('#wizard').innerHTML = '';
     stateRev += 1;
@@ -11064,14 +11072,49 @@
           esc(WZ_SUMMARY[k]()) + '</span><button data-wzgo="' + k + '">Edit</button></div>';
       }).join('') + '</section>';
   }
+  // required fields still empty on a step (Continue stays disabled)
+  function wizardMissing(step) {
+    if (step === 'project') return !String(state.meta.title || '').trim() || !state.meta.preset;
+    return false;
+  }
+  function wizardSyncNext() {
+    var nb = $('#wizard [data-wz="next"]');
+    if (nb && wz && wz.step !== 'welcome') nb.disabled = wizardMissing(wz.step);
+    var open = !wizardMissing('project');
+    $$('#wizard .wz-step').forEach(function (b) { if (b.dataset.wzgo !== 'project') b.disabled = !open; });
+  }
+  // a preset switch overwrites its fields: ask first when the draft changed
+  // any of them since the current preset was applied
+  function presetEdited() {
+    var cur = state.meta.preset;
+    if (!cur) return false;
+    var c = RM.clone(state);
+    RM.applyPreset(c, cur);
+    RM.applySizeRollup(c);
+    return JSON.stringify(c) !== JSON.stringify(state);
+  }
+  function pickPreset(key, then) {
+    if (key === state.meta.preset) { if (then) then(); return; }
+    function go() { commit('preset', function (s2) { RM.applyPreset(s2, key); }); if (then) then(); }
+    if (!presetEdited()) { go(); return; }
+    var p = RM.PRESETS.filter(function (x) { return x.key === key; })[0];
+    confirmBox('Switch to ' + p.name + '?',
+      'The preset resets sizing, priority, risk, sprints, budget, scheduling and item types. The changes you made to those will be lost.',
+      'Switch preset', go, true);
+  }
   function renderWizard() {
     if (!wz) return;
-    var host = $('#wizard');
+    var host = $('#wizard .wz-body');
+    if (!host) return;
     var keep = host.querySelector('.wz-content');
     var scroll = keep ? keep.scrollTop : 0;
     var idx = WZ_STEPS.indexOf(wz.step);
-    var hasPreset = !!state.meta.preset;
-    var need = wz.step === 'project' && !hasPreset;
+    var hasPreset = !wizardMissing('project');
+    var need = wizardMissing(wz.step);
+    var seq = (wz.hasWelcome ? ['welcome'] : []).concat(WZ_STEPS);
+    var pct = Math.round((seq.indexOf(wz.step) + 1) / seq.length * 100);
+    var bar = $('#wzProgress');
+    if (bar) { bar.setAttribute('aria-valuenow', pct); bar.firstChild.style.width = pct + '%'; }
     if (wz.step === 'welcome') {
       host.innerHTML = '<div class="wz-welcome">' + welcomeHtml() + '</div>';
     } else {
@@ -11083,7 +11126,6 @@
       }).join('');
       var body = wz.step === 'review' ? reviewHtml() : sectionBody(wz.step, 'wizard');
       host.innerHTML =
-        '<div class="wz-progress"><i style="width:' + Math.round((idx + 1) / WZ_STEPS.length * 100) + '%"></i></div>' +
         '<div class="wz-layout"><nav class="wz-rail" aria-label="New project steps">' + rail + '</nav>' +
         '<div class="wz-main"><div class="wz-content">' +
         (wz.step === 'review' ? '' : '<h1 class="wz-h1">' + esc(wizardStepLabel(wz.step)) + '</h1>') + body + '</div>' +
@@ -11094,11 +11136,13 @@
       var c = host.querySelector('.wz-content');
       if (c && keep) c.scrollTop = scroll;
     }
-    var topStep = $('#wzTopStep');
-    if (topStep) topStep.textContent = idx === -1 ? '' : 'Step ' + (idx + 1) + ' of ' + WZ_STEPS.length;
     var nrIn = teamNewRoleFor && host.querySelector('[data-sutmnewrole]');
     if (nrIn) nrIn.focus();
     if (window.lucide) lucide.createIcons();
+    // the top bar settles once its icons render: keep the wizard (and its
+    // progress bar) right below it
+    var tbH = $('#topbar').offsetHeight;
+    if (tbH) document.documentElement.style.setProperty('--topbar-h', tbH + 'px');
   }
   $('#wizard').addEventListener('click', function (e) {
     if (!wz) return;
@@ -11106,8 +11150,7 @@
     if (go) { if (!go.disabled) wizardGo(go.dataset.wzgo); return; }
     var pc = e.target.closest('[data-wzpreset]');
     if (pc) {
-      var pKey = pc.dataset.wzpreset;
-      commit('preset', function (s2) { RM.applyPreset(s2, pKey); });
+      pickPreset(pc.dataset.wzpreset);
       return;
     }
     var th = e.target.closest('[data-wztheme]');
@@ -11127,6 +11170,13 @@
   $('#wizard').addEventListener('change', function (e) {
     if (e.target.id === 'wzName') setUserName(e.target.value);
   });
+  // required fields: Continue follows the typing, not just the commit
+  $('#wizard').addEventListener('input', function (e) {
+    if (!wz || e.target.id !== 'suTitle') return;
+    state.meta.title = e.target.value.trim();
+    wz.dirty = true;
+    wizardSyncNext();
+  });
   // the preset radio group: arrow keys pick the next / previous preset
   $('#wizard').addEventListener('keydown', function (e) {
     var card = e.target.closest && e.target.closest('[data-wzpreset]');
@@ -11136,9 +11186,10 @@
     e.preventDefault();
     var keys = RM.PRESETS.map(function (p) { return p.key; });
     var next = keys[(keys.indexOf(card.dataset.wzpreset) + d + keys.length) % keys.length];
-    commit('preset', function (s2) { RM.applyPreset(s2, next); });
-    var nb = $('#wizard [data-wzpreset="' + next + '"]');
-    if (nb) nb.focus();
+    pickPreset(next, function () {
+      var nb = $('#wizard [data-wzpreset="' + next + '"]');
+      if (nb) nb.focus();
+    });
   });
   $('#topbar').addEventListener('click', function (e) {
     if (e.target.closest('#wzClose')) wizardTryClose();
@@ -11207,7 +11258,7 @@
       return;
     }
     if (e.target.id === 'suTitle') {
-      var tv2 = e.target.value.trim() || 'Roadmap';
+      var tv2 = e.target.value.trim() || (wz ? '' : 'Roadmap');
       commit('title', function (s2) { s2.meta.title = tv2; });
       return;
     }
@@ -11228,7 +11279,12 @@
     if (t.dataset.suhtlabel) { var tk2 = t.dataset.suhtlabel, tlv2 = t.value; commit('rename type', function (s2) { RM.renameItemType(s2, tk2, tlv2); }); return; }
     if (t.dataset.suhtcolor) { var tk4 = t.dataset.suhtcolor, cv = t.value; commit('type color', function (s2) { RM.setItemTypeColor(s2, tk4, cv); }); return; }
     if (t.dataset.suhtjira) { var tk3 = t.dataset.suhtjira, jv = t.value; commit('type jira name', function (s2) { RM.setItemTypeJira(s2, tk3, jv); }); return; }
-    if (t.id === 'suHierAny') { var anyOn = t.checked; commit('any type at any level', function (s2) { RM.setAnyTypeAnyLevel(s2, anyOn); }); return; }
+    if (t.dataset.suhtlevel) {
+      var tk5 = t.dataset.suhtlevel, lvTo = t.value, okL = true;
+      commit('type level', function (s2) { okL = RM.setTypeLevel(s2, tk5, lvTo); });
+      if (!okL) toast('A level needs at least one type');
+      return;
+    }
     if (t.dataset.suapp) {
       var appKey = t.dataset.suapp, appOn = t.checked;
       var appName = (RM.APPS.filter(function (a) { return a[0] === appKey; })[0] || [])[1] || appKey;
@@ -11487,24 +11543,17 @@
     }
     if (t.dataset.suwsedit) { wsEditModal(t.dataset.suwsedit); return; }
     if (t.dataset.sudefws != null) { defaultWsModal(); return; }
-    if (t.dataset.suhtype) {
-      var parts = t.dataset.suhtype.split(':'), hk = parts[0], tk = parts[1];
-      var wasOn = t.classList.contains('on');
-      var okT = true;
-      commit(wasOn ? 'disallow type' : 'allow type', function (s2) { okT = RM.setTypeAllowed(s2, hk, tk, !wasOn); });
-      if (!okT) toast('A level needs at least one type');
-      return;
-    }
     if (t.dataset.suhtrm) {
       var rmTypeKey = t.dataset.suhtrm, okR = true;
       commit('remove type', function (s2) { okR = RM.removeItemType(s2, rmTypeKey); });
-      if (!okR) toast('That type is the only one allowed at a level');
+      if (!okR) toast('A level needs at least one type');
       return;
     }
     if (t.dataset.suhticon) { typeIconMenu(t, t.dataset.suhticon); return; }
-    if (t.id === 'suHierAdd') {
-      commit('add type', function (s2) { RM.addItemType(s2, 'New type', 'tag', ''); });
-      requestAnimationFrame(function () { var all = $$('input[data-suhtlabel]', suHost); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
+    if (t.dataset.suhadd) {
+      var addLv = t.dataset.suhadd, newKey = '';
+      commit('add type', function (s2) { newKey = RM.addItemType(s2, 'New type', 'tag', '', addLv); });
+      requestAnimationFrame(function () { var inp = $('input[data-suhtlabel="' + newKey + '"]', suHost); if (inp) { inp.focus(); inp.select(); } });
       return;
     }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }

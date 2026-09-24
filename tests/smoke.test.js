@@ -812,6 +812,11 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(!!doc.querySelector('#topbar .tb-mark') && !!doc.querySelector('#wzClose'), 'the app top bar stays (draggable), with a close button');
   ok(doc.querySelectorAll('#wizard .wz-step').length === 9, 'nine numbered steps');
   ok(doc.querySelector('#wizard [data-wz="next"]').disabled, 'Continue waits for a preset');
+  ok(doc.querySelector('#wizard #suTitle').value === '' && doc.querySelector('#wizard #suTitle').required &&
+     /\*/.test(doc.querySelector('#wizard label[for="suTitle"]').textContent), 'Name starts empty and is marked required');
+  const bar = doc.querySelector('#wizard > #wzProgress');
+  ok(!!bar && bar.getAttribute('role') === 'progressbar' && bar.firstChild.style.width === Math.round(100 / 9) + '%', 'a progress bar sits under the top bar');
+  ok(!doc.querySelector('#wzTopStep') && !/Step \d+ of/.test(doc.querySelector('#topbar').textContent), 'no "Step N of M" text');
   ok(doc.querySelectorAll('#wizard .wz-step[disabled]').length === 8, 'later steps wait for a preset too');
   ok(!!doc.querySelector('#wizard #suTitle') && !doc.querySelector('#setupView #suTitle'), 'the Project section renders in the wizard, once');
   // edits in the wizard go to the draft only
@@ -821,8 +826,7 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(window.localStorage.getItem('headway-v1') === lsBefore, 'nothing from the draft is saved locally');
   // (a disk reload under the wizard runs through the real file path, in the async tests below)
   ok(!('reloadForTest' in window.HeadwayApp.wizard), 'no test-only hooks in the shipped wizard API');
-  // the top bar carries the step
-  ok(doc.querySelector('#wzTopStep').textContent === 'Step 1 of 9' && !doc.querySelector('#wizard .wz-kicker'), 'the top bar says Step 1 of 9');
+  ok(!doc.querySelector('#wizard .wz-kicker'), 'no Welcome kicker past the first run');
   window.HeadwayApp.wizard.close(true);
   const beforeB = JSON.stringify(state());
   window.HeadwayApp.wizard.open();
@@ -855,13 +859,22 @@ ok(state().team.length === 1, 'role added via the blank add row');
   click(doc.querySelector('#wizard [data-wz="next"]'));
   ok(!doc.querySelector('#wizard [data-wz="back"]').disabled, 'Back returns to Welcome from the Project step');
   const cards = doc.querySelectorAll('#wizard [data-wzpreset]');
-  ok(cards.length === 4 && [...cards].map(c => c.dataset.wzpreset).join() === 'scrum,ascrum,rapid,minimal', 'four presets');
+  ok(cards.length === 6 && [...cards].map(c => c.dataset.wzpreset).join() === 'scrum,ascrum,rapid,contract,innovation,minimal', 'six presets');
   ok([...cards].every(c => c.querySelector('.pc-sketch') && c.querySelector('.pc-sketch').children.length > 3), 'each card has a sketch with bars');
   ok(!doc.querySelector('#wizard .pc-check'), 'no check mark until one is picked');
-  const ti = doc.querySelector('#wizard #suTitle'); ti.value = 'Wizard project'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(doc.querySelector('#wzProgress').firstChild.style.width === Math.round(2 / 10 * 100) + '%', 'the progress bar counts Welcome as a step');
   click(doc.querySelector('#wizard [data-wzpreset="rapid"]'));
   ok(doc.querySelector('#wizard [data-wzpreset="rapid"]').classList.contains('on') && !!doc.querySelector('#wizard [data-wzpreset="rapid"] .pc-check') &&
-     !doc.querySelector('#wizard [data-wz="next"]').disabled, 'picking a preset selects it, shows the check and enables Continue');
+     doc.querySelector('#wizard [data-wz="next"]').disabled, 'a preset alone is not enough: Continue waits for the name');
+  const ti = doc.querySelector('#wizard #suTitle'); ti.value = 'Wizard project';
+  ti.dispatchEvent(new window.Event('input', { bubbles: true }));
+  ok(!doc.querySelector('#wizard [data-wz="next"]').disabled && doc.querySelectorAll('#wizard .wz-step[disabled]').length === 0,
+    'typing the name enables Continue at once');
+  ti.value = '  '; ti.dispatchEvent(new window.Event('input', { bubbles: true }));
+  ok(doc.querySelector('#wizard [data-wz="next"]').disabled, 'a blank name disables it again');
+  ti.value = 'Wizard project'; ti.dispatchEvent(new window.Event('input', { bubbles: true }));
+  ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.title === 'Wizard project' && !doc.querySelector('#wizard [data-wz="next"]').disabled, 'and the name commits on change');
   ok(state().meta.weeksPerSprint === 0 && state().meta.capacityEnabled && state().meta.title === 'Wizard project', 'the draft took the preset, and kept the name');
   ok(doc.querySelectorAll('#wizard .wz-step[disabled]').length === 0, 'with a preset every step opens');
   // Project in the wizard: work week and holidays fold into one summary row
@@ -875,7 +888,16 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(state().meta.weeksPerSprint === 3 && doc.querySelectorAll('#wizard .su-spr').length === 6, 'sprints on: six upcoming sprints preview');
   click(doc.querySelector('#wizard [data-wzgo="project"]'));
   click(doc.querySelector('#wizard [data-wzpreset="scrum"]'));
+  ok(/Switch to Scrum/.test(doc.querySelector('#modalHost').textContent) && state().meta.preset === 'rapid',
+    'after edits to preset settings, switching preset asks first');
+  click(doc.querySelector('#modalHost [data-m="cancel"]'));
+  ok(state().meta.preset === 'rapid' && state().meta.weeksPerSprint === 3, 'Cancel keeps the preset and the edits');
+  click(doc.querySelector('#wizard [data-wzpreset="scrum"]'));
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
   ok(state().meta.weeksPerSprint === 2 && state().meta.title === 'Wizard project', 'switching preset rewrites its own fields only');
+  click(doc.querySelector('#wizard [data-wzpreset="ascrum"]'));
+  ok(doc.querySelector('#modalHost').hidden && state().meta.preset === 'ascrum', 'with no edits since, a switch needs no confirmation');
+  click(doc.querySelector('#wizard [data-wzpreset="scrum"]'));
   window.HeadwayApp.wizard.go('review');
   const rows = doc.querySelectorAll('#wizard .wz-sum [data-wzgo]');
   ok(rows.length === 8, 'review lists the eight sections with Edit');
@@ -980,10 +1002,11 @@ ok(state().team.length === 1, 'role added via the blank add row');
   doc.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
   doc.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
   ok(state().meta.preset === 'minimal', 'arrows wrap around');
+  ok(doc.querySelector('#modalHost').hidden, 'arrowing through untouched presets never asks');
   window.HeadwayApp.wizard.go('sprints');
-  ok(doc.querySelector('#wzTopStep').textContent === 'Step 2 of 9', 'the top bar step follows');
+  ok(doc.querySelector('#wzProgress').firstChild.style.width === Math.round(2 / 9 * 100) + '%', 'the progress bar follows the step');
   window.HeadwayApp.wizard.close(true);
-  ok(!doc.querySelector('#wzTopStep'), 'and leaves with the wizard');
+  ok(!doc.querySelector('#wzProgress'), 'and leaves with the wizard');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 // ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
@@ -1539,12 +1562,22 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   click(doc.querySelector('#setupView [data-suhieropen]'));
   const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
   ok(!!card, 'Hierarchy card renders in the Workstreams tab');
-  const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
-  ok(bugChip && bugChip.classList.contains('on'), 'Bug is allowed at the Feature level by default');
-  click(bugChip);
-  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') === -1, 'clicking a chip disallows the type');
-  click(doc.querySelector('button[data-suhtype="feature:bug"]'));
-  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') !== -1, 'clicking again re-allows it');
+  // types are grouped under the one level each lives at
+  const lvTypes = (k) => [...doc.querySelectorAll('#setupView [data-suhlevel="' + k + '"] input[data-suhtlabel]')].map(i => i.dataset.suhtlabel);
+  ok(lvTypes('epic').join() === 'epic' && lvTypes('feature').join() === 'feature' && lvTypes('story').join() === 'story,task',
+    'each type is listed once, under its level');
+  ok(!doc.querySelector('#suHierAny') && !doc.querySelector('[data-suhtype]'), 'no allow-anywhere switch or per-level chips');
+  ok(/default/i.test(doc.querySelector('#setupView [data-suhlevel="story"] .su-hdef').textContent) &&
+     doc.querySelectorAll('#setupView [data-suhlevel="story"] .su-hdef').length === 1, 'the first type at a level is marked default');
+  ok(doc.querySelector('select[data-suhtlevel="epic"]').disabled && doc.querySelector('button[data-suhtrm="epic"]').disabled,
+    'the only type at a level can neither move nor be removed');
+  const mv = doc.querySelector('select[data-suhtlevel="task"]');
+  mv.value = 'feature'; mv.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[1].types.join() === 'feature,task' && state().meta.hierarchy.levels[2].types.join() === 'story',
+    'the level select moves a type');
+  ok(lvTypes('feature').join() === 'feature,task', 'and the card regroups');
+  const mv2 = doc.querySelector('select[data-suhtlevel="task"]');
+  mv2.value = 'story'; mv2.dispatchEvent(new window.Event('change', { bubbles: true }));
   const lbl = doc.querySelector('input[data-suhlabel="story"]');
   lbl.value = 'Task'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.hierarchy.levels[2].label === 'Task', 'level label edit commits');
@@ -1553,18 +1586,17 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   {
     const realRaf = window.requestAnimationFrame;
     window.requestAnimationFrame = (cb) => cb();
-    click(doc.querySelector('#suHierAdd'));
+    click(doc.querySelector('#setupView button[data-suhadd="story"]'));
     window.requestAnimationFrame = realRaf;
   }
-  ok(state().meta.itemTypes.some(t => t.label === 'New type'), 'Add type appends a record');
-  const hierAddLabels = [...doc.querySelectorAll('#setupView input[data-suhtlabel]')];
-  const lastHierAddLabel = hierAddLabels[hierAddLabels.length - 1];
-  ok(doc.activeElement === lastHierAddLabel,
-    'Add type focuses the newly added type\'s label input, not the first (Epic) one');
-  const any = doc.querySelector('#suHierAny');
-  any.checked = true; any.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.hierarchy.anyTypeAnyLevel === true && !doc.querySelector('button[data-suhtype]'), 'the switch hides the chips');
-  any.checked = false; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const added = state().meta.itemTypes.filter(t => t.label === 'New type')[0];
+  ok(!!added && state().meta.hierarchy.levels[2].types.slice(-1)[0] === added.key, 'Add type under a level appends a type there');
+  ok(doc.activeElement === doc.querySelector('#setupView input[data-suhtlabel="' + added.key + '"]'), 'Add type focuses the new type\'s label');
+  click(doc.querySelector('#setupView button[data-suhtrm="' + added.key + '"]'));
+  ok(!state().meta.itemTypes.some(t => t.key === added.key), 'remove type');
+  lbl.value = 'Story';
+  const lbl2 = doc.querySelector('input[data-suhlabel="story"]');
+  lbl2.value = 'Story'; lbl2.dispatchEvent(new window.Event('change', { bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -4397,7 +4429,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 {
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   const menuBtns = () => [...doc.querySelectorAll('#popover .menu-list button')];
-  ok(state().capTypes.slice(0, 3).join(',') === 'Development,Design,QA', 'a document starts with the default capacity types');
+  ok(state().capTypes.join(',') === 'Development', 'a document starts with the default capacity type');
   // Setup → Capacity: capacity types list (rename / add / remove / reorder) + planning level + capacity row options
   click(doc.querySelector('#btnSetup'));
   suTab('scheduling');
@@ -5282,6 +5314,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 
   // type pickers, row icons, epic type
   {
+    // this project's hierarchy has no Bug: add one at the Feature level
+    window.HeadwayApp.ai.commit('add bug type', (s) => { window.RM.addItemType(s, 'Bug', 'bug', 'Bug', 'feature'); });
     // pick a currently-rendered row's item — not state().items[0], which
     // may sit in a phase collapsed by default in the fixture
     const firstRow = doc.querySelector('#rows .row.item[data-id]');

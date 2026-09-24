@@ -9,6 +9,11 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Each item type lives at one level**: Setup → Organization → Hierarchy lists every type once, under its level, with a Level picker to move it and an Add type per level; the first type at a level is the default. The Allow any type at any level switch is gone; older files keep each type at the first level it was allowed at.
+- New projects use Epic › Feature › Story (Story and Task). Scrum presets add Bug at the story level; feature-organized presets (Rapid Delivery, Contract Negotiation, Innovation, Minimal) read Epic › Feature › Task, with Issue beside Feature.
+- **Contract Negotiation and Innovation presets**: Rapid Delivery with MoSCoW priority and risk ratings on features, or with RICE priority and no sizes.
+- New project setup: a progress bar sits under the top bar, the project name starts empty and is required, Continue stays grayed out until a step's required fields are filled, and switching preset after changing its settings asks first.
+- The 2027 US holidays are on the calendar, including in files saved earlier.
 - Setup → Organization shows Phases, Workstreams and Epics side by side; each Add box takes a pasted list (one per line), epics can be added before any item uses them, and Levels & item types fold away behind Customize. An edited size scale offers Reset to its scheme, each capacity type lists the roles that supply it with + Role, and the Jira mapping notes it is saved in the project.
 - **New project setup**: New project opens a full-screen setup that walks the same sections as Setup — pick a preset first (Scrum, Advanced Scrum, Rapid Delivery or Minimal, each with a small timeline sketch), adjust anything, then review and create.
 - The first project on a computer starts with a short Welcome that asks for your name and theme.

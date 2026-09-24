@@ -29,6 +29,11 @@ var META = {
   sizeDays: { XS: 2, S: 3, M: 5, L: 10, XL: 20 }
 };
 
+// the item types every document shipped with before one-type-one-level
+var OLD_TYPES = [{ key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' }, { key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' },
+  { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' }, { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
+  { key: 'story', label: 'Story', icon: 'bookmark', jira: 'Sub-task' }, { key: 'subtask', label: 'Subtask', icon: 'corner-down-right', jira: 'Sub-task' },
+  { key: 'spike', label: 'Spike', icon: 'zap', jira: '' }];
 function mkState(items, extras) {
   var base = {
     meta: JSON.parse(JSON.stringify(META)),
@@ -832,9 +837,11 @@ function blankish() {
   return RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, title: 'Keep me' }, phases: [{ id: 'p1', name: 'Build' }], items: [] });
 }
 var want = {
-  scrum:   { sizeScheme: 'none',   storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'moscow', riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
-  ascrum:  { sizeScheme: 'tshirt', storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'moscow', riskScheme: 'risk', storyRiskScheme: 'risk', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
-  rapid:   { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: true,  planLevel: 'feature', capMode: 'person' },
+  scrum:   { sizeScheme: 'none',   storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'levels', riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
+  ascrum:  { sizeScheme: 'tshirt', storySizeScheme: 'fibonacci', priorityScheme: 'moscow', storyPriorityScheme: 'levels', riskScheme: 'risk', storyRiskScheme: 'risk', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
+  rapid:   { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: true,  capacityEnabled: true,  planLevel: 'feature', capMode: 'person' },
+  contract:   { sizeScheme: 'tshirt', storySizeScheme: 'none', priorityScheme: 'moscow', storyPriorityScheme: 'none', riskScheme: 'risk', storyRiskScheme: 'none', weeksPerSprint: 0, budget: true, capacityEnabled: true, planLevel: 'feature', capMode: 'person' },
+  innovation: { sizeScheme: 'none',   storySizeScheme: 'none', priorityScheme: 'rice',   storyPriorityScheme: 'none', riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: true, planLevel: 'feature', capMode: 'person' },
   minimal: { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: false }
 };
 Object.keys(want).forEach(function (k) {
@@ -848,6 +855,26 @@ Object.keys(want).forEach(function (k) {
   eq(got, w, k + ' writes exactly its settings');
   eq([m.title, s.phases[0].name], ['Keep me', 'Build'], k + ' leaves name and phases alone');
 });
+// presets own the hierarchy: Scrum variants read Epic › Feature › Story,
+// feature-organized ones Epic › Feature › Task
+var wantHier = {
+  scrum:      [['Epic', 'Feature', 'Story'], [['epic'], ['feature'], ['story', 'task', 'bug']]],
+  ascrum:     [['Epic', 'Feature', 'Story'], [['epic'], ['feature'], ['story', 'task', 'bug']]],
+  rapid:      [['Epic', 'Feature', 'Task'], [['epic'], ['feature', 'issue'], ['task']]],
+  contract:   [['Epic', 'Feature', 'Task'], [['epic'], ['feature', 'issue'], ['task']]],
+  innovation: [['Epic', 'Feature', 'Task'], [['epic'], ['feature', 'issue'], ['task']]],
+  minimal:    [['Epic', 'Feature', 'Task'], [['epic'], ['feature', 'issue'], ['task']]]
+};
+Object.keys(wantHier).forEach(function (k) {
+  var s = blankish();
+  RM.applyPreset(s, k);
+  var lv = s.meta.hierarchy.levels;
+  eq([lv.map(function (l) { return l.label; }), lv.map(function (l) { return l.types; })], wantHier[k], k + ' sets its hierarchy');
+  eq(s.meta.itemTypes.map(function (t) { return t.key; }).sort(), [].concat.apply([], wantHier[k][1]).sort(), k + ' has exactly its item types');
+  eq(RM.normalizeState(RM.clone(s)).meta.hierarchy.levels.map(function (l) { return l.types; }), wantHier[k][1], k + ' hierarchy survives normalize');
+});
+var sHs = blankish(); RM.applyPreset(sHs, 'scrum'); RM.applyPreset(sHs, 'rapid');
+ok(!RM.itemType(sHs, 'bug') && !!RM.itemType(sHs, 'issue'), 'switching preset swaps the type set');
 ok(!RM.applyPreset(blankish(), 'nope'), 'unknown preset is refused');
 var sSw = blankish(); RM.applyPreset(sSw, 'ascrum'); RM.applyPreset(sSw, 'minimal');
 eq([sSw.meta.riskScheme, sSw.meta.weeksPerSprint], ['none', 0], 'switching presets overwrites the preset-owned fields');
@@ -879,7 +906,7 @@ ok(!RM.isBlackoutWeek(METAH, 1), 'a partial-holiday week is NOT a blackout week'
 METAH.holidays = ['2026-08-01']; // Saturday
 eq(RM.stretchSpan(METAH, 0, 5), 5, 'weekend-dated holiday is ignored');
 // legacy whole-week blackouts migrate to five holiday dates
-var sMigW = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, blackoutWeeks: ['2026-08-03'], holidaysV2026: true }, phases: [{ id: 'p' }], items: [] });
+var sMigW = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, blackoutWeeks: ['2026-08-03'], holidaysV2026: true, holidaysV2027: true }, phases: [{ id: 'p' }], items: [] });
 eq(sMigW.meta.holidays.length, 5, 'blackout week migrated to 5 holiday dates');
 eq(sMigW.meta.holidays[0], '2026-08-03', 'migration starts at the week\'s Monday');
 ok(sMigW.meta.blackoutWeeks === undefined, 'blackoutWeeks field removed');
@@ -892,6 +919,19 @@ RM.clipHolidayRanges(sHol.meta, '2026-09-07', '2026-09-07');
 ok(sHol.meta.holidays.indexOf('2026-09-07') === -1 &&
   RM.normalizeState(sHol).meta.holidays.indexOf('2026-09-07') === -1,
   'a deleted holiday stays deleted (merge is one-time)');
+// 2027 US calendar: loaded into fresh docs AND merged once into docs that already have ranges
+ok(['2027-01-18', '2027-05-31', '2027-07-05', '2027-11-25', '2027-12-24', '2027-12-31'].every(function (d) { return sHol.meta.holidays.indexOf(d) !== -1; }),
+  '2027 US holidays loaded into a fresh document');
+var thx27 = sHol.meta.holidayRanges.find(function (r) { return r.start === '2027-11-24'; });
+ok(!!thx27 && thx27.end === '2027-11-26' && thx27.name === 'Thanksgiving', '2027 Thanksgiving is one named range');
+var sOld = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, holidaysV2026: true,
+  holidayRanges: [{ name: 'Mine', start: '2027-05-31', end: '2027-05-31' }] }, phases: [{ id: 'p' }], items: [] });
+ok(sOld.meta.holidays.indexOf('2027-09-06') !== -1 && sOld.meta.holidaysV2027 === true, 'a saved doc with ranges gains the 2027 holidays');
+eq(sOld.meta.holidayRanges.filter(function (r) { return r.start <= '2027-05-31' && r.end >= '2027-05-31'; }).length, 1,
+  'a date the user already covers is not added twice');
+eq(sOld.meta.holidayRanges.filter(function (r) { return r.start === '2027-05-28'; }).length, 1, 'the uncovered Friday is still added');
+RM.clipHolidayRanges(sOld.meta, '2027-09-03', '2027-09-06');
+ok(RM.normalizeState(sOld).meta.holidays.indexOf('2027-09-06') === -1, 'a deleted 2027 holiday stays deleted');
 // named ranges: migration groups weekend-bridged observances and names them
 var thx = sHol.meta.holidayRanges.find(function (r) { return r.start === '2026-11-25'; });
 ok(!!thx && thx.end === '2026-11-27' && thx.name === 'Thanksgiving',
@@ -1961,34 +2001,54 @@ section('apps switch');
 section('item types & hierarchy');
 {
   var sT = mkState([
-    { num: 1, feature: 'A', epic: 'E1', stories: [{ id: 'sa', title: 'x' }, { id: 'sb', title: 'y', type: 'bug' }] },
+    { num: 1, feature: 'A', epic: 'E1', stories: [{ id: 'sa', title: 'x' }, { id: 'sb', title: 'y', type: 'task' }] },
     { num: 2, feature: 'B', type: 'bug' },
+    { num: 4, feature: 'D', type: 'task' },
     { num: 3, feature: 'C', type: 'nope' }
   ]);
-  eq(sT.meta.itemTypes.map(function (t) { return t.key; }), ['epic', 'feature', 'bug', 'task', 'story', 'subtask'], 'default types seeded');
+  eq(sT.meta.itemTypes.map(function (t) { return t.key; }), ['epic', 'feature', 'story', 'task'], 'default types seeded');
   eq(sT.meta.hierarchy.levels.map(function (l) { return l.key; }), ['epic', 'feature', 'story'], 'three fixed levels');
-  eq(sT.meta.hierarchy.levels[1].types, ['feature', 'bug', 'task'], 'feature level default types');
-  eq(sT.meta.hierarchy.anyTypeAnyLevel, false, 'switch off by default');
+  eq(sT.meta.hierarchy.levels.map(function (l) { return l.types; }), [['epic'], ['feature'], ['story', 'task']], 'default level types');
+  ok(!('anyTypeAnyLevel' in sT.meta.hierarchy), 'no any-type-any-level switch');
   eq(sT.items[0].type, 'feature', 'missing item type -> level default');
-  eq(sT.items[1].type, 'bug', 'known item type kept');
-  eq(sT.items[2].type, 'feature', 'unknown item type -> level default');
+  eq(sT.items[1].type, 'feature', 'a type the document does not have -> level default');
+  eq(sT.items.filter(function (i) { return i.num === 3; })[0].type, 'feature', 'unknown item type -> level default');
   eq(sT.items[0].stories[0].type, 'story', 'missing story type -> level default');
-  eq(sT.items[0].stories[1].type, 'bug', 'story type kept');
+  eq(sT.items[0].stories[1].type, 'task', 'story type kept');
+  eq(sT.items.filter(function (i) { return i.num === 4; })[0].type, 'task', 'a known type from another level is kept (validation warns)');
+  eq(RM.typeLevel(sT, 'task'), 'story', 'typeLevel names the one level a type lives at');
+  eq(RM.typeLevel(sT, 'nope'), null, 'typeLevel of an unknown type');
   eq(sT.epicTypes, {}, 'epicTypes seeded empty');
   eq(RM.typeOf(sT, 'E1', 'epic').key, 'epic', 'epic without a stored type resolves to epic');
   eq(RM.levelLabel(sT, 'feature'), 'Feature', 'level label');
   eq(RM.levelLabel(sT, 'story', true), 'Stories', 'plural label');
-  eq(RM.typesFor(sT, 'story').map(function (t) { return t.key; }), ['story', 'subtask', 'bug'], 'allowed types at story level');
+  eq(RM.typesFor(sT, 'story').map(function (t) { return t.key; }), ['story', 'task'], 'allowed types at story level');
   eq(RM.defaultTypeFor(sT, 'epic'), 'epic', 'default type for epic level');
   eq(RM.jiraTypeName(sT, 'story'), 'Sub-task', 'story type maps to Sub-task by default');
-  eq(RM.typeOf(sT, sT.items[1], 'feature').icon, 'bug', 'typeOf returns the record');
+  eq(RM.typeOf(sT, sT.items.filter(function (i) { return i.num === 4; })[0], 'feature').icon, 'check-square', 'typeOf returns the record');
 
   // a disallowed stored type survives normalize
-  var sT2 = mkState([{ num: 1, feature: 'A', type: 'subtask' }]);
-  eq(sT2.items[0].type, 'subtask', 'disallowed type kept on normalize');
-  // the switch opens every type at every level
-  sT2.meta.hierarchy.anyTypeAnyLevel = true;
-  eq(RM.typesFor(sT2, 'epic').length, 6, 'any type any level lists all types');
+  var sT2 = mkState([{ num: 1, feature: 'A', type: 'task' }]);
+  eq(sT2.items[0].type, 'task', 'disallowed type kept on normalize');
+
+  // saved documents: a type listed at several levels keeps only the first;
+  // a type on no level joins the middle level; a stored switch is dropped
+  var sOldH = mkState([{ num: 1, feature: 'A', type: 'bug', stories: [{ id: 's', title: 's', type: 'bug' }] }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), {
+    itemTypes: OLD_TYPES,
+    hierarchy: { levels: [{ key: 'epic', label: 'Epic', types: ['epic'] }, { key: 'feature', label: 'Feature', types: ['feature', 'bug', 'task'] },
+      { key: 'story', label: 'Story', types: ['story', 'subtask', 'bug'] }], anyTypeAnyLevel: true } }) });
+  eq(sOldH.meta.hierarchy.levels.map(function (l) { return l.types; }), [['epic'], ['feature', 'bug', 'task', 'spike'], ['story', 'subtask']],
+    'each type ends up at exactly one level (first wins; unplaced joins the middle level)');
+  ok(!('anyTypeAnyLevel' in sOldH.meta.hierarchy), 'the stored switch is dropped');
+  eq(sOldH.items[0].stories[0].type, 'bug', 'a story whose type moved away keeps it (validation warns)');
+  var sEmpty = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), {
+    itemTypes: [{ key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' }],
+    hierarchy: { levels: [{ key: 'epic', types: ['feature'] }, { key: 'feature', types: ['feature'] }] } }) });
+  var emptyTypes = sEmpty.meta.hierarchy.levels.map(function (l) { return l.types; });
+  ok(emptyTypes.every(function (l) { return l.length > 0; }), 'no level is left without a type');
+  var seenLv = {}, dupLv = false;
+  emptyTypes.forEach(function (l) { l.forEach(function (k) { if (seenLv[k]) dupLv = true; seenLv[k] = true; }); });
+  ok(!dupLv, 'and still no type sits at two levels');
 
   // legacy Jira names migrate into the type records once
   var sT3 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), { jira: { epicType: 'Initiative', featureType: 'Task', storyType: 'Subtask' } }) });
@@ -2001,11 +2061,10 @@ section('item types & hierarchy');
   // custom labels and lists round-trip; empty level list falls back
   var sT4 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), {
     itemTypes: [{ key: 'epic', label: 'Theme', icon: 'layers', jira: 'Epic' }, { key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' }, { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' }],
-    hierarchy: { levels: [{ key: 'feature', label: 'Capability', types: ['feature', 'ghost'] }, { key: 'story', label: 'Task', types: [] }], anyTypeAnyLevel: true } }) });
+    hierarchy: { levels: [{ key: 'feature', label: 'Capability', types: ['feature', 'ghost'] }, { key: 'story', label: 'Task', types: [] }] } }) });
   eq(sT4.meta.hierarchy.levels.map(function (l) { return l.label; }), ['Epic', 'Capability', 'Task'], 'missing level gets default label, order fixed');
   eq(sT4.meta.hierarchy.levels[1].types, ['feature'], 'unknown type keys are dropped from a level');
   eq(sT4.meta.hierarchy.levels[2].types, ['story'], 'empty level list falls back to defaults filtered to existing types');
-  eq(sT4.meta.hierarchy.anyTypeAnyLevel, true, 'switch round-trips');
   eq(RM.levelLabel(sT4, 'story', true), 'Tasks', 'plural of a custom label');
 }
 {
@@ -2016,12 +2075,12 @@ section('item types & hierarchy');
   eq(RM.itemType(sC, 'task').icon, 'check-square', 'task icon unchanged');
   ok(RM.itemTypes(sC).every(function (t) { return /^[0-9A-F]{6}$/.test(t.color); }), 'every type carries a resolved 6-hex color');
   eq(RM.itemTypes(sC).map(function (t) { return t.color; }), RM.HASH_PALETTE.slice(0, RM.itemTypes(sC).length), 'default colors follow the hash palette in list order');
-  eq(RM.colorForType(sC, 'bug'), RM.HASH_PALETTE[2], 'colorForType reads the record');
+  eq(RM.colorForType(sC, 'story'), RM.HASH_PALETTE[2], 'colorForType reads the record');
   eq(RM.colorForType(sC, 'nope'), RM.PALETTE.neutral, 'unknown type is neutral');
-  RM.setItemTypeColor(sC, 'bug', '#ff0000');
-  eq(RM.itemType(sC, 'bug').color, 'FF0000', 'setItemTypeColor stores an upper-case hex without #');
-  RM.setItemTypeColor(sC, 'bug', 'not a color');
-  eq(RM.itemType(sC, 'bug').color, 'FF0000', 'a bad color is ignored');
+  RM.setItemTypeColor(sC, 'task', '#ff0000');
+  eq(RM.itemType(sC, 'task').color, 'FF0000', 'setItemTypeColor stores an upper-case hex without #');
+  RM.setItemTypeColor(sC, 'task', 'not a color');
+  eq(RM.itemType(sC, 'task').color, 'FF0000', 'a bad color is ignored');
   var kNew = RM.addItemType(sC, 'Spike', 'zap', 'Spike');
   ok(/^[0-9A-F]{6}$/.test(RM.itemType(sC, kNew).color), 'a new type gets a palette color at once');
   // stored documents on the old default icons migrate; custom icons stay
@@ -2035,26 +2094,32 @@ section('item types & hierarchy');
   // color mode 'type'
   ok(RM.COLOR_MODES.indexOf('type') !== -1, "'type' is a color mode");
   var sT3col = RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p', name: 'P' }], team: [],
-    items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', type: 'bug' }, { id: 'y', num: 2, phaseId: 'p', feature: 'Y' }] });
+    items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', type: 'task' }, { id: 'y', num: 2, phaseId: 'p', feature: 'Y' }] });
   RM.setColorMode('type');
-  eq(RM.colorForItem(sT3col, sT3col.items[0]), RM.colorForType(sT3col, 'bug'), 'type mode colors an item by its type');
+  eq(RM.colorForItem(sT3col, sT3col.items[0]), RM.colorForType(sT3col, 'task'), 'type mode colors an item by its type');
   eq(RM.colorForItem(sT3col, sT3col.items[1]), RM.colorForType(sT3col, 'feature'), 'an item without a type takes the level default type color');
-  eq(RM.colorLegend(sT3col, sT3col.items).map(function (e) { return e.name; }), ['Bug', 'Feature'], 'type legend names the types in first-seen order');
+  eq(RM.colorLegend(sT3col, sT3col.items).map(function (e) { return e.name; }), ['Task', 'Feature'], 'type legend names the types in first-seen order');
   RM.setColorMode('workstream');
 }
 
 section('item type mutations & validation');
 {
   var sM = mkState([
-    { num: 1, feature: 'A', type: 'bug', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'bug' }] }
+    { num: 1, feature: 'A', type: 'bug', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'task' }] }
   ]);
-  var nk = RM.addItemType(sM, 'Spike', 'zap', 'Spike');
-  eq(nk, 'spike', 'addItemType slugs the label into a key');
+  var nk = RM.addItemType(sM, 'Bug', 'bug', 'Bug', 'story');
+  eq(nk, 'bug', 'addItemType slugs the label into a key');
+  eq(RM.typeLevel(sM, 'bug'), 'story', 'addItemType places the type at the given level');
+  sM.items[0].type = 'bug'; sM.items[0].stories[0].type = 'bug';
+  eq(RM.addItemType(sM, 'Spike', 'zap', 'Spike'), 'spike', 'another type');
+  eq(RM.typeLevel(sM, 'spike'), 'feature', 'with no level given it joins the middle level');
   eq(RM.addItemType(sM, 'Spike', 'zap', 'Spike'), 'spike-2', 'duplicate labels get a suffixed key');
-  ok(RM.setTypeAllowed(sM, 'feature', 'spike', true), 'allow a type at a level');
-  eq(RM.levelOf(sM, 'feature').types.slice(-1)[0], 'spike', 'allowed list grows');
-  ok(!RM.setTypeAllowed(sM, 'epic', 'epic', false), 'cannot remove the last type of a level');
-  ok(RM.setTypeAllowed(sM, 'feature', 'spike', false), 'disallow again');
+  ok(RM.setTypeLevel(sM, 'spike', 'story'), 'move a type to another level');
+  eq([RM.levelOf(sM, 'feature').types.indexOf('spike'), RM.levelOf(sM, 'story').types.slice(-1)[0]], [-1, 'spike'], 'it leaves its old level');
+  ok(!RM.setTypeLevel(sM, 'epic', 'story'), 'cannot move the last type out of a level');
+  ok(!RM.setTypeLevel(sM, 'nope', 'story'), 'unknown type refused');
+  ok(RM.setTypeLevel(sM, 'spike', 'story'), 'moving to its own level is a no-op');
+  eq(RM.levelOf(sM, 'story').types.filter(function (k) { return k === 'spike'; }).length, 1, 'and does not duplicate it');
   RM.renameItemType(sM, 'spike', 'Research');
   eq(RM.itemType(sM, 'spike').label, 'Research', 'rename keeps the key');
   RM.setItemTypeJira(sM, 'spike', 'Research task');
@@ -2067,17 +2132,15 @@ section('item type mutations & validation');
   ok(RM.removeItemType(sM, 'bug'), 'remove a type');
   eq(sM.items[0].type, 'feature', 'items of the removed type fall back to the level default');
   eq(sM.items[0].stories[0].type, 'story', 'stories too');
-  eq(RM.levelOf(sM, 'story').types, ['story', 'subtask'], 'removed key leaves every level list');
+  ok(RM.removeItemType(sM, 'task'), 'remove another');
+  eq(RM.levelOf(sM, 'story').types, ['story', 'spike'], 'removed keys leave the level list');
   ok(!RM.itemType(sM, 'bug'), 'record gone');
 
-  var sV2 = mkState([{ num: 1, feature: 'A', type: 'subtask', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'task' }] }], { epicTypes: { E: 'feature' } });
+  var sV2 = mkState([{ num: 1, feature: 'A', type: 'task', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'feature' }] }], { epicTypes: { E: 'feature' } });
   var vv = RM.validate(sV2);
-  ok((vv.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL' && /Subtask/.test(f.msg); }), 'item with a disallowed type warns');
-  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /story/i.test(f.msg) && /Task/.test(f.msg); }), 'story with a disallowed type warns globally');
+  ok((vv.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL' && /Task/.test(f.msg); }), 'item with a disallowed type warns');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /story/i.test(f.msg) && /Feature/.test(f.msg); }), 'story with a disallowed type warns globally');
   ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /Epic/.test(f.msg) && /Feature/.test(f.msg); }), 'epic with a disallowed type warns globally');
-  RM.setAnyTypeAnyLevel(sV2, true);
-  var vv2 = RM.validate(sV2);
-  ok(!(vv2.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }) && !vv2.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'switch on silences TYPE_LEVEL');
 
   // TYPE_LEVEL must resolve missing/raw type fields (e.g. items pushed without
   // a `type` after commit(), before the next normalizeState) via RM.typeOf,
@@ -2235,8 +2298,8 @@ eq(sRr.items[0].teamType, 'Engineer', 'items follow the rename');
 eq(sRr.meta.rateCard.Engineer.rate, 200, 'rate card key follows the rename');
 ok(!RM.renameRole(sRr, 'Engineer', 'Data'), 'rename refuses an existing name');
 eq(RM.DEFAULT_TEAM_TYPES[0], 'Project Manager', 'default roles lead with Project Manager and use real role names');
-ok(RM.DEFAULT_TEAM_TYPES.indexOf('Software Engineer') !== -1 && RM.DEFAULT_CAP_TYPES.slice(0, 3).join(',') === 'Development,Design,QA',
-  'default capacity types are Development, Design, QA, …');
+ok(RM.DEFAULT_TEAM_TYPES.indexOf('Software Engineer') !== -1 && RM.DEFAULT_CAP_TYPES.join(',') === 'Development',
+  'the default capacity type is Development');
 
 // ------------------------------------------------------------- rigid chain drag
 section('rigid chain shift');
@@ -2430,7 +2493,7 @@ var sJc = mkState([
     stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13', type: 'bug' }] },
   { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2', type: 'bug' },
   { num: 3, feature: 'Orphan', deps: [2] }
-], { epicJira: { Login: 'HW-1' } });
+], { epicJira: { Login: 'HW-1' }, meta: Object.assign(JSON.parse(JSON.stringify(META)), { itemTypes: OLD_TYPES }) });
 eq(RMJira.fileName(sJc), 'T-jira.csv', 'jira csv filename');
 var jr = RMJira.rows(sJc, { features: true, stories: false });
 eq(jr.length, 3, 'features only: one row per feature');

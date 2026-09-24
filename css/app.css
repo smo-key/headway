@@ -2629,16 +2629,28 @@ body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px)
 }
 .su-rc-head span:nth-child(2), .su-rc-head span:nth-child(3) { width: 76px; text-align: center; }
 
-.su-hlevels { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.su-hlevel { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
-.su-hchips { display: flex; flex-wrap: wrap; gap: 6px; }
-.su-hchip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--well); color: var(--ink-2); font-size: 12.5px; cursor: pointer; }
-.su-hchip.on { background: var(--surface); color: var(--ink); border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
-.su-hchip i { width: 13px; height: 13px; }
-.su-sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+.su-hlvs { display: flex; flex-direction: column; gap: 12px; margin: 12px 0 10px; }
+.su-hlv { padding: 10px 0 0; border-top: 1px solid var(--line); }
+.su-hlv:first-child { border-top: 0; padding-top: 0; }
+.su-htypes { table-layout: fixed; width: 100%; }
+.su-htypes td:first-child, .su-htypes th:first-child { width: 72px; white-space: nowrap; }
+.su-htypes td:nth-child(4), .su-htypes th:nth-child(4) { width: 130px; }
+.su-htypes td:last-child, .su-htypes th:last-child { width: 36px; }
+.su-htypes select { width: 100%; }
+.su-htypes input.su-hcolor { width: 22px; min-height: 22px; height: 22px; }
+.su-htypes input.su-hcolor { padding: 0; }
+.su-htypes input.su-hcolor::-webkit-color-swatch-wrapper { padding: 0; }
+.su-htypes input.su-hcolor::-webkit-color-swatch { border: 0; border-radius: 5px; }
+.su-hadd { border: 0; background: transparent; box-shadow: none; color: var(--ink-2); padding: 4px 6px; }
+.su-hadd:hover { background: var(--hover); color: var(--ink); }
+.su-hlv-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.su-hlv-head input { width: 160px; font-weight: 600; }
+.su-hlv-n { font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); min-width: 52px; }
+.su-hname { display: flex; align-items: center; gap: 8px; }
+.su-hname input { flex: 1; min-width: 0; }
+.su-hdef { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--well); color: var(--ink-2); border: 1px solid var(--line-2); white-space: nowrap; }
 .su-hicon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; }
 .su-hcolor { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; margin-left: 4px; vertical-align: middle; background: none; }
-.su-htypes td:first-child { width: 36px; }
 
 /* ------------------------------------------------- reports dashboard */
 #reportsView { display: none; }
@@ -3558,8 +3570,10 @@ body.wizard-open #docTitle { pointer-events: none; }
 #wzClose:hover { background: var(--hover); color: var(--ink); }
 #wizard { position: fixed; inset: var(--topbar-h, 46px) 0 0 0; background: var(--paper); z-index: 35; display: flex; flex-direction: column; }
 #wizard[hidden] { display: none; }
-.wz-progress { height: 3px; background: var(--well); flex: none; }
-.wz-progress i { display: block; height: 3px; background: var(--blue); transition: width .2s; }
+.wz-progress { height: 4px; background: var(--well); flex: none; }
+.wz-progress i { display: block; width: 0; height: 4px; background: var(--blue); border-radius: 0 2px 2px 0; transition: width .25s ease; }
+#wizard button.primary:disabled, #wizard button.primary:disabled:hover { background: var(--well); border-color: var(--line-2); color: var(--ink-3); box-shadow: none; cursor: not-allowed; }
+.wz-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
 .wz-layout { flex: 1; display: flex; min-height: 0; }
 .wz-rail { width: 248px; flex: none; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--paper-2); display: flex; flex-direction: column; gap: 2px; overflow: auto; }
 .wz-step { display: flex; gap: 10px; align-items: center; min-height: 36px; padding: 0 10px; border: 0; background: transparent; box-shadow: none; border-radius: 8px; text-align: left; justify-content: flex-start; color: var(--ink-2); font-weight: 600; }
@@ -3643,5 +3657,4 @@ body.wizard-open #docTitle { pointer-events: none; }
 .su-rolechip button:hover { color: var(--ink); }
 .su-roleadd { font-size: 12px; padding: 2px 8px; min-height: 0; border-radius: 10px; }
 /* wizard: the step in the app's top bar */
-.wz-topstep { margin-left: 10px; font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 .jr-saved { margin-left: 8px; vertical-align: 2px; }
