@@ -796,18 +796,16 @@ body.cap-off .hc-lab { display: none !important; }
   border-radius: 4px; padding: 1px 6px; margin-left: 9px;
 }
 .p-check.disabled { opacity: .55; }
-.band-edit { opacity: 0; margin-left: 6px; background: transparent; color: var(--band-ink-2); border: 0; padding: 2px 5px; font-size: 11px; }
-.row.band:hover .band-edit { opacity: 1; }
-.band-add { opacity: 0; background: transparent; border: 0; color: var(--band-ink-2); font-size: 11px; padding: 2px 6px; }
-.row.band:hover .band-add { opacity: 1; }
-.band-add:hover, .band-edit:hover { color: var(--band-ink); background: var(--band-hover); }
-/* Auto timeline (one-shot): always visible so its enabled state reads at a glance */
-.band-zap { margin-left: 2px; background: transparent; color: var(--band-ink-2); border: 0; padding: 2px 5px; font-size: 11px;
-  display: inline-flex; align-items: center; opacity: .75; }
+/* the phase's actions (+ feature · edit · ⚡ Auto timeline) sit at the right
+   edge of the band and are always visible */
+.band-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; padding-right: 6px; flex: none; }
+.band-edit, .band-add, .band-zap {
+  background: transparent; border: 0; color: var(--band-ink-2); font-size: 11px; padding: 2px 6px;
+  display: inline-flex; align-items: center; border-radius: 4px;
+}
 .band-zap svg { width: 11px; height: 11px; }
-.row.band:hover .band-zap { opacity: 1; }
-.band-zap:hover:not(:disabled) { color: var(--band-ink); background: var(--band-hover); }
-.band-zap:disabled, .row.band:hover .band-zap:disabled { opacity: .35; cursor: default; }
+.band-add:hover, .band-edit:hover, .band-zap:hover:not(:disabled) { color: var(--band-ink); background: var(--band-hover); }
+.band-zap:disabled { opacity: .35; cursor: default; }
 
 /* story rows */
 .row.story { height: var(--story-h); }
@@ -1472,7 +1470,7 @@ body.panning, body.panning * { cursor: grabbing !important; }
 .r-chev svg.lucide, .band-chev svg.lucide { width: 11px; height: 11px; display: block; }
 .p-close svg.lucide { width: 14px; height: 14px; }
 .dep-chip .x svg.lucide, .type-chip button svg.lucide { width: 10px; height: 10px; }
-.r-lock svg.lucide, .bi-lock svg.lucide { width: 10px; height: 10px; }
+.r-lock svg.lucide, .bi-lock svg.lucide, .bi-noauto svg.lucide { width: 10px; height: 10px; }
 .st-del svg.lucide { width: 11px; height: 11px; }
 
 /* risk chip on rows */

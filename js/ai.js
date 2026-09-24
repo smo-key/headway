@@ -258,6 +258,7 @@
     if (it.deps && it.deps.length) o.deps = it.deps.slice();
     if (it.done) o.done = true;
     if (it.locked) o.locked = true;
+    if (it.noAuto) o.noAuto = true;
     if (it.flag) o.flag = it.flag.reason || true;
     if (it.jiraKey) o.jiraKey = it.jiraKey;
     if (it.tags && it.tags.length) o.tags = it.tags.slice();
@@ -396,7 +397,7 @@
     },
     {
       name: 'update_items',
-      description: 'Change features or stories. Each update: num (a feature number, or a story number to change that story instead — required), story (story id; the older way to reach a story, still accepted), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Organization), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), tags (array of strings — replaces the list), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees, tags (array of strings), deps (story numbers this story depends on — stories link to stories, never to features). Use delete: true to remove the target.',
+      description: 'Change features or stories. Each update: num (a feature number, or a story number to change that story instead — required), story (story id; the older way to reach a story, still accepted), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Organization), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, noAuto (true = excluded from the Auto timeline / ⚡: the scheduler leaves it where it is; mutually exclusive with locked — setting one clears the other), done, phase (name or id), assignees (team ids), tags (array of strings — replaces the list), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, noAuto (excluded from the Auto timeline), start, durDays, end, deadline, assignees, tags (array of strings), deps (story numbers this story depends on — stories link to stories, never to features). Use delete: true to remove the target.',
       parameters: {
         type: 'object',
         properties: {
@@ -484,6 +485,13 @@
       } else if (k === 'flag') {
         target.flag = RM.normalizeFlag(v); // true / "reason" / null
         changed.push('flag');
+      } else if (k === 'locked' && !isStory) {
+        RM.setLocked(target, !!v); // clears noAuto
+        changed.push('locked');
+      } else if (k === 'noAuto') {
+        // Lock and Exclude-from-Auto are exclusive; asked for both, Lock wins
+        if (!(v && fields.locked && !isStory)) RM.setNoAuto(target, !!v);
+        changed.push('noAuto');
       } else if (k === 'num' || k === 'id') {
         throw new Error(k + ' is assigned by Headway and cannot be set — the user renumbers in the panel');
       } else if (k === 'type') {
@@ -801,8 +809,8 @@
     '## Model',
     '- Time is counted in working days from meta.timelineStart (weekends and non-work days do not exist in the index). Holidays stretch bars. A sprint = meta.weeksPerSprint weeks; sprint numbers count from meta.sprintAnchor / sprintAnchorNum. Tools accept and report ISO dates; day indexes appear in raw sections.',
     '- Phases hold features (state.phases; each item has phaseId). bucket=true phases are backlog shelves (Next / Future).',
-    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, tags (free-form labels shared with stories, exported as Jira labels), and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
-    '- Stories belong to a feature: id, num, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey, deps. A story number comes from the same pool as feature numbers, so every # in the document is either a feature or a story; refer to a story by its number (update_items takes it as num). Stories can depend on other stories: story deps hold story numbers, never feature numbers.',
+    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, noAuto (excluded from the Auto timeline: Auto / ⚡ leave it where it sits, Place at earliest slot still moves it; never together with locked), done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, tags (free-form labels shared with stories, exported as Jira labels), and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
+    '- Stories belong to a feature: id, num, title, done, noAuto (excluded from the Auto timeline; a feature’s noAuto covers its stories), size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey, deps. A story number comes from the same pool as feature numbers, so every # in the document is either a feature or a story; refer to a story by its number (update_items takes it as num). Stories can depend on other stories: story deps hold story numbers, never feature numbers.',
     '- Sizing schemes: feature sizes (t-shirt XS–XL with working days per size in meta.sizeDays, or story points), story sizes, risk (none / L-M-H …), priority (none, MoSCoW M/S/C/W, levels C/H/M/L, RICE). Values are validated against the active scheme; read the summary before setting them.',
     '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (per-person mode: heads at 40 h, 0.5 = half-time; ignored in points mode except that 0 means supplies nothing), hourly rate and cost, weekHours overrides, capType = what they supply (no capType = supplies nothing); points = story points per sprint (points mode, checked per sprint and scaled by hours). Capacity checks only run when meta.capacityEnabled; Auto timeline is a one-shot button on each phase band (it lays that phase out by dependencies and capacity when clicked), not a stored setting.',
     '- Workstreams carry colour (wsColors, order in wsOrder); epics carry a lucide icon (epicIcons) and optionally a Jira epic key (epicJira).',

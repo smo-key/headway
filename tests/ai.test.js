@@ -292,6 +292,19 @@ console.log('— targeted apply');
   eq(AI.runTool('get_project', {}, AN).items.filter(function (l) { return l.num === 1; })[0].flag, 'blocked on vendor', 'the summary shows the flag');
   AI.runTool('update_items', { updates: [{ num: 1, fields: { flag: null } }] }, AN);
   eq(RM.itemById(stN, 'a').flag, null, '…and unflag');
+  // Exclude from Auto timeline: a field on features and stories, exclusive with Lock
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { locked: true } }] }, AN);
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { noAuto: true } }] }, AN);
+  eq([RM.itemById(stN, 'a').noAuto, RM.itemById(stN, 'a').locked], [true, false], 'the AI can exclude a feature from Auto, which clears its lock');
+  eq(AI.runTool('get_project', {}, AN).items.filter(function (l) { return l.num === 1; })[0].noAuto, true, 'the summary shows noAuto');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { locked: true } }] }, AN);
+  eq([RM.itemById(stN, 'a').noAuto, RM.itemById(stN, 'a').locked], [false, true], 'locking through the AI clears noAuto');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { locked: true, noAuto: true } }] }, AN);
+  eq([RM.itemById(stN, 'a').noAuto, RM.itemById(stN, 'a').locked], [false, true], 'both at once: Lock wins');
+  var naSt = RM.itemById(stN, 'a').stories[0];
+  AI.runTool('update_items', { updates: [{ num: naSt.num, fields: { noAuto: true } }] }, AN);
+  eq(RM.itemById(stN, 'a').stories[0].noAuto, true, 'the AI can exclude a story from Auto');
+  ok(/noAuto/.test(AI.TOOLS.filter(function (t) { return t.name === 'update_items'; })[0].description), 'update_items documents noAuto');
   // the other way round: the user adds a story while the tool adds a feature
   // with the same number — the existing story keeps it, the new feature moves
   var stF = freshState();

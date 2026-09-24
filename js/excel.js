@@ -96,9 +96,12 @@
       start: futureCol + 3,
       end: futureCol + 4,
       status: futureCol + 5,
+      // "Excluded from Auto timeline" sits beside Status (which carries Locked);
+      // the importer finds every extra column by its header, not its position
+      noAuto: futureCol + 6,
       // free-form tags: a trailing visible column (the sprint grid owns the
       // columns right after 'Dependency Risk/Size', so it appends here)
-      tags: futureCol + 6
+      tags: futureCol + 7
     };
     var lastCol = extraCols.tags;
 
@@ -187,6 +190,7 @@
     r3.getCell(extraCols.start).value = 'Start';
     r3.getCell(extraCols.end).value = 'End';
     r3.getCell(extraCols.status).value = 'Status';
+    r3.getCell(extraCols.noAuto).value = 'Excluded from Auto';
     r3.getCell(extraCols.tags).value = 'Tags';
     Object.keys(extraCols).forEach(function (k) {
       r3.getCell(extraCols[k]).font = { bold: true, italic: true };
@@ -285,6 +289,7 @@
         r.getCell(extraCols.headcount).value = it.headcount;
         r.getCell(extraCols.teamType).value = it.teamType || null;
         r.getCell(extraCols.status).value = it.done ? 'Done' : (it.locked ? 'Locked' : null);
+        r.getCell(extraCols.noAuto).value = it.noAuto ? 'Yes' : null;
         r.getCell(extraCols.tags).value = (it.tags || []).length ? it.tags.join(', ') : null;
         rowIdx += 1;
       });
@@ -294,7 +299,7 @@
     var sws = wb.addWorksheet('Stories');
     // '#' and 'Depends on' are trailing columns added later: older importers
     // stop at Tags, and this importer reads them only when the header says so
-    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags', '#', 'Depends on', 'Capacity type', 'Multiplier'];
+    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags', '#', 'Depends on', 'Capacity type', 'Multiplier', 'Excluded from Auto'];
     sws.getRow(1).font = { bold: true };
     sws.getColumn(1).width = 8;
     sws.getColumn(2).width = 44;
@@ -307,6 +312,7 @@
     sws.getColumn(9).width = 16;
     sws.getColumn(10).width = 16;
     sws.getColumn(11).width = 10;
+    sws.getColumn(12).width = 10;
     var srow = 2;
     state.items.forEach(function (it) {
       it.stories.forEach(function (st) {
@@ -318,7 +324,8 @@
           st.num != null ? st.num : null,
           (st.deps || []).length ? st.deps.join(', ') : null,
           st.capType || null,
-          st.capMult != null && st.capMult !== 1 ? st.capMult : null];
+          st.capMult != null && st.capMult !== 1 ? st.capMult : null,
+          st.noAuto ? 'Yes' : null];
         srow += 1;
       });
     });
@@ -587,6 +594,7 @@
       else if (t === 'headcount') extraMap.headcount = colNumber;
       else if (t === 'team type') extraMap.teamType = colNumber;
       else if (t === 'status') extraMap.status = colNumber;
+      else if (t === 'excluded from auto') extraMap.noAuto = colNumber;
       else if (t === 'tags') extraMap.tags = colNumber;
     });
     if (!sprintCols.length) throw new Error('No sprint date columns found in the header row');
@@ -716,6 +724,9 @@
         riskDays: riskDays,
         tags: extraMap.tags ? cellText(row.getCell(extraMap.tags)) : '',
         locked: statusText === 'locked',
+        // a row marked both Locked and Excluded imports as Locked: the two
+        // are mutually exclusive and normalizeState keeps the Lock
+        noAuto: extraMap.noAuto ? /^y(es)?$/i.test(cellText(row.getCell(extraMap.noAuto))) : false,
         done: statusText === 'done',
         stories: []
       });
@@ -732,6 +743,11 @@
       // story number + story-to-story dependencies, same header guard
       var storyNumCol = /^#$/.test(cellText(sws.getCell(1, 8))) ? 8 : 0;
       var storyDepCol = /^depends on$/i.test(cellText(sws.getCell(1, 9))) ? 9 : 0;
+      // "Excluded from Auto" is found by its header (older sheets lack it)
+      var storyNoAutoCol = 0;
+      sws.getRow(1).eachCell({ includeEmpty: false }, function (c, n) {
+        if (!storyNoAutoCol && /^excluded from auto$/i.test(cellText(c))) storyNoAutoCol = n;
+      });
       for (var sr = 2; sr <= sws.rowCount; sr++) {
         var numTxt = cellText(sws.getCell(sr, 1));
         var title = cellText(sws.getCell(sr, 3));
@@ -745,7 +761,8 @@
             num: storyNumCol ? (parseInt(cellText(sws.getCell(sr, storyNumCol)), 10) || null) : null,
             // hand-typed values may carry '#' and any of , ; whitespace;
             // normalize drops whatever is not a positive integer
-            deps: storyDepCol ? cellText(sws.getCell(sr, storyDepCol)).replace(/#/g, '').split(/[,;\s]+/).filter(Boolean) : []
+            deps: storyDepCol ? cellText(sws.getCell(sr, storyDepCol)).replace(/#/g, '').split(/[,;\s]+/).filter(Boolean) : [],
+            noAuto: storyNoAutoCol ? /^y(es)?$/i.test(cellText(sws.getCell(sr, storyNoAutoCol))) : false
           });
         }
       }

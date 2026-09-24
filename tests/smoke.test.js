@@ -296,6 +296,12 @@ ok(doc.querySelector('#leftRzLine') !== null, 'full-height left-pane resize line
 }
 ok(!doc.querySelector('#rows .row.item .r-ico'), 'item rows carry no standalone epic-icon slot');
 ok(!doc.querySelector('#rows .row.item .r-epic'), 'item rows carry no epic tag beside the title (the Epic column does)');
+{
+  const bandLeft = doc.querySelector('#rows .row.band .row-left');
+  const acts = bandLeft && bandLeft.lastElementChild;
+  ok(!!acts && acts.classList.contains('band-acts') && !!acts.querySelector('.band-add') && !!acts.querySelector('.band-edit'),
+    'a phase band ends with its action group (+ feature · edit · ⚡) at the right edge');
+}
 
 // ---------------------------------------------------------------- menus
 click(doc.querySelector('[data-menu="file"]'));
@@ -4691,6 +4697,141 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       s.meta = d.meta; s.phases = d.phases; s.items = d.items; s.team = d.team;
     });
   }
+  // Exclude from Auto timeline: menus, icons, panel checkboxes, the ⚡ dry run
+  {
+    window.HeadwayApp.ai.setView('planning');
+    const snapX = JSON.stringify(state());
+    const menuBtn = (re) => [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => re.test(b.textContent));
+    const ctx = (el) => el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const rowOf = (id) => doc.querySelector('#rows .row.item[data-id="' + id + '"]');
+    const itX = state().items.find((i) => !i.milestone && i.startDay != null && !i.done && i.stories.length);
+    window.HeadwayApp.ai.commit('lock it', (s) => { s.items.find((i) => i.id === itX.id).locked = true; });
+    ctx(rowOf(itX.id));
+    const exBtn = menuBtn(/Exclude from Auto timeline/);
+    ok(!!exBtn && !!exBtn.querySelector('[data-lucide="zap-off"]'), 'the feature row menu offers Exclude from Auto timeline (zap-off)');
+    click(exBtn);
+    let fx = window.RM.itemById(state(), itX.id);
+    ok(fx.noAuto === true && fx.locked === false, 'excluding a locked feature clears its lock');
+    ok(!!rowOf(itX.id).querySelector('.r-lock.r-noauto [data-lucide="zap-off"]') && !rowOf(itX.id).querySelector('[data-lucide="lock"]'),
+      'the row shows the zap-off icon in the lock slot');
+    ok(!!rowOf(itX.id).querySelector('.bar .b-hc.bi-noauto'), 'the bar shows it too');
+    ok(!rowOf(itX.id).querySelector('.bar.locked'), 'and the bar is not styled as locked');
+    ctx(rowOf(itX.id));
+    ok(!!menuBtn(/Include in Auto timeline/) && !!menuBtn(/Include in Auto timeline/).querySelector('[data-lucide="zap"]'),
+      'the menu now offers Include in Auto timeline (zap)');
+    click(menuBtn(/^\s*Lock\s*$/));
+    fx = window.RM.itemById(state(), itX.id);
+    ok(fx.locked === true && fx.noAuto === false, 'locking an excluded feature clears the exclusion');
+    ok(!rowOf(itX.id).querySelector('.r-noauto') && !rowOf(itX.id).querySelector('.bi-noauto'), 'and its icons go');
+    ctx(rowOf(itX.id));
+    click(menuBtn(/Exclude from Auto timeline/));
+    ctx(rowOf(itX.id));
+    click(menuBtn(/Include in Auto timeline/));
+    fx = window.RM.itemById(state(), itX.id);
+    ok(fx.noAuto === false && fx.locked === false, 'Include clears the flag (and leaves it unlocked)');
+    // a story row
+    if (!doc.querySelector('#rows .row.story[data-story="' + itX.stories[0].id + '"]')) click(rowOf(itX.id).querySelector('[data-act="stories"]'));
+    const stRowX = () => doc.querySelector('#rows .row.story[data-story="' + itX.stories[0].id + '"]');
+    ctx(stRowX());
+    ok(!!menuBtn(/Exclude from Auto timeline/), 'the story row menu offers it too');
+    click(menuBtn(/Exclude from Auto timeline/));
+    ok(window.RM.itemById(state(), itX.id).stories[0].noAuto === true, 'and it sets the story’s own flag');
+    ok(!!stRowX().querySelector('.r-noauto [data-lucide="zap-off"]'), 'the story row shows the icon');
+    ctx(stRowX());
+    click(menuBtn(/Include in Auto timeline/));
+    ok(window.RM.itemById(state(), itX.id).stories[0].noAuto === false, 'Include clears the story flag');
+    // multi-select, Prioritizing and Sprinting menus carry the entry too
+    click(doc.querySelector('#viewTabs [data-view="prio"]'));
+    const prCard = doc.querySelector('#prioView .pr-card[data-prcard="' + itX.id + '"]') || doc.querySelector('#prioView .pr-card');
+    ctx(prCard);
+    ok(!!menuBtn(/(Exclude from|Include in) Auto timeline/), 'the Prioritizing card menu offers it');
+    doc.querySelector('#popover').hidden = true;
+    window.HeadwayApp.ai.setView('sprints');
+    const spRow = doc.querySelector('#sprintView .spv-row[data-spid]:not([data-spst])');
+    ok(!!spRow, 'Sprinting shows a feature row to right-click');
+    ctx(spRow);
+    ok(!!menuBtn(/(Exclude from|Include in) Auto timeline/), 'the Sprinting row menu offers it');
+    doc.querySelector('#popover').hidden = true;
+    // Scoping: the feature and story rows
+    window.HeadwayApp.ai.setView('scoping');
+    ctx(rowOf(itX.id));
+    ok(!!menuBtn(/Exclude from Auto timeline/), 'the Scoping feature row menu offers it');
+    click(menuBtn(/Exclude from Auto timeline/));
+    ok(window.RM.itemById(state(), itX.id).noAuto === true, 'and it excludes the feature from Scoping');
+    ok(!!rowOf(itX.id).querySelector('.r-noauto'), 'the Scoping row shows the mark');
+    undo();
+    if (!stRowX()) click(rowOf(itX.id).querySelector('[data-act="stories"]'));
+    ok(!!stRowX(), 'Scoping shows the story row');
+    ctx(stRowX());
+    ok(!!menuBtn(/Exclude from Auto timeline/), 'the Scoping story row menu offers it');
+    doc.querySelector('#popover').hidden = true;
+    window.HeadwayApp.ai.setView('planning');
+    // multi-select: the bulk entry excludes every selected feature
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }));
+    const selIdsX = [...doc.querySelectorAll('#rows .row.item')].map((r) => r.dataset.id);
+    ctx(rowOf(itX.id));
+    ok(/selected/.test((doc.querySelector('#popover .menu-list') || {}).textContent || ''), 'the multi-select menu opens');
+    click(menuBtn(/Exclude from Auto timeline/));
+    ok(selIdsX.length > 1 && selIdsX.every((id) => window.RM.itemById(state(), id).noAuto && !window.RM.itemById(state(), id).locked),
+      'the bulk entry excludes every selected feature (' + selIdsX.length + ')');
+    ok(state().history[state().history.length - 1].label === 'exclude from auto', 'as one exclude from auto change');
+    ctx(rowOf(itX.id));
+    click(menuBtn(/Include in Auto timeline/));
+    ok(selIdsX.every((id) => !window.RM.itemById(state(), id).noAuto), 'and the bulk Include clears them all');
+    undo(); undo();
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // panel: Locked and Excluded checkboxes, each unchecking the other
+    window.__headway.selectItem(itX.id);
+    const pcb = (f) => doc.querySelector('#panel input[type="checkbox"][data-f="' + f + '"]');
+    ok(!!pcb('noAuto') && /Excluded from Auto timeline/.test(pcb('noAuto').parentNode.textContent), 'the panel has an Excluded from Auto timeline checkbox');
+    pcb('locked').checked = true; pcb('locked').dispatchEvent(new window.Event('change', { bubbles: true }));
+    pcb('noAuto').checked = true; pcb('noAuto').dispatchEvent(new window.Event('change', { bubbles: true }));
+    fx = window.RM.itemById(state(), itX.id);
+    ok(fx.noAuto === true && fx.locked === false && !pcb('locked').checked, 'checking Excluded unchecks Locked');
+    pcb('locked').checked = true; pcb('locked').dispatchEvent(new window.Event('change', { bubbles: true }));
+    fx = window.RM.itemById(state(), itX.id);
+    ok(fx.locked === true && fx.noAuto === false && !pcb('noAuto').checked, 'checking Locked unchecks Excluded');
+    // the story editor has the checkbox too
+    const pstEdit = doc.querySelector('#panel [data-pst-edit]');
+    ok(!!pstEdit, 'the panel lists the feature’s stories with an edit affordance');
+    click(pstEdit);
+    const scb = doc.querySelector('#panel input[type="checkbox"][data-stf="noAuto"]');
+    ok(!!scb, 'the story editor has an Excluded from Auto timeline checkbox');
+    scb.checked = true; scb.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(window.RM.itemById(state(), itX.id).stories.some((x) => x.noAuto), 'checking it excludes the story');
+    ok(state().history[state().history.length - 1].label === 'exclude from auto', 'labelled exclude from auto, like features');
+    const scb2 = doc.querySelector('#panel input[type="checkbox"][data-stf="noAuto"]');
+    scb2.checked = false; scb2.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().history[state().history.length - 1].label === 'include in auto', 'and unchecking reads include in auto');
+    // the ⚡ dry run ignores an excluded feature
+    const zapOf = (pid) => doc.querySelector('#rows .row.band[data-phase="' + pid + '"] .band-zap');
+    const phX = itX.phaseId;
+    window.HeadwayApp.ai.commit('auto setup', (s) => {
+      s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
+      s.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
+      s.items.forEach((it) => {
+        it.locked = false; it.noAuto = false;
+        if (it.phaseId === phX) { it.done = false; it.capType = 'Development'; it.capMult = 1; (it.stories || []).forEach((x) => { x.noAuto = false; }); }
+        else it.done = true;
+      });
+    });
+    window.HeadwayApp.ai.autoTimelineNow(phX);
+    ok(zapOf(phX).disabled, 'a laid-out phase has its ⚡ button disabled');
+    const lastX = state().items.filter((i) => i.phaseId === phX && !i.milestone && i.startDay != null)
+      .sort((a, b) => b.startDay - a.startDay)[0];
+    window.HeadwayApp.ai.commit('push late', (s) => { s.items.find((i) => i.id === lastX.id).startDay += 40; });
+    ok(!zapOf(phX).disabled, 'pushing a feature late enables ⚡');
+    ctx(rowOf(lastX.id));
+    click(menuBtn(/Exclude from Auto timeline/));
+    ok(zapOf(phX).disabled, 'excluding the only out-of-place feature disables ⚡ again');
+    const beforeRun = window.RM.itemById(state(), lastX.id).startDay;
+    window.HeadwayApp.ai.autoTimelineNow(phX);
+    ok(window.RM.itemById(state(), lastX.id).startDay === beforeRun, 'and Auto leaves it where it sits');
+    window.HeadwayApp.ai.commit('restore', (s) => {
+      const d = JSON.parse(snapX);
+      s.meta = d.meta; s.phases = d.phases; s.items = d.items; s.team = d.team;
+    });
+  }
   // Place at earliest slot: right-click a feature row
   {
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
@@ -6141,6 +6282,77 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) === 0, 'a second pass over a laid-out phase moves nothing');
       ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
     });
+}).then(() => {
+  // ⌘+ / ⌘- zoom the Planning timeline (Ctrl on other platforms)
+  window.HeadwayApp.ai.setView('planning');
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
+  // an earlier check can leave a dialog up: Escape closes it
+  if (!doc.querySelector('#modalHost').hidden) window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const wp = () => window.HeadwayApp.ai.ui().weekPx;
+  const zkey = (k, o, target) => {
+    const ev = new window.KeyboardEvent('keydown', Object.assign({ key: k, metaKey: true, bubbles: true, cancelable: true }, o || {}));
+    (target || window).dispatchEvent(ev);
+    return ev;
+  };
+  ok(typeof wp() === 'number', 'the UI reports the zoom (weekPx)');
+  let w = wp();
+  const evIn = zkey('=');
+  ok(wp() > w, '⌘= zooms the timeline in (' + w + ' → ' + wp() + ')');
+  ok(evIn.defaultPrevented, 'and keeps the browser from page-zooming');
+  w = wp();
+  zkey('-');
+  ok(wp() < w, '⌘- zooms out');
+  w = wp(); zkey('+', { shiftKey: true });
+  ok(wp() > w, '⌘+ (⇧⌘=) zooms in');
+  w = wp(); zkey('_', { shiftKey: true });
+  ok(wp() < w, '⌘_ zooms out');
+  w = wp(); zkey('+', { code: 'NumpadAdd' });
+  ok(wp() > w, 'numpad + zooms in');
+  w = wp(); zkey('-', { code: 'NumpadSubtract' });
+  ok(wp() < w, 'numpad - zooms out');
+  w = wp(); zkey('=', { metaKey: false, ctrlKey: true });
+  ok(wp() > w, 'Ctrl+= works too');
+  w = wp(); zkey('-', { metaKey: false, ctrlKey: true });
+  ok(wp() < w, 'Ctrl+- works too');
+  w = wp(); zkey('=', { metaKey: false });
+  ok(wp() === w, 'a bare = does nothing');
+  const rf = doc.querySelector('#rowFilter');
+  rf.focus();
+  w = wp();
+  const evTyping = zkey('=', null, rf);
+  ok(wp() === w && !evTyping.defaultPrevented, 'ignored while typing in the filter box');
+  rf.blur();
+  const ce = doc.createElement('div');
+  ce.setAttribute('contenteditable', 'true'); ce.tabIndex = 0;
+  doc.body.appendChild(ce);
+  ce.focus();
+  w = wp();
+  const evCe = zkey('=', null, ce);
+  ok(doc.activeElement === ce && wp() === w && !evCe.defaultPrevented, 'ignored inside a contenteditable');
+  ce.blur(); ce.remove();
+  click(doc.querySelector('#rows .row.band [data-act="phase-edit"]'));
+  ok(!doc.querySelector('#modalHost').hidden, 'a dialog is open');
+  w = wp();
+  const evModal = zkey('=');
+  ok(wp() === w && !evModal.defaultPrevented, 'ignored while a dialog is open');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  window.HeadwayApp.ai.setView('scoping');
+  w = wp();
+  const evSc = zkey('=');
+  ok(wp() === w && !evSc.defaultPrevented, 'ignored in Scoping');
+  window.HeadwayApp.ai.setView('planning');
+  click(doc.querySelector('.menu-btn[data-menu="view"]'));
+  const zin = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Zoom in/.test(b.textContent));
+  const zout = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Zoom out/.test(b.textContent));
+  ok(!!zin && /⌘\+/.test(zin.textContent) && !!zout && /⌘−/.test(zout.textContent), 'the View menu shows ⌘+ / ⌘− beside Zoom in / out');
+  doc.querySelector('#popover').hidden = true;
+  click(doc.querySelector('.menu-btn[data-menu="file"]'));
+  const helpBtn = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Shortcuts & help/.test(b.textContent));
+  ok(!!helpBtn, 'File offers Shortcuts & help');
+  click(helpBtn);
+  ok(/⌘\+/.test(doc.querySelector('#modalHost').textContent) && /⌘−/.test(doc.querySelector('#modalHost').textContent),
+    'the help dialog mentions ⌘+ / ⌘−');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }).then(() => {
   // a reload under the wizard is a real reload: no undo back into the old copy
   window.HeadwayApp.ai.commit('local edit', (s) => { s.meta.vision = 'LOCAL'; });

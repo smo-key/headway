@@ -152,7 +152,8 @@
     if (RM.sizeRollup(state)) return out;        // the rollup scheme derives it already
     if (!RM.sizingEnabled(state)) return out;    // 'none' writes nothing
     (state.items || []).forEach(function (it) {
-      if (!it || it.milestone || it.phaseId !== phaseId) return;
+      // excluded from Auto: its size is left alone along with its dates
+      if (!it || it.milestone || it.noAuto || it.phaseId !== phaseId) return;
       var sized = (it.stories || []).some(function (st) { return st && RM.sizeDays(state, st.size, 'story') != null; });
       if (!sized) return;
       var d = RM.autoSizeDays(state, it, opts);
@@ -1818,6 +1819,10 @@
         // risk t-shirt is planning metadata only — it never pads the schedule
         riskDays: 0,
         locked: !!it.locked,
+        // excluded from the Auto timeline (and ⚡): the scheduler leaves it
+        // where it sits. Mutually exclusive with Lock — a document carrying
+        // both (a hand-edited file, an Excel import) keeps the Lock
+        noAuto: !!it.noAuto && !it.locked,
         // attention flag (orange flag on the row) with an optional reason
         flag: RM.normalizeFlag(it.flag),
         // custom scoping-column values, keyed by column key
@@ -1853,6 +1858,8 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays != null && isFinite(s.durDays) && s.durDays >= 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            // excluded from the Auto timeline (the feature's flag covers it too)
+            noAuto: !!s.noAuto,
             flag: RM.normalizeFlag(s.flag),
             // stories are numbered from the same pool as features; a missing
             // or colliding number is assigned by the unique-num pass below
@@ -2578,9 +2585,13 @@
     state.items.forEach(function (it, idx) {
       if (it.milestone) return;
       if (!storyLevel) {
+        // Features level: stories are not units and ride along with their
+        // feature, so a feature with ANY excluded story is excluded whole
         var u = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: RM.itemCapType(state, it),
           mult: it.capMult || 1, points: RM.pointsOf(it), startDay: it.startDay, durDays: it.durDays,
-          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked, done: !!it.done, milestone: false,
+          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked,
+          noAuto: !!it.noAuto || (it.stories || []).some(function (st) { return st && st.noAuto; }),
+          done: !!it.done, milestone: false,
           phaseId: it.phaseId, order: [idx, 0] };
         units.push(u);
         unitsByItem[it.id] = [u];
@@ -2590,7 +2601,8 @@
       (it.stories || []).forEach(function (st, si) {
         var su = { id: 's:' + st.id, itemId: it.id, storyId: st.id, capType: st.capType || '',
           mult: st.capMult || 1, points: RM.pointsOf(st), startDay: st.startDay, durDays: st.durDays,
-          riskDays: 0, deps: [], locked: !!it.locked, done: !!it.done || !!st.done, milestone: false,
+          riskDays: 0, deps: [], locked: !!it.locked, noAuto: !!it.noAuto || !!st.noAuto,
+          done: !!it.done || !!st.done, milestone: false,
           phaseId: it.phaseId, order: [idx, si], _st: st };
         if (st.num != null) storyUnitByNum[st.num] = su;
         units.push(su); mine.push(su);
@@ -2598,7 +2610,7 @@
       if (!mine.length) {
         var lone = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: it.capType || '',
           mult: it.capMult || 1, points: RM.pointsOf(it), startDay: it.startDay, durDays: it.durDays,
-          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked, done: !!it.done, milestone: false,
+          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked, noAuto: !!it.noAuto, done: !!it.done, milestone: false,
           phaseId: it.phaseId, order: [idx, 0] };
         units.push(lone); mine.push(lone);
       }
@@ -2608,7 +2620,7 @@
     state.items.forEach(function (it, idx) {
       if (!it.milestone) return;
       var mu = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: '', mult: 0, points: 0,
-        startDay: it.startDay, durDays: 0, riskDays: 0, deps: [], locked: !!it.locked, done: !!it.done,
+        startDay: it.startDay, durDays: 0, riskDays: 0, deps: [], locked: !!it.locked, noAuto: !!it.noAuto, done: !!it.done,
         milestone: true, phaseId: it.phaseId, order: [idx, 0] };
       units.push(mu);
       unitsByItem[it.id] = [mu];
@@ -2655,11 +2667,14 @@
   };
 
   // what a unit asks of its type in each week of a span, as {w0, byWeek}
-  // (byWeek[i] is week w0 + i). Per person: its heads (× multiplier) in
-  // every non-blackout week. Story points: its points follow its working
-  // days — a week carries points × (the unit's working days in it) / (its
-  // working days in all), so a story starting mid-week puts most of its
-  // points where most of its days are; holiday days carry none.
+  // (byWeek[i] is week w0 + i). Both modes weigh by the unit's working days
+  // (holiday days carry none). Per person: heads (× multiplier) × (the
+  // unit's working days in the week ÷ slots per week) — a full week asks a
+  // whole head, a week with a holiday asks 0.8, matching the holiday-scaled
+  // supply, and a two-day tail asks 0.4. Story points: a week carries
+  // points × (the unit's working days in it) / (its working days in all),
+  // so a story starting mid-week puts most of its points where most of its
+  // days are.
   RM.unitDemandByWeek = function (state, u, startDay, durDays, set) {
     var meta = state.meta, S = RM.slotsOf(meta);
     set = set || RM.holidayDaySet(meta);
@@ -2679,7 +2694,11 @@
       return { w0: w0, byWeek: out };
     }
     var heads = u.mult > 0 ? u.mult : 1;
-    for (var w2 = w0; w2 <= w1; w2++) if (!RM.isBlackoutWeek(meta, w2, set)) out[w2 - w0] = heads;
+    for (var d2 = startDay; d2 < startDay + span; d2++) {
+      if (RM.offDay(meta, d2, set)) continue;
+      out[Math.floor(d2 / S) - w0] += 1;
+    }
+    for (var j = 0; j < out.length; j++) out[j] = heads * out[j] / S;
     return { w0: w0, byWeek: out };
   };
 
@@ -3204,7 +3223,8 @@
       periodWord: meta.capMode !== 'points' ? 'a week' : (RM.sprintsEnabled(meta) ? 'a sprint' : 'two weeks'),
       // true when the unit can never fit wherever it starts: the smallest
       // share of it one period must take still exceeds the most any period
-      // ever supplies. Per person that share is its heads. In story points a
+      // ever supplies. Per person that share is its busiest week (heads × the
+      // days it works there ÷ slots). In story points a
       // unit of D working days puts at least ceil(D / 2) of them in one
       // period if D fits two periods; touching three or more it covers a
       // whole period in between (at least lMin working days). Sound, not
@@ -3320,8 +3340,8 @@
 
   // Lay out phases (opts.phaseIds, else every non-bucket phase): dependency
   // order, earliest start from today (or the unit's own start once begun),
-  // under the typed weekly ledger. Fixed units (other phases, locked, done,
-  // dependency-free milestones) pre-book.
+  // under the typed weekly ledger. Fixed units (other phases, locked,
+  // excluded from Auto, done, dependency-free milestones) pre-book.
   RM.autoTimeline = function (inputState, opts) {
     opts = opts || {};
     var state = RM.clone(inputState);
@@ -3349,7 +3369,9 @@
     var phaseFloor = Object.create(null);
     state.phases.forEach(function (p) { phaseFloor[p.id] = RM.phaseFloorDay(state, p); });
     function movable(u) {
-      if (!targets[u.phaseId] || u.locked || u.done) return false;
+      // excluded-from-Auto units are fixed exactly like locked ones here
+      // (RM.placeUnit, a direct command, still moves them)
+      if (!targets[u.phaseId] || u.locked || u.noAuto || u.done) return false;
       if (u.milestone) return u.deps.length > 0;
       return true;
     }
@@ -3513,6 +3535,19 @@
   // the feature hulls rebuilt around moved stories; sized = features whose
   // size changed; changed = everything that differs (hulls included).
   RM.AUTO_PHASE_MAX_PASSES = 5;
+  // Lock and "Exclude from Auto timeline" never co-occur: setting one clears
+  // the other. setNoAuto takes a feature or a story (stories have no lock).
+  RM.setLocked = function (it, v) {
+    it.locked = !!v;
+    if (v) it.noAuto = false;
+    return it;
+  };
+  RM.setNoAuto = function (x, v) {
+    x.noAuto = !!v;
+    if (v && 'locked' in x) x.locked = false;
+    return x;
+  };
+
   RM.autoPhase = function (inputState, phaseId, opts) {
     opts = opts || {};
     var ph = null;

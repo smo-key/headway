@@ -363,7 +363,7 @@ eq(RM.workingWeeksInSpan(META, 70, 30, hsSet), RM.workingWeeksInSpan(META, 70, 3
 section('autoTimeline');
 function autoMeta(extra) {
   var m = JSON.parse(JSON.stringify(META));
-  m.holidays = []; m.capacityEnabled = true;
+  m.holidays = []; m.holidaysV2026 = true; m.capacityEnabled = true;
   if (extra) Object.keys(extra).forEach(function (k) { m[k] = extra[k]; });
   return m;
 }
@@ -622,7 +622,8 @@ eq(Big[2].startDay, 0, 'and 2 more fill the sprint exactly');
   var cDw = RM.capacity(sDw);
   eq([cDw.rows.Development[0].demand, cDw.rows.Development[1].demand], [6, 4], 'the sprint cells follow the days');
   sDw.meta.capMode = 'person';
-  eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 5).byWeek, [1, 1], 'per person: one head in each week touched');
+  // per person weighs by working days too (was a whole head in every week touched)
+  eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 5).byWeek, [0.6, 0.4], 'per person: a head × the unit’s share of each week’s days');
   // a holiday day carries no points
   sDw.meta.capMode = 'points'; sDw.meta.holidays = ['2026-08-07']; // Friday of week 2 (day 9)
   eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 6).byWeek, [4, 6], 'a holiday inside the span carries none of the points (2 + 3 working days)');
@@ -1668,6 +1669,58 @@ if (!ExcelJS) {
 } else {
   global.ExcelJS = ExcelJS;
   var RMExcel = require('../js/excel.js');
+  // "Excluded from Auto timeline" round trip: the lossless path, the visible
+  // Roadmap / Stories columns on the template path, and Lock winning a clash
+  var noAutoExcelTest = function () {
+    var sN = mkState([
+      { num: 1, feature: 'x', phaseId: 'p1', noAuto: true, stories: [{ title: 's', num: 11, noAuto: true }, { title: 't', num: 12 }] },
+      { num: 2, feature: 'y', phaseId: 'p1', locked: true }
+    ]);
+    var hdrCol = function (row, re) {
+      var col = 0;
+      row.eachCell({ includeEmpty: false }, function (c, n) { if (!col && re.test(String(c.value))) col = n; });
+      return col;
+    };
+    return RMExcel.exportWorkbook(sN).then(function (bufN) {
+      return RMExcel.importWorkbook(bufN).then(function (rn1) {
+        eq(rn1.state.items[0].noAuto, true, 'feature noAuto survives the lossless path');
+        eq(rn1.state.items[0].stories.map(function (x) { return x.noAuto; }), [true, false], 'story noAuto survives the lossless path');
+        var wbN = new ExcelJS.Workbook();
+        return wbN.xlsx.load(bufN).then(function () {
+          wbN.removeWorksheet(wbN.getWorksheet('_RoadmapTool').id);
+          var rwsN = wbN.getWorksheet('Roadmap');
+          var nCol = hdrCol(rwsN.getRow(3), /^excluded from auto$/i);
+          var sCol = hdrCol(rwsN.getRow(3), /^status$/i);
+          ok(nCol === sCol + 1, 'the Roadmap sheet shows an Excluded from Auto column beside Status');
+          ok(hdrCol(wbN.getWorksheet('Stories').getRow(1), /^excluded from auto$/i) > 0, 'the Stories sheet shows one too');
+          return wbN.xlsx.writeBuffer();
+        }).then(function (bufN2) {
+          return RMExcel.importWorkbook(bufN2);
+        }).then(function (rn2) {
+          ok(rn2.source === 'template', 'the noAuto doc without the tool sheet parses as a template');
+          eq([rn2.state.items[0].noAuto, rn2.state.items[0].locked], [true, false], 'template path re-reads the feature flag');
+          eq([rn2.state.items[1].noAuto, rn2.state.items[1].locked], [false, true], 'and a locked feature stays locked');
+          eq(rn2.state.items[0].stories.map(function (x) { return x.noAuto; }), [true, false], 'template path re-reads the story flag');
+          // a hand-edited sheet marking a locked row excluded too: Lock wins
+          var wbC = new ExcelJS.Workbook();
+          return wbC.xlsx.load(bufN).then(function () {
+            wbC.removeWorksheet(wbC.getWorksheet('_RoadmapTool').id);
+            var rwsC = wbC.getWorksheet('Roadmap');
+            var nColC = hdrCol(rwsC.getRow(3), /^excluded from auto$/i);
+            for (var rr = 4; rr <= rwsC.rowCount; rr++) {
+              if (String(rwsC.getRow(rr).getCell(1).value) === '2') rwsC.getRow(rr).getCell(nColC).value = 'Yes';
+            }
+            return wbC.xlsx.writeBuffer();
+          }).then(function (bufC) {
+            return RMExcel.importWorkbook(bufC);
+          }).then(function (rc) {
+            var c2 = rc.state.items.filter(function (i2) { return i2.num === 2; })[0];
+            eq([c2.locked, c2.noAuto], [true, false], 'Locked plus Excluded in the sheet imports as Locked');
+          });
+        });
+      });
+    });
+  };
   var seed = require('./seed.fixture.js');
   var st = RM.normalizeState(seed);
   st.team = [{ id: 't1', name: 'Ada', type: 'Development', rate: 210, cost: 95 }, { id: 't2', name: 'Grace', type: 'Data' }];
@@ -1875,7 +1928,7 @@ if (!ExcelJS) {
                         return RMExcel.importWorkbook(bufY2);
                       }).then(function (ry) {
                         ok(ry.state.team[0].points === null, 'a blank Points per sprint cell reads back as null (inherit)');
-                        finish();
+                        return noAutoExcelTest().then(finish);
                       });
                     });
                   });
@@ -2696,4 +2749,144 @@ section('snapped placement');
   var stP = RM.itemByNum(rPl.state, 1).stories[0];
   eq(stP.startDay, 5, 'Place at earliest slot snaps too');
   eq(stP.durDays, 5, 'and rounds the duration up');
+}
+
+section('exclude from auto');
+{
+  // the phase starts on day 0, so its floor never hides what the flag does
+  var PH0 = [{ id: 'p1', name: 'Alpha', bucket: false, startDay: 0 }, { id: 'p3', name: 'Next', bucket: true }];
+  // normalize: a plain boolean on features and stories; Lock wins a clash
+  var nA = mkState([
+    { num: 1, feature: 'a', phaseId: 'p1', noAuto: 1, stories: [{ title: 's', noAuto: 'yes' }, { title: 't' }] },
+    { num: 2, feature: 'b', phaseId: 'p1' },
+    { num: 3, feature: 'c', phaseId: 'p1', noAuto: true, locked: true }
+  ]);
+  eq(RM.itemByNum(nA, 1).noAuto, true, 'normalize: noAuto is a boolean on features');
+  eq(RM.itemByNum(nA, 1).stories[0].noAuto, true, 'normalize: noAuto is a boolean on stories');
+  eq(RM.itemByNum(nA, 1).stories[1].noAuto, false, 'normalize: a story without it reads false');
+  eq(RM.itemByNum(nA, 2).noAuto, false, 'normalize: a feature without it reads false');
+  eq([RM.itemByNum(nA, 3).locked, RM.itemByNum(nA, 3).noAuto], [true, false], 'normalize: both set → Locked wins');
+
+  // the two are mutually exclusive
+  var xA = { locked: true, noAuto: false };
+  RM.setNoAuto(xA, true);
+  eq([xA.locked, xA.noAuto], [false, true], 'setting noAuto clears locked');
+  RM.setLocked(xA, true);
+  eq([xA.locked, xA.noAuto], [true, false], 'setting locked clears noAuto');
+  RM.setLocked(xA, false);
+  eq([xA.locked, xA.noAuto], [false, false], 'unlocking leaves noAuto off');
+  var xS = { title: 's' };
+  RM.setNoAuto(xS, true);
+  ok(xS.noAuto === true && !('locked' in xS), 'a story takes noAuto without growing a lock');
+
+  // scheduler: an excluded feature stays where it sits and books its capacity
+  var sEx = autoState([
+    { num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' },
+    { num: 2, feature: 'free', phaseId: 'p1', durDays: 5, capType: 'Development' },
+    { num: 3, feature: 'after', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [1] }
+  ], [{ name: 'Solo', capType: 'Development' }], null, PH0);
+  var X = byNum(RM.autoTimeline(sEx, { phaseIds: ['p1'], today: 0 }).state);
+  eq([X[1].startDay, X[1].durDays], [20, 5], 'an excluded feature stays put');
+  eq(X[2].startDay, 0, 'its unexcluded neighbour still moves');
+  eq(X[3].startDay, 25, 'a dependent lands right after the excluded feature');
+  // …exactly where it lands behind a locked one: the same fixed-unit path
+  var sLk = RM.clone(sEx);
+  RM.setLocked(RM.itemByNum(sLk, 1), true);
+  eq(X[3].startDay, byNum(RM.autoTimeline(sLk, { phaseIds: ['p1'], today: 0 }).state)[3].startDay,
+    'an excluded feature schedules around exactly like a locked one');
+  var sBk = autoState([
+    { num: 1, feature: 'excluded', phaseId: 'p1', startDay: 0, durDays: 5, noAuto: true, capType: 'Development' },
+    { num: 2, feature: 'free', phaseId: 'p1', startDay: 30, durDays: 5, capType: 'Development' }
+  ], [{ name: 'Solo', capType: 'Development' }]);
+  eq(byNum(RM.autoTimeline(sBk, { phaseIds: ['p1'], today: 0 }).state)[2].startDay, 5,
+    'the excluded feature books its capacity: the free one waits for the head');
+  ok(RM.capUnits(sBk).filter(function (u) { return u.itemId === RM.itemByNum(sBk, 1).id; })[0].noAuto === true, 'capUnits carries noAuto');
+
+  // story level: the feature's flag covers its stories; a story's own flag covers just it
+  var sFS = autoState([
+    { num: 1, feature: 'F', phaseId: 'p1', capType: 'Development', noAuto: true,
+      stories: [{ num: 101, title: 'a', startDay: 30, durDays: 3, capType: 'Development' }] },
+    { num: 2, feature: 'G', phaseId: 'p1', capType: 'Development',
+      stories: [{ num: 201, title: 'b', startDay: 40, durDays: 3, capType: 'Development', noAuto: true },
+        { num: 202, title: 'c', startDay: 50, durDays: 2, capType: 'Development' }] }
+  ], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+  var FS = byNum(RM.autoTimeline(sFS, { phaseIds: ['p1'], today: 0 }).state);
+  eq(FS[1].stories[0].startDay, 30, 'a feature’s noAuto covers its stories');
+  eq(FS[2].stories[0].startDay, 40, 'a story’s own noAuto keeps it put');
+  ok(FS[2].stories[1].startDay !== 50, 'its unflagged sibling still moves');
+
+  // Features level: stories are not units, so a feature with ANY excluded
+  // story is fixed as a whole (its stories would otherwise ride along)
+  var sFL = autoState([
+    { num: 1, feature: 'F', phaseId: 'p1', startDay: 20, durDays: 5, capType: 'Development',
+      stories: [{ num: 101, title: 'a', startDay: 21, durDays: 2, noAuto: true }, { num: 102, title: 'b' }] },
+    { num: 2, feature: 'G', phaseId: 'p1', durDays: 5, capType: 'Development' }
+  ], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'feature' }, PH0);
+  var FL = byNum(RM.autoTimeline(sFL, { phaseIds: ['p1'], today: 0 }).state);
+  eq([FL[1].startDay, FL[1].stories[0].startDay], [20, 21], 'Features level: a feature with an excluded story stays put, story and all');
+  eq(FL[2].startDay, 0, 'while its neighbour still moves');
+  ok(RM.capUnits(sFL).filter(function (u) { return u.itemId === RM.itemByNum(sFL, 1).id; })[0].noAuto === true,
+    'its feature-level unit carries noAuto');
+  eq(RM.autoPhase(sFL, 'p1', { today: 0 }).changed, 1, 'and the dry run counts only the neighbour');
+  RM.itemByNum(sFL, 1).stories[0].noAuto = false;
+  ok(byNum(RM.autoTimeline(sFL, { phaseIds: ['p1'], today: 0 }).state)[1].startDay !== 20, 'without the story flag the feature moves');
+
+  // ⚡ dry run: an excluded feature is never counted
+  var sDry = autoState([{ num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' }],
+    [{ name: 'Solo', capType: 'Development' }], null, PH0);
+  eq(RM.autoPhase(sDry, 'p1', { today: 0 }).changed, 0, 'autoPhase leaves an excluded feature alone (nothing to do)');
+  RM.itemByNum(sDry, 1).noAuto = false;
+  ok(RM.autoPhase(sDry, 'p1', { today: 0 }).changed > 0, 'while the same feature, included, would move');
+
+  // Place at earliest slot is a direct command: it still moves an excluded unit (never a locked one)
+  var sPlc = autoState([{ num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' }],
+    [{ name: 'Solo', capType: 'Development' }], null, PH0);
+  var rPlc = RM.placeUnit(sPlc, RM.itemByNum(sPlc, 1).id, null, { today: 0 });
+  eq(RM.itemByNum(rPlc.state, 1).startDay, 0, 'placeUnit still moves an excluded feature');
+  RM.setLocked(RM.itemByNum(sPlc, 1), true);
+  var rPlk = RM.placeUnit(sPlc, RM.itemByNum(sPlc, 1).id, null, { today: 0 });
+  eq([rPlk.changed, rPlk.note], [0, 'Locked'], 'but never a locked one');
+  var rPlF = RM.placeUnit(sFS, RM.itemByNum(sFS, 1).id, null, { today: 0 });
+  ok(RM.itemByNum(rPlF.state, 1).stories[0].startDay !== 30, 'placing an excluded feature at story level places its stories');
+
+  // the ⚡ sizing step leaves an excluded feature's size alone too
+  var szMeta = { planLevel: 'story', sizeScheme: 'tshirt', sizeOrder: ['XS', 'S', 'M', 'L', 'XL'],
+    sizeDays: { XS: 2, S: 5, M: 10, L: 20, XL: 40 }, storySizeScheme: 'fibonacci' };
+  var sSz = autoState([{ num: 1, feature: 'F', phaseId: 'p1', capType: 'Development', size: 'XL', noAuto: true,
+    stories: [{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }] }],
+    [{ name: 'Solo', capType: 'Development' }], szMeta);
+  eq(RM.autoSizeChanges(sSz, 'p1'), [], 'an excluded feature is not re-sized by Auto');
+  RM.itemByNum(sSz, 1).noAuto = false;
+  eq(RM.autoSizeChanges(sSz, 'p1').length, 1, 'while an included one would be');
+}
+
+section('holiday weeks, per person');
+{
+  // a solo dev in a week with one holiday supplies 0.8; a 5-day unit that has
+  // only four working days there asks 0.8 of it (heads × its days ÷ 5)
+  var HOL = { holidays: ['2026-08-07'] }; // Friday of week 1 (days 5–9)
+  var solo = [{ name: 'Solo', capType: 'Development' }];
+  var sH1 = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' }], solo, HOL);
+  var rH1 = RM.autoTimeline(sH1, { phaseIds: ['p1'], today: 5 }).state;
+  eq(byNum(rH1)[1].startDay, 5, 'a solo dev’s 5-day unit starts in the holiday week');
+  var cH = RM.capacity(rH1);
+  ok(Math.abs(cH.weeks[1].demand - 0.8) < 1e-9 && Math.abs(cH.weeks[1].supply - 0.8) < 1e-9 && !cH.weeks[1].over,
+    'the holiday week reads 0.8 / 0.8 and is not over (got ' + cH.weeks[1].demand + ' / ' + cH.weeks[1].supply + ')');
+  ok(Math.abs(cH.weeks[2].demand - 0.2) < 1e-9, 'the day it spills into the next week asks a fifth of a head there');
+  // two solo-dev units cannot share that week
+  var sH2 = autoState([
+    { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },
+    { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, capType: 'Development' }
+  ], solo, HOL);
+  var H2 = byNum(RM.autoTimeline(sH2, { phaseIds: ['p1'], today: 5 }).state);
+  ok(H2[1].startDay === 5 && H2[2].startDay >= 10, 'a second unit does not fit beside the first (starts ' + H2[2].startDay + ')');
+  ok(!RM.capacity(RM.autoTimeline(sH2, { phaseIds: ['p1'], today: 5 }).state).weeks.some(function (c) { return c.over; }),
+    'and the layout is never over capacity');
+  // the reviewer's repro: the default US holidays (Sep 4 / Sep 7) no longer push work a fortnight
+  var sUS = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' }], solo,
+    { holidays: ['2026-09-04', '2026-09-07'] });
+  eq(byNum(RM.autoTimeline(sUS, { phaseIds: ['p1'], today: 25 }).state)[1].startDay, 25, 'work starts in a week with a holiday');
+  // a partial week asks only its share of a head
+  var sPart = autoState([{ num: 1, feature: 'a', phaseId: 'p1', startDay: 3, durDays: 2, capType: 'Development' }], solo);
+  ok(Math.abs(RM.capacity(sPart).weeks[0].demand - 0.4) < 1e-9, 'two days in a week ask 0.4 of a head');
 }

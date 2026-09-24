@@ -336,6 +336,7 @@
       push('timeline', lbl + ' — Deadline', p.deadline, it.deadline);
       push('timeline', lbl + ' — Milestone', p.milestone ? 'yes' : 'no', it.milestone ? 'yes' : 'no');
       push('timeline', lbl + ' — Locked', p.locked ? 'yes' : 'no', it.locked ? 'yes' : 'no');
+      push('timeline', lbl + ' — Excluded from Auto', p.noAuto ? 'yes' : 'no', it.noAuto ? 'yes' : 'no');
       push('status', lbl + ' — Done', p.done ? 'done' : 'not done', it.done ? 'done' : 'not done');
       push('status', lbl + ' — Assignees', names(a, p.assignees), names(b, it.assignees));
       var sa = byId(p.stories), sb = byId(it.stories);
@@ -353,6 +354,7 @@
         push('timeline', sl + ' — Start', dDate(sp.startDay), dDate(st.startDay));
         push('timeline', sl + ' — Duration', dWeeks(sp.durDays), dWeeks(st.durDays));
         push('timeline', sl + ' — Deadline', sp.deadline, st.deadline);
+        push('timeline', sl + ' — Excluded from Auto', sp.noAuto ? 'yes' : 'no', st.noAuto ? 'yes' : 'no');
         push('status', sl + ' — Done', sp.done ? 'done' : 'not done', st.done ? 'done' : 'not done');
         push('status', sl + ' — Assignees', names(a, sp.assignees), names(b, st.assignees));
       });
@@ -529,7 +531,12 @@
     if (!autoPhaseDryRun(phaseId).changed) return { disabled: true, tip: 'Everything in this phase is already in place' };
     return { disabled: false, tip: AUTO_TL_TIP };
   }
-  // the Auto timeline action: lay the phase out (locked / done work stays put)
+  // row mark for a feature or story excluded from the Auto timeline — it
+  // takes the lock icon's slot (Lock and Exclude never co-occur)
+  function noAutoIcon() {
+    return '<span class="r-lock r-noauto" title="Excluded from Auto timeline"><i data-lucide="zap-off"></i></span>';
+  }
+  // the Auto timeline action: lay the phase out (locked, excluded and done work stays put)
   // and, at the Stories level, size its features from their stories — one
   // commit, so one undo takes it all back
   function autoTimelinePhase(phaseId) {
@@ -2841,7 +2848,7 @@
         moveStoryFeatureEntry(cx, cy, cid, stRowId),
         { sep: true },
         storyInsertEntries(cid, stRowId)[0], storyInsertEntries(cid, stRowId)[1],
-        flagMenuEntries(cid, stRowId)[0], flagMenuEntries(cid, stRowId)[1] || null,
+        flagMenuEntries(cid, stRowId)[0], flagMenuEntries(cid, stRowId)[1] || null, noAutoEntry(cid, stRowId),
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stRowId); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -2860,7 +2867,7 @@
         moveStoryFeatureEntry(cx, cy, cid, stIdX),
         { sep: true },
         storyInsertEntries(cid, stIdX)[0], storyInsertEntries(cid, stIdX)[1],
-        flagMenuEntries(cid, stIdX)[0], flagMenuEntries(cid, stIdX)[1] || null,
+        flagMenuEntries(cid, stIdX)[0], flagMenuEntries(cid, stIdX)[1] || null, noAutoEntry(cid, stIdX),
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stIdX); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -2884,7 +2891,7 @@
           } }
         : null,
       { sep: true },
-      flagMenuEntries(cid, null)[0], flagMenuEntries(cid, null)[1] || null,
+      flagMenuEntries(cid, null)[0], flagMenuEntries(cid, null)[1] || null, noAutoEntry(cid, null),
       { sep: true },
       { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(cid); } }
     ].filter(Boolean));
@@ -3418,7 +3425,7 @@
         } } : null,
         state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid), ASSIGN_DD); } } : null,
         moveStoryFeatureEntry(cx, cy, cid, sid),
-        flagMenuEntries(cid, sid)[0], flagMenuEntries(cid, sid)[1] || null,
+        flagMenuEntries(cid, sid)[0], flagMenuEntries(cid, sid)[1] || null, noAutoEntry(cid, sid),
         { sep: true },
         storyInsertEntries(cid, sid)[0], storyInsertEntries(cid, sid)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, sid); } }
@@ -3434,7 +3441,7 @@
         ? { icon: 'layers', label: 'Set workstream…', fn: function () { openContextMenu(cx, cy, wsMenuItems(cid, function () { return null; })); } }
         : null,
       state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, assignMenuItems(cid)); } } : null,
-      flagMenuEntries(cid, null)[0], flagMenuEntries(cid, null)[1] || null,
+      flagMenuEntries(cid, null)[0], flagMenuEntries(cid, null)[1] || null, noAutoEntry(cid, null),
       isScheduled(itX) ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
         commit('unschedule', function (s) { RM.moveItemToSprint(s, cid, null, null); });
       } } : null,
@@ -3985,6 +3992,8 @@
         ' title="' + esc(tip) + '">' +
         '<div class="b-h l" data-act="bh-l"></div>' + label + hcTag +
         (it.locked ? '<span class="b-hc bi-lock" style="pointer-events:none"><i data-lucide="lock"></i></span>' : '') +
+        // excluded from Auto sits in the lock's slot (the two never co-occur)
+        (it.noAuto ? '<span class="b-hc bi-noauto" style="pointer-events:none" title="Excluded from Auto timeline"><i data-lucide="zap-off"></i></span>' : '') +
         '<div class="b-h r" data-act="bh-r"></div>' +
         ports +
         '</div>';
@@ -4113,6 +4122,7 @@
       '<span class="r-num">' + it.num + '</span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
+      (it.noAuto ? noAutoIcon() : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
       typeGlyphHtml(it, 'feature') +
       (view === 'scoping'
@@ -4183,6 +4193,7 @@
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           // the story number sits in the same column as the feature numbers above
           '<span class="r-num st-num">#' + st.num + '</span>' +
+          (st.noAuto ? noAutoIcon() : '') +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
           typeGlyphHtml(st, 'story', it) +
           (view === 'scoping'
@@ -4315,6 +4326,8 @@
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
+        // the phase's actions sit at the right edge of the band, always visible
+        '<span class="band-acts">' +
         '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         (p.bucket ? '' : (function () {
@@ -4322,6 +4335,7 @@
           return '<button class="band-zap" data-act="phase-auto" title="' + esc(as.tip) + '"' + (as.disabled ? ' disabled' : '') +
             '><i data-lucide="zap"></i></button>';
         })()) +
+        '</span>' +
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
@@ -4843,6 +4857,8 @@
         riskInfo + priInfo +
         '<div class="p-row" style="margin-top:10px">' +
         '<label class="p-check fixed"><input type="checkbox" data-f="locked"' + (it.locked ? ' checked' : '') + '> Locked</label>' +
+        '<label class="p-check fixed" title="Auto timeline and ⚡ leave it where it sits; Place at earliest slot still moves it">' +
+        '<input type="checkbox" data-f="noAuto"' + (it.noAuto ? ' checked' : '') + '> Excluded from Auto timeline</label>' +
         '<label class="p-check fixed"><input type="checkbox" data-f="done"' + (it.done ? ' checked' : '') + '> Done</label>' +
         '</div>') +
 
@@ -4992,7 +5008,11 @@
       typeChipHtml('stype', 'story', st) + panelFlagHtml(st) +
       '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="' + esc(lvl('story') + ' title') + '">' + esc(st.title) + '</textarea>' +
-      '<label class="p-check fixed" style="margin:6px 0 8px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
+      '<div class="p-row" style="margin:6px 0 8px">' +
+      '<label class="p-check fixed"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
+      '<label class="p-check fixed" title="Auto timeline and ⚡ leave it where it sits; Place at earliest slot still moves it">' +
+      '<input type="checkbox" data-stf="noAuto"' + (st.noAuto ? ' checked' : '') + '> Excluded from Auto timeline</label>' +
+      '</div>' +
 
       '<div class="p-sec c open"><button class="p-sechead" tabindex="-1">' +
       '<i data-lucide="chevron-right"></i><span class="p-seclab">Rolls up to</span></button>' +
@@ -5870,11 +5890,14 @@
         }
         return;
       }
-      commit('story ' + stf, function (s) {
+      // the Auto flag reads the same in history as the feature's
+      var stLbl = stf === 'noAuto' ? (sval ? 'exclude from auto' : 'include in auto') : 'story ' + stf;
+      commit(stLbl, function (s) {
         var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
         if (!st2) return;
         if (stf === 'title') st2.title = String(sval);
         else if (stf === 'done') st2.done = !!sval;
+        else if (stf === 'noAuto') RM.setNoAuto(st2, !!sval);
         else if (stf === 'jiraKey') st2.jiraKey = RM.jiraKeyOf(String(sval));
       });
       return;
@@ -5910,7 +5933,9 @@
       }
       return;
     }
-    if (f === 'locked') { commit('lock', function (s) { RM.itemById(s, it.id).locked = !!val; }); return; }
+    // Locked and Excluded from Auto are exclusive: each clears the other
+    if (f === 'locked') { commit('lock', function (s) { RM.setLocked(RM.itemById(s, it.id), !!val); }); return; }
+    if (f === 'noAuto') { commit(val ? 'exclude from auto' : 'include in auto', function (s) { RM.setNoAuto(RM.itemById(s, it.id), !!val); }); return; }
     if (f === 'done') { commit('done', function (s) { RM.itemById(s, it.id).done = !!val; }); return; }
     if (f === 'deadline') {
       var dlv = /^\d{4}-\d{2}-\d{2}$/.test(String(val)) ? String(val) : null;
@@ -6632,7 +6657,7 @@
         { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
-        flagMenuEntries(stmItemId, stmId)[0], flagMenuEntries(stmItemId, stmId)[1] || null,
+        flagMenuEntries(stmItemId, stmId)[0], flagMenuEntries(stmItemId, stmId)[1] || null, noAutoEntry(stmItemId, stmId),
         moveStoryFeatureEntry(cx, cy, stmItemId, stmId),
         { sep: true },
         storyInsertEntries(stmItemId, stmId)[0], storyInsertEntries(stmItemId, stmId)[1],
@@ -6682,8 +6707,9 @@
         } } : null,
         flagMenuEntries(itemId, null)[0], flagMenuEntries(itemId, null)[1] || null,
         { icon: it.locked ? 'lock-open' : 'lock', label: it.locked ? 'Unlock' : 'Lock', fn: function () {
-          commit('lock', function (s) { var t = RM.itemById(s, itemId); t.locked = !t.locked; });
+          commit('lock', function (s) { var t = RM.itemById(s, itemId); RM.setLocked(t, !t.locked); });
         } },
+        noAutoEntry(itemId, null),
         { icon: it.done ? 'circle' : 'circle-check', label: it.done ? 'Unmark as done' : 'Mark as done', fn: function () {
           commit('done', function (s) { var t = RM.itemById(s, itemId); t.done = !t.done; });
         } },
@@ -6729,7 +6755,7 @@
         moveStoryFeatureEntry(e.clientX, e.clientY, it.id, stMoreId),
         { sep: true },
         storyInsertEntries(it.id, stMoreId)[0], storyInsertEntries(it.id, stMoreId)[1],
-        flagMenuEntries(it.id, stMoreId)[0], flagMenuEntries(it.id, stMoreId)[1] || null,
+        flagMenuEntries(it.id, stMoreId)[0], flagMenuEntries(it.id, stMoreId)[1] || null, noAutoEntry(it.id, stMoreId),
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(it.id, stMoreId); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -6742,7 +6768,7 @@
       return;
     }
     openContextMenu(e.clientX, e.clientY, [
-      flagMenuEntries(it.id, null)[0], flagMenuEntries(it.id, null)[1] || null,
+      flagMenuEntries(it.id, null)[0], flagMenuEntries(it.id, null)[1] || null, noAutoEntry(it.id, null),
       { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
       { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
         label: it.milestone ? esc('Convert to ' + lvl('feature').toLowerCase()) : 'Convert to milestone',
@@ -6794,6 +6820,7 @@
     }
     var allDone = sel.every(function (t) { return t.done; });
     var allLocked = sel.every(function (t) { return t.locked; });
+    var allNoAuto = sel.every(function (t) { return t.noAuto; });
     return [
       { label: '<i>' + ids.length + ' selected</i>', fn: function () {} },
       { sep: true },
@@ -6852,7 +6879,9 @@
       { icon: allDone ? 'circle' : 'circle-check', label: allDone ? 'Unmark as done' : 'Mark as done',
         fn: function () { each('done', function (s, t) { t.done = !allDone; }); } },
       { icon: allLocked ? 'lock-open' : 'lock', label: allLocked ? 'Unlock' : 'Lock',
-        fn: function () { each('lock', function (s, t) { t.locked = !allLocked; }); } },
+        fn: function () { each('lock', function (s, t) { RM.setLocked(t, !allLocked); }); } },
+      { icon: allNoAuto ? 'zap' : 'zap-off', label: allNoAuto ? 'Include in Auto timeline' : 'Exclude from Auto timeline',
+        fn: function () { each(allNoAuto ? 'include in auto' : 'exclude from auto', function (s, t) { RM.setNoAuto(t, !allNoAuto); }); } },
       sel.some(function (t) { return isScheduled(t); })
         ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
             each('unschedule', function (s, t) { t.startDay = null; t.durDays = null; t.riskDays = 0; });
@@ -7124,6 +7153,21 @@
       }
       toast(r.note || 'Already at its earliest slot', r.note ? 'err' : undefined);
     } };
+  }
+  // Exclude from / Include in the Auto timeline — features and stories alike
+  // (on a feature it clears Lock: the two are mutually exclusive)
+  function noAutoEntry(itemId, stId) {
+    var x = flagTarget(state, itemId, stId);
+    if (!x) return null;
+    var on = !!x.noAuto;
+    return { icon: on ? 'zap' : 'zap-off', label: on ? 'Include in Auto timeline' : 'Exclude from Auto timeline',
+      title: on ? null : 'Auto timeline and ⚡ leave it where it sits',
+      fn: function () {
+        commit(on ? 'include in auto' : 'exclude from auto', function (s) {
+          var t = flagTarget(s, itemId, stId);
+          if (t) RM.setNoAuto(t, !on);
+        });
+      } };
   }
   function flagMenuEntries(itemId, stId) {
     var x = flagTarget(state, itemId, stId);
@@ -8971,8 +9015,9 @@
       } },
       state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline: the \u26a1 button on a phase band', disabled: true, fn: function () {} } : null,
       { sep: true },
-      { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
-      { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
+      // the keys work on Planning; ⌘scroll over the timeline zooms too
+      { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘+', title: 'Also ⌘scroll over the timeline', fn: function () { zoomBy(1.2); } },
+      { icon: 'zoom-out', label: 'Zoom out', kbd: '⌘−', title: 'Also ⌘scroll over the timeline', fn: function () { zoomBy(1 / 1.2); } },
       { icon: 'crosshair', label: 'Scroll to today', fn: goToday },
       { sep: true },
     ].concat(themeMenuItems())
@@ -8988,7 +9033,8 @@
     var r = b.getBoundingClientRect();
     var html = '<div class="menu-list">' + items.map(function (m, i) {
       if (m.sep) return '<div class="menu-sep"></div>';
-      return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.checked ? ' class="on"' : '') + '>' +
+      return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.checked ? ' class="on"' : '') +
+        (m.title ? ' title="' + esc(m.title) + '"' : '') + '>' +
         '<i data-lucide="' + m.icon + '"></i><span>' + m.label + '</span>' +
         (m.kbd ? '<span class="kbd">' + m.kbd + '</span>' : '') +
         (m.checked ? '<i data-lucide="check" class="mi-check"></i>' : '') +
@@ -11633,10 +11679,10 @@
       '<b>Sizes in weeks</b> — XS 2d · S 1w · M 2w · L 4w · XL 8w; the risk buffer uses the same scale (panel), shown as one duration<br>' +
       '<b>Rows</b> — drag the left pane to reorder / move phase (auto-order can re-sort by start) · right-click for insert/delete · chips cycle on click<br>' +
       '<b>Links</b> — drag a bar’s edge circles onto another row (left = depends ON it, right = dependency FOR it; Esc cancels) · click an arrow, Delete removes · orange = critical path<br>' +
-      '<b>Timeline</b> — drag empty space to pan · <span class="kbd">⌘scroll</span> zooms · click a capacity cell to toggle a holiday week; single dates + sprint numbering (e.g. S1 = Sep 7) in Settings<br>' +
+      '<b>Timeline</b> — drag empty space to pan · <span class="kbd">⌘+</span> / <span class="kbd">⌘−</span> or <span class="kbd">⌘scroll</span> zoom · click a capacity cell to toggle a holiday week; single dates + sprint numbering (e.g. S1 = Sep 7) in Settings<br>' +
       '<b>Availability row</b> — people available per week (fractional when hours dip); flags weeks with too much concurrent work<br>' +
       '<b>Resources panel</b> — bottom, resizable/collapsible; hours per person per week (default = the project full-time week) — click a cell to type, drag to fill; drag the grip to reorder people<br>' +
-      '<b>Auto</b> — dependency-ordered, capacity-aware schedule; locked items stay put<br>' +
+      '<b>Auto</b> — dependency-ordered, capacity-aware schedule; locked items and those excluded from Auto stay put<br>' +
       '<span class="kbd">⌘Z</span> undo · <span class="kbd">⇧⌘Z</span> redo · <span class="kbd">⌘S</span> save · <span class="kbd">Del</span> delete · <span class="kbd">Esc</span> close' +
       '</div>' +
       '<div class="m-foot"><button data-m="x2" class="primary">Got it</button></div></div>',
@@ -12798,7 +12844,7 @@
       ui: function () {
         var sel = selectedId ? RM.itemById(state, selectedId) : null;
         return {
-          view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory,
+          view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory, weekPx: weekPx,
           deps: depsMode === 'on', crit: showCrit, cap: showCap, autoOrder: autoOrder,
           groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
           desktop: !!window.HeadwayDesktop, userName: userName()
@@ -12907,6 +12953,13 @@
       return;
     }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    // ⌘+ / ⌘- (Ctrl on other platforms, numpad too) zoom the Planning
+    // timeline instead of the page; never while a dialog is open
+    if (mod && !e.altKey && view === 'planning' && modalHost.hidden) {
+      var zIn = e.key === '=' || e.key === '+' || e.code === 'NumpadAdd';
+      var zOut = e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract';
+      if (zIn || zOut) { e.preventDefault(); zoomBy(zIn ? 1.2 : 1 / 1.2); return; }
+    }
     if (mod && e.key.toLowerCase() === 'a' && (view === 'planning' || view === 'scoping')) {
       e.preventDefault();
       var all = $$('#rows .row.item').map(function (r) { return r.dataset.id; });

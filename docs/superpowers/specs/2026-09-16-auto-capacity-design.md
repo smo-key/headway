@@ -386,3 +386,26 @@ weekly limit removed, story chips, sticky group bands.
 - **Untyped people** supply nothing (as before) and show a "set type" prompt
   in the Resources panel instead of the × seat / points chip; their stored
   seat and points are kept.
+
+## Amendment 2026-09-23 — Exclude from Auto timeline
+
+A feature or story can be excluded from the Auto timeline with a boolean
+`noAuto` (normalized with `!!`; on features it is mutually exclusive with
+`locked` — `RM.setLocked` / `RM.setNoAuto` clear the other, and a document or
+Excel import carrying both keeps the Lock). `RM.capUnits` carries `noAuto` on
+every unit (a story unit inherits its feature's flag, like `locked`; at the
+Features planning level, where stories are not units and ride along with
+their feature, a feature with ANY excluded story is excluded whole, so the
+story flag is honoured at both levels);
+`RM.autoTimeline` treats an excluded unit exactly like a locked one — not
+movable, pre-booked in the ledger where it sits — so `RM.autoPhase`'s dry run
+never counts it, and `RM.autoSizeChanges` skips an excluded feature.
+`RM.placeUnit` is a direct command and still moves an excluded unit (never a
+locked one). Unlike Lock it carries no `.locked` styling: drags and edits stay
+enabled. UI: "Exclude from Auto timeline" / "Include in Auto timeline"
+(`zap-off` / `zap`) in every feature and story context menu, a zap-off mark in
+the row's lock slot and a `.bi-noauto` badge on the bar, and an "Excluded from
+Auto timeline" checkbox beside Locked (feature panel) and Done (story editor).
+Excel writes an "Excluded from Auto" column beside Status on the Roadmap sheet
+and after Multiplier on the Stories sheet; the template importer finds both by
+header.
