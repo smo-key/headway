@@ -10395,19 +10395,19 @@
         '<div class="su-org">' +
         '<section class="su-card su-org-col"><h2>Phases</h2>' +
         '<div class="su-rows" data-sulist="phase">' + phaseRows + '</div>' +
-        addListHtml('suPhAddIn', 'suPhAddBtn', 'New phase — or paste a list') +
+        addListHtml('suPhAddIn', 'suPhAddBtn', 'New phases, one per line') +
         '</section>' +
         '<section class="su-card su-org-col"><h2>Workstreams</h2>' +
         '<label class="p-check" title="Color-codes items and enables workstream grouping"><input type="checkbox" id="suWsEnable"' + (m.workstreamsEnabled ? ' checked' : '') + '> Use workstreams</label>' +
         (m.workstreamsEnabled
           ? '<div class="su-rows" style="margin-top:10px">' + defaultWsRow + '</div>' +
             '<div class="su-rows" data-sulist="ws">' + (wsRows || '') + '</div>' +
-            addListHtml('suWsAdd', 'suWsAddBtn', 'New workstream — or paste a list')
+            addListHtml('suWsAdd', 'suWsAddBtn', 'New ones, one per line')
           : '<div class="m-hint">Workstreams are off — items keep a neutral color and the Scoping column is hidden.</div>') +
         '</section>' +
         '<section class="su-card su-org-col"><h2>Epics</h2>' +
         '<div class="su-rows">' + (epicRows || '<div class="m-hint">None yet.</div>') + '</div>' +
-        addListHtml('suEpAdd', 'suEpAddBtn', 'New epic — or paste a list') +
+        addListHtml('suEpAdd', 'suEpAddBtn', 'New epics, one per line') +
         '</section>' +
         '</div>' +
         (orgHierOpen ? hierCard
@@ -10442,7 +10442,7 @@
       capacity:
         '<section class="su-card"><h2>Schedule against capacity</h2>' +
         '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Schedule against capacity</label>' +
-        '<div class="m-hint">People and their weekly hours live in Setup \u203a Team and the Resources panel; each person supplies their role\u2019s capacity type (Roles, below). Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
+        '<div class="m-hint">People and their weekly hours live in Setup \u203a Team and the Resources panel; each person supplies their role\u2019s capacity type (Supplied by, under Capacity types). Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Planning level</h2><div class="su-schemes">' +
         [['feature', esc(lvl('feature', true)), 'Capacity follows the ' + esc(lvl('feature', true).toLowerCase()) + ' and their capacity type; ' + esc(lvl('story', true).toLowerCase()) + ' need no details'],

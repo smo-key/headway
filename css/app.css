@@ -1890,7 +1890,7 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 body[data-view="budget"] #repPanel { display: block; }
 /* settings: vertical rail (Project / Personal) + one page of cards */
 .su-layout {
-  max-width: 900px; margin: 0 auto; padding: 30px 28px 80px;
+  max-width: 1120px; margin: 0 auto; padding: 30px 28px 80px;
   display: flex; align-items: flex-start; gap: 30px;
 }
 .su-rail {
