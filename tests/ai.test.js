@@ -514,14 +514,17 @@ function done() {
 
   console.log('— copilot protocol');
   {
-    var cs = { copilotModel: 'gpt-5', effort: 'high' };
+    var cs = { provider: 'copilot', copilotModel: 'gpt-5-mini', effort: 'high' };
     var ca = AI.copilot.args(cs, 'U1', true);
     ok(ca.indexOf('--session-id') !== -1 && ca[ca.indexOf('--session-id') + 1] === 'U1' && ca.indexOf('--resume') === -1, 'a fresh chat mints its session id');
     var ca2 = AI.copilot.args(cs, 'U1', false);
     ok(ca2.indexOf('--resume') !== -1 && ca2[ca2.indexOf('--resume') + 1] === 'U1' && ca2.indexOf('--session-id') === -1, 'later turns resume it');
     ok(ca[ca.indexOf('--available-tools') + 1] === 'none' && ca.indexOf('--allow-all-tools') === -1, "Copilot's own tools are off and nothing is pre-approved");
     ok(ca.indexOf('--output-format') !== -1 && ca[ca.indexOf('--output-format') + 1] === 'json' && ca.indexOf('-p') === -1, 'JSONL output, prompt on stdin (no -p)');
-    ok(ca[ca.indexOf('--model') + 1] === 'gpt-5' && ca[ca.indexOf('--reasoning-effort') + 1] === 'high', 'model + reasoning effort passed');
+    ok(ca[ca.indexOf('--model') + 1] === 'gpt-5-mini' && ca[ca.indexOf('--reasoning-effort') + 1] === 'high', 'model + reasoning effort passed');
+    ok(AI.copilot.args({ provider: 'copilot', copilotModel: 'auto', effort: 'high' }, 'U1', true).indexOf('--reasoning-effort') === -1, "'auto' never gets an effort flag (the CLI refuses it)");
+    ok(AI.copilot.args(cs, 'U1', true, true).indexOf('--reasoning-effort') === -1, 'a retry after a refusal drops the flag');
+    eq(AI.effortsFor({ provider: 'copilot', copilotModel: 'auto' }), [], 'no effort picker for auto');
     ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(AI.copilot.uuid()), 'session ids are v4 UUIDs');
 
     var first = AI.copilot.promptText({ role: 'user', text: 'hello', files: [{ name: 'n.txt', kind: 'text', data: 'NOTE' }, { name: 'i.png', type: 'image/png', kind: 'image', data: 'QUJD' }] }, 'SYSTEM PROMPT', true);
@@ -552,7 +555,23 @@ function done() {
 
     eq(AI.ready({ provider: 'copilot' }, false).ok, false, 'copilot needs the desktop');
     eq(AI.ready({ provider: 'copilot' }, true).ok, true, 'copilot ready on desktop');
-    eq(AI.effortsFor({ provider: 'copilot', copilotModel: 'auto' }).length, 4, 'the Copilot CLI keeps every effort level');
+    eq(AI.effortsFor({ provider: 'copilot', copilotModel: 'claude-sonnet-5' }).map(function (e) { return e[0]; }), ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], 'the Copilot CLI offers its full reasoning ladder (none … max) for a named model');
+    var help = 'Settings:\n\n  `logLevel`: log level for CLI; defaults to "default".\n\n  `model`: AI model to use for Copilot CLI; can be changed with /model command or --model flag option.\n    - "claude-sonnet-5"\n    - "gpt-6-sol"\n    - "grok-4.6"\n\n  `contextTier`: context window tier.\n    - Can also be set with --context\n';
+    eq(AI.copilot.parseModels(help), ['claude-sonnet-5', 'gpt-6-sol', 'grok-4.6'], 'the model block of `copilot help config` parses to ids');
+    eq(AI.copilot.parseModels('no such block'), [], 'no block, no ids');
+    var acpLine = JSON.stringify({ jsonrpc: '2.0', id: 2, result: { models: { availableModels: [{ modelId: 'auto', name: 'Auto' }, { modelId: 'auto', name: 'Auto' }, { modelId: 'gpt-5-mini', name: 'GPT-5 mini' }], currentModelId: 'auto' }, configOptions: [] } });
+    eq(AI.copilot.parseAcpModels(acpLine), [{ id: 'auto', name: 'Auto' }, { id: 'gpt-5-mini', name: 'GPT-5 mini' }], 'the ACP session/new answer yields the entitled models, deduplicated');
+    eq(AI.copilot.parseAcpModels('{"jsonrpc":"2.0","method":"session/update","params":{}}'), null, 'other JSON-RPC lines are ignored');
+    eq(AI.copilot.parseAcpModels('not json'), null, 'non-JSON lines are ignored');
+    eq(AI.copilot.acpNewSession('C:/x').params.cwd, 'C:/x', 'session/new carries the cwd');
+    var ml = AI.copilotModelList({ copilotModels: ['gpt-6-sol'], copilotModel: 'my-custom' });
+    eq(ml.map(function (m) { return m[0]; }), ['auto', 'my-custom', 'gpt-6-sol'], 'the picker leads with auto, keeps a custom id, then the loaded catalog');
+    eq(AI.copilotModelList({}).map(function (m) { return m[0]; }), ['auto'], 'before a Load the picker offers only Auto — nothing is guessed');
+    eq(AI.copilot.env({ copilotHost: '' }), null, 'no host, no env');
+    eq(AI.copilot.env({ copilotHost: 'company.ghe.com/' }), { COPILOT_GH_HOST: 'https://company.ghe.com' }, 'a bare enterprise host becomes an https COPILOT_GH_HOST');
+    eq(AI.copilot.parseLogin('To authenticate, visit https://github.com/login/device and enter code 13DC-141B'), { url: 'https://github.com/login/device', code: '13DC-141B' }, 'the device-code line parses');
+    eq(AI.copilot.parseLogin('Please visit https://github.com/login/device and enter the code 13DC-141B manually.'), { url: 'https://github.com/login/device', code: '13DC-141B' }, 'the clipboard-fallback line parses too');
+    eq(AI.copilot.parseLogin('Waiting for authorization...'), null, 'other lines do not');
     eq(AI.modelOf({ provider: 'copilot', copilotModel: 'auto', model: 'x', claudeModel: 'opus' }), 'auto', 'modelOf picks the provider\'s model');
     ok(AI.isCli({ provider: 'copilot' }) && AI.isCli({ provider: 'claude' }) && !AI.isCli({ provider: 'litellm' }), 'both CLIs count as CLI providers');
   }

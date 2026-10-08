@@ -106,9 +106,13 @@ mod ai {
     fn npm_native_paths(name: &str) -> Vec<Vec<&'static str>> {
         match name {
             "claude" => vec![vec!["node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"]],
+            // npm hoists the platform package beside @github/copilot, or nests
+            // it inside the package's own node_modules — look in both places
             "copilot" => vec![
                 vec!["node_modules", "@github", "copilot-win32-x64", "copilot.exe"],
+                vec!["node_modules", "@github", "copilot", "node_modules", "@github", "copilot-win32-x64", "copilot.exe"],
                 vec!["node_modules", "@github", "copilot-win32-arm64", "copilot.exe"],
+                vec!["node_modules", "@github", "copilot", "node_modules", "@github", "copilot-win32-arm64", "copilot.exe"],
             ],
             _ => Vec::new(),
         }
@@ -340,7 +344,7 @@ mod ai {
     }
 
     #[tauri::command]
-    pub fn ai_spawn(app: AppHandle, procs: State<Procs>, bin: String, args: Vec<String>) -> Result<u32, String> {
+    pub fn ai_spawn(app: AppHandle, procs: State<Procs>, bin: String, args: Vec<String>, env: Option<HashMap<String, String>>) -> Result<u32, String> {
         // never spawn through cmd.exe: unwrap an npm batch wrapper to the native
         // binary it launches, and refuse a bare .cmd with a fix the user can apply
         #[cfg(target_os = "windows")]
@@ -377,6 +381,12 @@ mod ai {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // per-call environment (e.g. COPILOT_GH_HOST for an enterprise GitHub)
+        for (k, v) in env.unwrap_or_default() {
+            if !k.is_empty() {
+                cmd.env(k, v);
+            }
+        }
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;

@@ -723,9 +723,10 @@
     return {
       // resolve the CLI binary (custom path wins); null when not installed
       path: function (custom) { return invoke(pathCmd, { custom: custom || '' }); },
-      spawn: function (bin, args, onLine) {
+      // env: optional { NAME: value } for the child process
+      spawn: function (bin, args, onLine, env) {
         ensureListener();
-        return invoke('ai_spawn', { bin: bin, args: args }).then(function (id) {
+        return invoke('ai_spawn', { bin: bin, args: args, env: env || null }).then(function (id) {
           var h = { id: id, alive: true, onLine: onLine,
             write: function (line) { return invoke('ai_write', { id: id, line: line }); },
             end: function () { return invoke('ai_close_stdin', { id: id }); },

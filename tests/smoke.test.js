@@ -304,10 +304,26 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   click(doc.querySelector('#aiSettingsCard [data-aiprov="copilot"]'));
   ok(AI.loadSettings().provider === 'copilot' && !doc.querySelector('#aiSettingsCard #aiCopilot').hidden && doc.querySelector('#aiSettingsCard #aiClaude').hidden,
     'GitHub Copilot is the third provider; its fields replace the Claude ones');
-  ok(doc.querySelector('#aiSettingsCard #aiCopilotModel') && doc.querySelector('#aiSettingsCard #aiCopilotBin') && doc.querySelector('#aiSettingsCard #aiCopilotCheck'),
-    'Copilot settings: model, CLI path, Check');
+  ok(doc.querySelector('#aiSettingsCard #aiCopilotModel') && doc.querySelector('#aiSettingsCard #aiCopilotBin') && doc.querySelector('#aiSettingsCard #aiCopilotCheck') && doc.querySelector('#aiSettingsCard #aiCopilotModels'),
+    'Copilot settings: model, Load, CLI path, Check');
+  ok(doc.querySelector('#aiSettingsCard #aiCopilotHost') && doc.querySelector('#aiSettingsCard #aiCopilotLogin'), 'Copilot settings: GitHub host and Sign in');
+  ok([...doc.querySelectorAll('#aiSettingsCard #aiCopilotModelList option')].map((o) => o.value).join() === 'auto',
+    'before a Load the model suggestions are just Auto');
   click(doc.querySelector('#btnAI'));
-  ok([...doc.querySelectorAll('#aiDrawer #aiModelSel option')].some((o) => o.value === 'auto'), 'the drawer lists the Copilot models (auto first)');
+  // a Load stores the entitled list in the settings and emits 'settings', which rebuilds the drawer header;
+  // stand in for it: store the list, then let a Setup field save (the same emit path)
+  window.localStorage.setItem('headway-ai-v1', JSON.stringify(Object.assign(AI.loadSettings(), { copilotModels: ['auto', 'claude-sonnet-5'] })));
+  const cmField = doc.querySelector('#aiSettingsCard #aiCopilotModel');
+  cmField.value = 'auto'; cmField.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok([...doc.querySelectorAll('#aiDrawer #aiModelSel option')].map((o) => o.value).join() === 'auto,claude-sonnet-5', 'the drawer lists the loaded Copilot models (auto first)');
+  ok(!doc.querySelector('#aiDrawer #aiEffortSel'), 'with model auto the effort picker hides (the CLI refuses an effort for auto)');
+  {
+    const msel = doc.querySelector('#aiDrawer #aiModelSel');
+    msel.value = 'claude-sonnet-5'; msel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok([...doc.querySelectorAll('#aiDrawer #aiEffortSel option')].map((o) => o.value).join() === 'none,minimal,low,medium,high,xhigh,max', 'a named model offers the Copilot effort ladder');
+    const msel2 = doc.querySelector('#aiDrawer #aiModelSel');
+    msel2.value = 'auto'; msel2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
   click(doc.querySelector('#aiDrawer #aiClose'));
   click(doc.querySelector('#aiSettingsCard [data-aiprov="litellm"]'));
   ok(!doc.querySelector('#aiSettingsCard [data-aieffort]'), 'the settings tab carries no effort control (it lives in the drawer)');

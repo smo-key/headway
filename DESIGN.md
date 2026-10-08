@@ -355,7 +355,14 @@ the row as an update). It is the third format in the Export dialog (right of Pow
   turn, `--session-id <our uuid>` names the session and later turns `--resume` it (a dead resume
   retries once fresh); JSONL `assistant.message_delta` / `assistant.message` / `model.call_failure`
   / `result` reduce to the turn; Headway's tools come through the same ```headway-tool fences.
-  Images and PDFs are not sent (the CLI takes attachments only as file paths). `claude` —
+  Images and PDFs are not sent (the CLI takes attachments only as file paths). The entitled model list is
+  read from the signed-in CLI over ACP (`copilot --acp`: initialize + session/new → models.availableModels,
+  parsed by `copilot.parseAcpModels`; `copilot help config` / `copilot.parseModels` as the fallback), cached
+  in the settings as `copilotModels` (only Auto is offered until then); efforts are the CLI's own
+  ladder (`AI.COPILOT_EFFORTS`: none, minimal, low, medium, high, xhigh, max). Sign-in runs
+  `copilot login --device-code [--host …]` through the bridge (`copilot.login`, the code/URL line
+  parsed by `copilot.parseLogin`); a GitHub Enterprise host (`copilotHost`) rides as
+  `COPILOT_GH_HOST` in the spawn env (`ai_spawn` takes an optional env map). `claude` —
   desktop only: `HeadwayDesktop.claude.spawn` runs `claude -p --input-format stream-json
   --output-format stream-json --include-partial-messages --tools "" --strict-mcp-config
   --system-prompt … --model … --effort …` once per conversation, user turns are written as

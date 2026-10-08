@@ -7,6 +7,12 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## 1.1.3 — 2026-10-08
+
+### Fixed
+
+- **Copilot model list**: Setup → Personal → AI assistant → GitHub Copilot → **Load** asks the signed-in Copilot CLI which models your plan allows (its Agent Client Protocol `session/new` answer; the CLI’s full catalog from `copilot help config` as the fallback) instead of a built-in guess; the drawer’s model picker uses the same list. The effort picker offers Copilot’s own ladder (None, Minimal, Low, Medium, High, X-high, Max). With `auto` no effort is sent (Copilot refuses one for its router), and a model that rejects the setting is retried once without it. **Sign in…** runs the CLI’s device-code login from Setup (code and GitHub page shown in the card), and a **GitHub host** field covers GitHub Enterprise Cloud with data residency (sent as `COPILOT_GH_HOST` on every run).
+
 ## 1.1.2 — 2026-10-07
 
 ### Fixed

@@ -55,7 +55,9 @@
   // model offers OpenAI's three when it reasons, none when it doesn't, and
   // every level while the gateway has not said
   AI.effortsFor = function (s) {
-    if (!s || AI.isCli(s)) return AI.EFFORTS.slice();
+    if (!s || s.provider === 'claude') return AI.EFFORTS.slice();
+    // Copilot's 'auto' routes between models and refuses an effort setting
+    if (s.provider === 'copilot') return (!s.copilotModel || s.copilotModel === 'auto') ? [] : AI.COPILOT_EFFORTS.slice();
     var info = AI.modelInfo && AI.modelInfo[s.model];
     if (!info) return AI.EFFORTS.slice();
     return info.reasoning ? AI.GATEWAY_EFFORTS.slice() : [];
@@ -72,9 +74,19 @@
     return eff.some(function (e) { return e[0] === 'medium'; }) ? 'medium' : eff[0][0];
   };
   AI.CLAUDE_MODELS = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku']];
-  // Copilot CLI model ids ('auto' lets Copilot route); the field is free text,
-  // these are only suggestions — the plan decides what a user can pick
-  AI.COPILOT_MODELS = [['auto', 'Auto (Copilot picks)'], ['gpt-5', 'GPT-5'], ['gpt-5-mini', 'GPT-5 mini'], ['claude-sonnet-4.5', 'Claude Sonnet 4.5'], ['claude-opus-4.1', 'Claude Opus 4.1'], ['gemini-2.5-pro', 'Gemini 2.5 Pro']];
+  // Copilot CLI models: 'auto' lets Copilot route. The list a plan allows
+  // comes from the signed-in CLI (AI.copilot.models, Setup → Load) and is
+  // cached in the settings as copilotModels; nothing is guessed before that.
+  // [id, label] pairs for the pickers: Auto first, then the loaded list (plus a typed id)
+  AI.copilotModelList = function (s) {
+    var ids = (s && Array.isArray(s.copilotModels)) ? s.copilotModels : [];
+    var out = [['auto', 'Auto']];
+    ids.forEach(function (id) { if (id !== 'auto' && !out.some(function (m) { return m[0] === id; })) out.push([id, id]); });
+    if (s && s.copilotModel && !out.some(function (m) { return m[0] === s.copilotModel; })) out.splice(1, 0, [s.copilotModel, s.copilotModel]);
+    return out;
+  };
+  // the Copilot CLI's full --reasoning-effort ladder; which levels a model honours is the CLI's call (an unsupported one comes back as its error)
+  AI.COPILOT_EFFORTS = [['none', 'None'], ['minimal', 'Minimal'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'X-high'], ['max', 'Max']];
   AI.PROVIDERS = ['litellm', 'claude', 'copilot'];
   // the two CLI providers: desktop only, text-fence tools, a session id per chat
   AI.isCli = function (s) { return !!s && (s.provider === 'claude' || s.provider === 'copilot'); };
@@ -87,7 +99,7 @@
   };
   AI.DEFAULTS = {
     provider: 'litellm', baseUrl: '', apiKey: '', model: '', headers: '',
-    claudeBin: '', claudeModel: 'sonnet', copilotBin: '', copilotModel: 'auto', effort: 'medium'
+    claudeBin: '', claudeModel: 'sonnet', copilotBin: '', copilotModel: 'auto', copilotModels: null, copilotHost: '', effort: 'medium'
   };
   AI.MAX_ROUNDS = 12;         // tool-call rounds per user message
   AI.FENCE = 'headway-tool';  // CLI providers' tool-call fence language
@@ -128,7 +140,8 @@
       Object.keys(out).forEach(function (k) { if (raw[k] != null) out[k] = raw[k]; });
     } catch (e) { /* storage blocked */ }
     if (AI.PROVIDERS.indexOf(out.provider) === -1) out.provider = 'litellm';
-    if (!AI.EFFORTS.some(function (e) { return e[0] === out.effort; })) out.effort = 'medium';
+    if (!AI.EFFORTS.concat(AI.COPILOT_EFFORTS).some(function (e) { return e[0] === out.effort; })) out.effort = 'medium';
+    if (out.copilotModels != null && !Array.isArray(out.copilotModels)) out.copilotModels = null;
     return out;
   };
   AI.saveSettings = function (s) {
@@ -1432,12 +1445,13 @@
   // Copilot's own tools (shell, file edits, …) are switched off: the model gets
   // Headway's tools through the same ```headway-tool fences as claude -p.
   var copilot = AI.copilot = {};
-  copilot.args = function (s, session, fresh) {
+  copilot.args = function (s, session, fresh, noEffort) {
     var a = ['-s', '--output-format', 'json', '--stream', 'on',
       '--available-tools', 'none', '--no-ask-user', '--no-custom-instructions', '--disable-builtin-mcps',
       '--disallow-temp-dir', '--no-auto-update', '--log-level', 'none'];
     if (s.copilotModel) a.push('--model', s.copilotModel);
-    if (s.effort) a.push('--reasoning-effort', s.effort);
+    // only when the model takes one ('auto' does not) and the caller did not drop it after a refusal
+    if (s.effort && !noEffort && AI.effortAllowed(Object.assign({ provider: 'copilot' }, s))) a.push('--reasoning-effort', s.effort);
     if (session) a.push(fresh ? '--session-id' : '--resume', session);
     return a;
   };
@@ -1500,6 +1514,129 @@
       }
     };
   };
+  // the `model` block of `copilot help config`: every id this CLI version accepts
+  copilot.parseModels = function (text) {
+    var lines = String(text || '').split(/\r?\n/);
+    var out = [], inBlock = false;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (/^\s*`model`:/.test(l)) { inBlock = true; continue; }
+      if (!inBlock) continue;
+      var m = l.match(/^\s*-\s*"([^"]+)"\s*$/);
+      if (m) { out.push(m[1]); continue; }
+      if (l.trim() === '' && out.length) break;   // the block ends at the first blank line after the list
+      if (/^\s*`[a-zA-Z.]+`:/.test(l)) break;     // the next setting
+    }
+    return out;
+  };
+  // The models THIS account may use come from the CLI's Agent Client
+  // Protocol server (`copilot --acp`, JSON-RPC over stdio): `session/new`
+  // answers with models.availableModels for the signed-in plan — an
+  // enterprise policy may leave only "auto". `help config` lists every id
+  // the CLI knows and is the fallback when ACP gives nothing.
+  copilot.ACP_INIT = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } }, clientInfo: { name: 'headway', version: '1' } } };
+  copilot.acpNewSession = function (cwd) { return { jsonrpc: '2.0', id: 2, method: 'session/new', params: { cwd: cwd || '.', mcpServers: [] } }; };
+  // one JSON-RPC line -> [{ id, name }] when it is the session/new answer, else null
+  copilot.parseAcpModels = function (line) {
+    var j = null;
+    try { j = JSON.parse(line); } catch (e) { return null; }
+    if (!j || j.id !== 2) return null;
+    var list = j.result && j.result.models && Array.isArray(j.result.models.availableModels) ? j.result.models.availableModels : [];
+    var out = [], seen = {};
+    list.forEach(function (m) {
+      var id = m && m.modelId; if (!id || seen[id]) return;
+      seen[id] = true; out.push({ id: id, name: m.name && m.name !== id ? m.name : id });
+    });
+    return out;
+  };
+  // -> Promise<string[]>: the entitled model ids (ACP), else every id the CLI knows (help config)
+  copilot.models = function (s) {
+    var bridge = copilotBridge();
+    if (!bridge) return Promise.reject(new Error('The GitHub Copilot provider needs the desktop app.'));
+    return bridge.path(s.copilotBin).then(function (bin) {
+      if (!bin) throw new Error('GitHub Copilot CLI is not installed (or the path in AI settings is wrong).');
+      var acp = new Promise(function (resolve, reject) {
+        var settled = false, handle = null, timer = null;
+        function done(fn, v) { if (settled) return; settled = true; if (timer) clearTimeout(timer); if (handle && handle.alive) { try { handle.kill(); } catch (e) { /* gone */ } } fn(v); }
+        bridge.spawn(bin, ['--acp', '--no-auto-update', '--log-level', 'none'], function (kind, line) {
+          if (kind === 'out') { var models = copilot.parseAcpModels(line); if (models) done(resolve, models); }
+          else if (kind === 'exit') done(reject, new Error('the CLI closed its ACP session before answering'));
+        }, copilot.env(s)).then(function (h) {
+          handle = h;
+          timer = setTimeout(function () { done(reject, new Error('no answer from the CLI in 25 s')); }, 25000);
+          return h.write(JSON.stringify(copilot.ACP_INIT)).then(function () { return h.write(JSON.stringify(copilot.acpNewSession('.'))); });
+        }).catch(function (err) { done(reject, err); });
+      });
+      return acp.then(function (models) {
+        if (models.length) return models.map(function (m) { return m.id; });
+        throw new Error('no entitled models reported');
+      }).catch(function () {
+        // fallback: the catalog of this CLI version
+        return new Promise(function (resolve, reject) {
+          var out = [], settled = false;
+          bridge.spawn(bin, ['help', 'config'], function (kind, line) {
+            if (kind === 'out') out.push(line);
+            else if (kind === 'exit' && !settled) {
+              settled = true;
+              var ids = copilot.parseModels(out.join('\n'));
+              if (!ids.length) reject(new Error('The CLI listed no models.'));
+              else resolve(ids);
+            }
+          }, copilot.env(s)).then(function (h) { if (h.end) h.end(); }).catch(function (err) { if (!settled) { settled = true; reject(err); } });
+        });
+      });
+    });
+  };
+  // environment for every Copilot run: an enterprise GitHub host (GitHub
+  // Enterprise Cloud with data residency, e.g. https://example.ghe.com) goes
+  // in as COPILOT_GH_HOST; blank = github.com
+  copilot.host = function (s) {
+    var h = String(s && s.copilotHost || '').trim().replace(/\/+$/, '');
+    if (!h) return '';
+    if (!/^https?:\/\//i.test(h)) h = 'https://' + h;
+    return h;
+  };
+  copilot.env = function (s) {
+    var h = copilot.host(s);
+    return h ? { COPILOT_GH_HOST: h } : null;
+  };
+  // `copilot login --device-code` prints the page and the one-time code
+  copilot.parseLogin = function (line) {
+    var m = String(line || '').match(/visit\s+(https?:\/\/\S+?)\s+and enter (?:the )?code\s+([A-Z0-9-]+)/i);
+    return m ? { url: m[1].replace(/[.,]$/, ''), code: m[2] } : null;
+  };
+  var loginProc = null;
+  copilot.loginRunning = function () { return !!(loginProc && loginProc.alive); };
+  copilot.cancelLogin = function () {
+    if (loginProc && loginProc.alive) { try { loginProc.kill(); } catch (e) { /* gone */ } }
+    loginProc = null;
+  };
+  // run the device-code sign-in: onEvent({type:'code', url, code} | {type:'line', text} | {type:'done', ok, text})
+  copilot.login = function (s, onEvent) {
+    var bridge = copilotBridge();
+    if (!bridge) return Promise.reject(new Error('Signing in needs the desktop app.'));
+    copilot.cancelLogin();
+    return bridge.path(s.copilotBin).then(function (bin) {
+      if (!bin) throw new Error('GitHub Copilot CLI is not installed (or the path in AI settings is wrong).');
+      var args = ['login', '--device-code'];
+      var host = copilot.host(s);
+      if (host) args.push('--host', host);
+      var lines = [], gotCode = false;
+      return bridge.spawn(bin, args, function (kind, line) {
+        if (kind === 'out' || kind === 'err') {
+          lines.push(line); if (lines.length > 40) lines.shift();
+          var c = copilot.parseLogin(line);
+          if (c && !gotCode) { gotCode = true; onEvent({ type: 'code', url: c.url, code: c.code }); }
+          else if (line.trim()) onEvent({ type: 'line', text: line.trim() });
+        } else if (kind === 'exit') {
+          var tail = lines.filter(Boolean).slice(-3).join(' ');
+          var ok = gotCode && !/fail|error|denied|expired|cancel/i.test(tail);
+          loginProc = null;
+          onEvent({ type: 'done', ok: ok, text: tail });
+        }
+      }, copilot.env(s)).then(function (h) { loginProc = h; if (h.end) h.end(); return h; });
+    });
+  };
   var copilotProc = null; // the turn's process handle
   copilot.proc = function () { return copilotProc; };
   copilot.stop = function () {
@@ -1537,11 +1674,11 @@
           var parsed = claude.parseFences(st.finalText || st.text || '');
           resolve({ text: parsed.text, thinking: '', thinkingBlocks: [], toolCalls: parsed.calls, session: st.session || session });
         }
-        bridge.spawn(bin, copilot.args(s, session, fresh), function (kind, line) {
+        bridge.spawn(bin, copilot.args(s, session, fresh, !!opts._noEffort), function (kind, line) {
           if (kind === 'out') { red.push(line); if (red.state.done) finish(); }
           else if (kind === 'err') { stderr.push(line); if (stderr.length > 40) stderr.shift(); }
           else if (kind === 'exit') finish(true);
-        }).then(function (h) {
+        }, copilot.env(s)).then(function (h) {
           handle = h; copilotProc = h;
           if (opts.signal) opts.signal.addEventListener('abort', function () {
             if (settled) return;
@@ -1556,6 +1693,10 @@
         });
       });
     }).catch(function (err) {
+      // a model that refuses the effort setting: retry once without it
+      if (/does not support reasoning effort/i.test(err.message || '') && !opts._noEffort) {
+        return copilot.run(Object.assign({}, opts, { _noEffort: true }));
+      }
       // a dead resume target: retry once with a fresh session
       if (opts.session && /resume|session|not found/i.test(err.message || '') && !opts._retried) {
         return copilot.run(Object.assign({}, opts, { session: null, _retried: true }));
@@ -1767,11 +1908,18 @@
       '<div id="aiCopilot"' + (s.provider === 'copilot' ? '' : ' hidden') + '>' +
       (desktop ? '' : '<div class="m-hint" style="margin-bottom:12px">This provider runs the GitHub Copilot CLI on your machine, so it only works in the desktop app. In the browser, use a LiteLLM gateway.</div>') +
       '<div class="p-grid2">' +
-      '<div class="m-sec"><label>Model</label>' + inp('aiCopilotModel', s.copilotModel, 'auto', 'text', ' list="aiCopilotModelList"') +
-      '<datalist id="aiCopilotModelList">' + AI.COPILOT_MODELS.map(function (m) { return '<option value="' + m[0] + '">' + esc(m[1]) + '</option>'; }).join('') + '</datalist></div>' +
+      '<div class="m-sec"><label>Model</label><div class="p-row">' + inp('aiCopilotModel', s.copilotModel, 'auto', 'text', ' list="aiCopilotModelList"') +
+      '<button id="aiCopilotModels" class="fixed" title="Read the model list from the installed Copilot CLI"' + (desktop ? '' : ' disabled') + '>Load</button></div>' +
+      '<datalist id="aiCopilotModelList">' + AI.copilotModelList(s).map(function (m) { return '<option value="' + esc(m[0]) + '">' + esc(m[1]) + '</option>'; }).join('') + '</datalist></div>' +
       '<div class="m-sec"><label>Copilot CLI path</label>' + inp('aiCopilotBin', s.copilotBin, 'auto-detect') + '</div>' +
       '</div>' +
-      '<div class="m-hint">Uses <code>copilot</code> in non-interactive mode, billed to your GitHub Copilot plan (premium requests). Install with <code>npm install -g @github/copilot</code> and sign in once with <code>copilot login</code>. Model ids are the ones <code>/model</code> lists in the CLI; <code>auto</code> lets Copilot pick. Copilot’s own shell and file tools stay off — it edits the roadmap only through Headway’s tools.</div>' +
+      '<div class="p-grid2">' +
+      '<div class="m-sec"><label>GitHub host</label>' + inp('aiCopilotHost', s.copilotHost, 'github.com') +
+      '<div class="m-hint">Only for GitHub Enterprise Cloud with data residency (e.g. <code>company.ghe.com</code>). Leave blank for github.com, including enterprise accounts that live there.</div></div>' +
+      '<div class="m-sec"><label>Sign in</label><div class="p-row"><button id="aiCopilotLogin" class="fixed"' + (desktop ? '' : ' disabled') + '>Sign in\u2026</button><span id="aiCopilotAuth" class="m-hint" style="margin:0 0 0 10px"></span></div>' +
+      '<div class="m-hint">Runs <code>copilot login</code>: you get a one-time code and a GitHub page to enter it on. The token stays in your system credential store.</div></div>' +
+      '</div>' +
+      '<div class="m-hint">Uses <code>copilot</code> in non-interactive mode, billed to your GitHub Copilot plan (premium requests). Install with <code>npm install -g @github/copilot</code> and sign in once with <code>copilot login</code>. <b>Load</b> asks the signed-in CLI which models your plan allows' + (s.copilotModels ? ' (' + s.copilotModels.length + ' loaded)' : '') + '; <code>auto</code> lets Copilot pick and is sometimes the only one an enterprise policy exposes. Copilot’s own shell and file tools stay off — it edits the roadmap only through Headway’s tools.</div>' +
       '<div class="p-row" style="margin-top:8px"><button id="aiCopilotCheck" class="fixed"' + (desktop ? '' : ' disabled') + '>Check</button><span id="aiCopilotOut" class="m-hint" style="margin:0 0 0 10px"></span></div>' +
       '</div>';
     return '<h2>Provider</h2>' +
@@ -1806,6 +1954,40 @@
     $('#aiClaudeBin').addEventListener('change', function () { save({ claudeBin: $('#aiClaudeBin').value.trim() }); });
     $('#aiCopilotModel').addEventListener('change', function () { save({ copilotModel: $('#aiCopilotModel').value.trim() || 'auto' }); });
     $('#aiCopilotBin').addEventListener('change', function () { save({ copilotBin: $('#aiCopilotBin').value.trim() }); });
+    $('#aiCopilotHost').addEventListener('change', function () { save({ copilotHost: $('#aiCopilotHost').value.trim() }); });
+    $('#aiCopilotLogin').addEventListener('click', function () {
+      var btn = $('#aiCopilotLogin'), out = $('#aiCopilotAuth');
+      if (copilot.loginRunning()) { copilot.cancelLogin(); btn.textContent = 'Sign in\u2026'; out.textContent = 'Cancelled'; return; }
+      save({ copilotBin: $('#aiCopilotBin').value.trim(), copilotHost: $('#aiCopilotHost').value.trim() });
+      btn.textContent = 'Cancel'; out.textContent = 'Starting\u2026';
+      copilot.login(AI.loadSettings(), function (ev) {
+        if (ev.type === 'code') {
+          out.innerHTML = 'Enter code <b><code>' + esc(ev.code) + '</code></b> at <a href="' + esc(ev.url) + '" target="_blank" rel="noopener" id="aiCopilotAuthUrl">' + esc(ev.url) + '</a> \u2014 waiting for GitHub\u2026';
+          var a = $('#aiCopilotAuthUrl');
+          if (a) a.addEventListener('click', function (e) { if (root.HeadwayDesktop && root.HeadwayDesktop.openUrl) { e.preventDefault(); root.HeadwayDesktop.openUrl(ev.url); } });
+          if (root.HeadwayDesktop && root.HeadwayDesktop.openUrl) root.HeadwayDesktop.openUrl(ev.url);
+        } else if (ev.type === 'done') {
+          btn.textContent = 'Sign in\u2026';
+          out.textContent = ev.ok ? 'Signed in \u2014 the assistant can use Copilot now' : ('Sign-in did not finish' + (ev.text ? ': ' + ev.text : ''));
+          app().toast(ev.ok ? 'Signed in to GitHub Copilot' : 'Copilot sign-in did not finish', ev.ok ? undefined : 'err');
+        }
+      }).catch(function (err) { btn.textContent = 'Sign in\u2026'; out.textContent = 'Failed: ' + err.message; });
+    });
+    $('#aiCopilotModels').addEventListener('click', function () {
+      save({ copilotBin: $('#aiCopilotBin').value.trim() });
+      var btn = $('#aiCopilotModels');
+      btn.disabled = true; btn.textContent = '…';
+      copilot.models(AI.loadSettings()).then(function (ids) {
+        save({ copilotModels: ids });
+        $('#aiCopilotModelList').innerHTML = AI.copilotModelList(AI.loadSettings()).map(function (m) { return '<option value="' + esc(m[0]) + '">' + esc(m[1]) + '</option>'; }).join('');
+        btn.disabled = false; btn.textContent = 'Load';
+        app().toast(ids.length === 1 && ids[0] === 'auto' ? 'Your Copilot plan offers only Auto to the CLI' : ids.length + ' model' + (ids.length === 1 ? '' : 's') + ' available to your account — pick one in the Model field');
+        $('#aiCopilotModel').focus();
+      }, function (err) {
+        btn.disabled = false; btn.textContent = 'Load';
+        app().toast('Could not list models: ' + err.message, 'err');
+      });
+    });
     $('#aiCopilotCheck').addEventListener('click', function () {
       var out = $('#aiCopilotOut');
       var bridge = copilotBridge();
@@ -1915,9 +2097,7 @@
     if (s.provider === 'claude') {
       modelOpts = AI.CLAUDE_MODELS.map(function (m) { return '<option value="' + m[0] + '"' + (s.claudeModel === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('');
     } else if (s.provider === 'copilot') {
-      var cm = AI.COPILOT_MODELS.slice();
-      if (s.copilotModel && !cm.some(function (m) { return m[0] === s.copilotModel; })) cm.unshift([s.copilotModel, s.copilotModel]);
-      modelOpts = cm.map(function (m) { return '<option value="' + esc(m[0]) + '"' + (s.copilotModel === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>'; }).join('');
+      modelOpts = AI.copilotModelList(s).map(function (m) { return '<option value="' + esc(m[0]) + '"' + (s.copilotModel === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>'; }).join('');
     } else {
       // the cache belongs to one base URL: ignore it when the endpoint changed
       var ids = (AI.modelCache && AI.modelCacheBase === s.baseUrl ? AI.modelCache : []).slice();
